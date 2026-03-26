@@ -1,0 +1,1047 @@
+package deliberation
+
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"os"
+	"sort"
+	"time"
+)
+
+const (
+	maxTopicLen       = 500
+	maxDescriptionLen = 5000
+	maxContentLen     = 10000
+	maxAgentIDLen     = 200
+	maxPositions      = 1000
+)
+
+// Store defines the persistence interface the service needs.
+type Store interface {
+	CreateDeliberation(d *Deliberation) error
+	GetDeliberation(id string) (*Deliberation, error)
+	ListDeliberations() ([]Deliberation, error)
+	UpdateDeliberationStatus(id, status string) error
+	UpdateSubStatus(id, subStatus string) error
+	TrySetAnalyzing(id string) (bool, error)
+	AdvanceRound(id string) error
+
+	CreatePosition(p *Position) error
+	GetPositions(deliberationID string, round *int) ([]Position, error)
+	GetPositionByID(id string) (*Position, error)
+	CountPositions(deliberationID string) (int, error)
+
+	CreateVote(v *Vote) error
+	GetVotes(deliberationID string) ([]Vote, error)
+	GetVotesByRound(deliberationID string, round int) ([]Vote, error)
+
+	CreateDelegation(d *Delegation) error
+	RevokeDelegation(deliberationID, fromAgent string) error
+	GetDelegations(deliberationID string) ([]Delegation, error)
+	PublishPosition(id string) error
+
+	CreateCommitment(c *Commitment) error
+	GetCommitments(deliberationID string) ([]Commitment, error)
+	UpdateCommitmentStatus(id, status string) error
+
+	CreateJoinCode(jc *JoinCode) error
+	ClaimJoinCode(code, agentID string) (*JoinCode, error)
+	LookupJoinCode(code string) (*JoinCode, error)
+
+	AddToACL(deliberationID, keyID string) error
+	CheckACL(deliberationID, keyID string) (bool, error)
+
+	CreateInvitation(inv *Invitation) error
+	GetInvitations(deliberationID string) ([]Invitation, error)
+	UpdateInvitationStatus(id, status string) error
+
+	CreateDispute(d *Dispute) error
+	GetDisputes(deliberationID string) ([]Dispute, error)
+
+	SaveAnalysisResult(deliberationID string, round int, result *AnalysisResult) error
+	GetAnalysisResult(deliberationID string, round int) (*AnalysisResult, error)
+	GetLatestAnalysisResult(deliberationID string) (*AnalysisResult, error)
+
+	RecoverStuckAnalyzing(maxAge time.Duration) (int, error)
+}
+
+// ContextKeyDeliberationID is the context key for passing the deliberation ID
+// through the analysis pipeline (used for per-deliberation cost tracking).
+type ContextKeyDeliberationID struct{}
+type ContextKeyDeliberationType struct{}
+type ContextKeyPriorNorms struct{}
+type ContextKeyConstitutionalRules struct{}
+
+// ContextKeyProgressFunc is used to pass a progress callback via context.
+type ContextKeyProgressFunc struct{}
+
+// ProgressFunc is called by the analyzer to report sub-status updates.
+type ProgressFunc func(subStatus string)
+
+// Analyzer defines the analysis engine interface.
+type Analyzer interface {
+	Analyze(ctx context.Context, positions []Position, votes []Vote, agents []string) (*AnalysisResult, error)
+}
+
+// CompromiseGenerator generates compromise proposals from analysis results.
+type CompromiseGenerator interface {
+	GenerateCompromise(ctx context.Context, topic string, result *AnalysisResult) (string, error)
+}
+
+// Reframer restates positions emphasizing common ground.
+type Reframer interface {
+	Reframe(ctx context.Context, position, otherPositions, cruxes string) (string, error)
+}
+
+// PositionOption configures optional fields on a position.
+type PositionOption func(*Position)
+
+// WithModelFamily sets the model family for a position.
+func WithModelFamily(family string) PositionOption {
+	return func(p *Position) { p.ModelFamily = family }
+}
+
+// WithGroup sets the sub-group for decentralized deliberation.
+func WithGroup(group string) PositionOption {
+	return func(p *Position) { p.Group = group }
+}
+
+// WithConviction sets conviction weight (0.0-1.0).
+func WithConviction(c float64) PositionOption {
+	return func(p *Position) {
+		if c < 0 {
+			c = 0
+		} else if c > 1 {
+			c = 1
+		}
+		p.Conviction = c
+	}
+}
+
+// WithReservation sets what outcome is unacceptable.
+func WithReservation(r string) PositionOption {
+	return func(p *Position) { p.Reservation = r }
+}
+
+// WithOnBehalfOf declares the principal this agent represents.
+func WithOnBehalfOf(principal string) PositionOption {
+	return func(p *Position) { p.OnBehalfOf = principal }
+}
+
+// WithDraft creates a draft position (invisible to others until published).
+func WithDraft() PositionOption {
+	return func(p *Position) { p.Draft = true }
+}
+
+// Service orchestrates deliberation operations.
+type Service struct {
+	store       Store
+	analyzer    Analyzer
+	compromiser CompromiseGenerator
+	reframer    Reframer
+}
+
+func NewService(store Store, analyzer Analyzer) *Service {
+	return &Service{store: store, analyzer: analyzer}
+}
+
+// SetCompromiseGenerator sets the compromise generation engine.
+func (s *Service) SetCompromiseGenerator(c CompromiseGenerator) {
+	s.compromiser = c
+}
+
+// SetReframer sets the position reframing engine.
+func (s *Service) SetReframer(r Reframer) {
+	s.reframer = r
+}
+
+// ProposeCompromise generates a compromise statement from the latest analysis.
+func (s *Service) ProposeCompromise(ctx context.Context, deliberationID string) (string, error) {
+	if s.compromiser == nil {
+		return "", fmt.Errorf("compromise generation not available")
+	}
+
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return "", fmt.Errorf("deliberation not found: %w", err)
+	}
+
+	result, err := s.store.GetLatestAnalysisResult(deliberationID)
+	if err != nil {
+		return "", fmt.Errorf("no analysis results — run analyze first: %w", err)
+	}
+
+	if len(result.Cruxes) == 0 {
+		return "", fmt.Errorf("no cruxes detected — nothing to compromise on")
+	}
+
+	return s.compromiser.GenerateCompromise(ctx, d.Topic, result)
+}
+
+// DeliberationOption configures optional fields on a deliberation.
+type DeliberationOption func(*Deliberation)
+
+// WithType sets the deliberation type (reasoning, knowledge, negotiation, policy).
+func WithType(t string) DeliberationOption {
+	return func(d *Deliberation) { d.Type = t }
+}
+
+// WithVisibility sets the deliberation visibility (open, private, link).
+func WithVisibility(v string) DeliberationOption {
+	return func(d *Deliberation) { d.Visibility = v }
+}
+
+// WithCreatorKey sets the creator's key_id for access control.
+func WithCreatorKey(k string) DeliberationOption {
+	return func(d *Deliberation) { d.CreatorKey = k }
+}
+
+// WithMaxParticipants sets the maximum number of unique agents.
+func WithMaxParticipants(n int) DeliberationOption {
+	return func(d *Deliberation) { d.MaxParticipants = n }
+}
+
+func (s *Service) CreateDeliberation(topic, description string, opts ...DeliberationOption) (*Deliberation, error) {
+	if len(topic) > maxTopicLen {
+		return nil, fmt.Errorf("topic exceeds %d characters", maxTopicLen)
+	}
+	if len(description) > maxDescriptionLen {
+		return nil, fmt.Errorf("description exceeds %d characters", maxDescriptionLen)
+	}
+
+	d := &Deliberation{
+		Topic:       topic,
+		Description: description,
+		Round:       1,
+		Status:      "open",
+	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	// Validate deliberation type
+	if d.Type != "" {
+		validTypes := map[string]bool{"reasoning": true, "knowledge": true, "negotiation": true, "policy": true}
+		if !validTypes[d.Type] {
+			return nil, fmt.Errorf("invalid type %q — use reasoning, knowledge, negotiation, or policy", d.Type)
+		}
+	}
+	// Validate and default visibility
+	if d.Visibility == "" {
+		d.Visibility = "open"
+	}
+	validVis := map[string]bool{"open": true, "private": true, "link": true}
+	if !validVis[d.Visibility] {
+		return nil, fmt.Errorf("invalid visibility %q — use open, private, or link", d.Visibility)
+	}
+
+	if err := s.store.CreateDeliberation(d); err != nil {
+		return nil, err
+	}
+
+	// Auto-add creator to ACL for private deliberations
+	if d.Visibility == "private" && d.CreatorKey != "" {
+		_ = s.store.AddToACL(d.ID, d.CreatorKey)
+	}
+
+	return d, nil
+}
+
+func (s *Service) GetDeliberation(id string) (*Deliberation, error) {
+	return s.store.GetDeliberation(id)
+}
+
+func (s *Service) ListDeliberations() ([]Deliberation, error) {
+	return s.store.ListDeliberations()
+}
+
+func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts ...PositionOption) (*Position, error) {
+	if len(agentID) > maxAgentIDLen {
+		return nil, fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
+	}
+	if len(content) > maxContentLen {
+		return nil, fmt.Errorf("content exceeds %d characters", maxContentLen)
+	}
+
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.Status != "open" {
+		return nil, fmt.Errorf("deliberation is %s, not accepting positions", d.Status)
+	}
+
+	count, err := s.store.CountPositions(deliberationID)
+	if err != nil {
+		return nil, err
+	}
+	if count >= maxPositions {
+		return nil, fmt.Errorf("deliberation has reached the maximum of %d positions", maxPositions)
+	}
+
+	// Enforce max_participants cap
+	if d.MaxParticipants > 0 {
+		positions, err := s.store.GetPositions(deliberationID, nil)
+		if err == nil {
+			uniqueAgents := map[string]bool{}
+			for _, p := range positions {
+				uniqueAgents[p.AgentID] = true
+			}
+			if !uniqueAgents[agentID] && len(uniqueAgents) >= d.MaxParticipants {
+				return nil, fmt.Errorf("deliberation has reached the maximum of %d participants", d.MaxParticipants)
+			}
+		}
+	}
+
+	p := &Position{
+		DeliberationID: deliberationID,
+		AgentID:        agentID,
+		Content:        content,
+		Round:          d.Round,
+	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	if err := s.store.CreatePosition(p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (s *Service) GetPositions(deliberationID string, excludeAgentID *string, round *int) ([]Position, error) {
+	positions, err := s.store.GetPositions(deliberationID, round)
+	if err != nil {
+		return nil, err
+	}
+	if excludeAgentID != nil {
+		filtered := make([]Position, 0, len(positions))
+		for _, p := range positions {
+			if p.AgentID != *excludeAgentID {
+				filtered = append(filtered, p)
+			}
+		}
+		return filtered, nil
+	}
+	return positions, nil
+}
+
+func (s *Service) Vote(deliberationID, agentID, positionID string, value int, criterionID ...string) error {
+	if len(agentID) > maxAgentIDLen {
+		return fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
+	}
+
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.Status != "open" {
+		return fmt.Errorf("deliberation is %s, not accepting votes", d.Status)
+	}
+
+	pos, err := s.store.GetPositionByID(positionID)
+	if err != nil {
+		return fmt.Errorf("position not found: %w", err)
+	}
+	if pos.DeliberationID != deliberationID {
+		return fmt.Errorf("position does not belong to this deliberation")
+	}
+
+	if value < -1 || value > 1 {
+		return fmt.Errorf("vote value must be -1, 0, or 1")
+	}
+
+	v := &Vote{
+		DeliberationID: deliberationID,
+		AgentID:        agentID,
+		PositionID:     positionID,
+		Value:          value,
+	}
+	if len(criterionID) > 0 && criterionID[0] != "" {
+		v.CriterionID = criterionID[0]
+	}
+	return s.store.CreateVote(v)
+}
+
+func (s *Service) Analyze(ctx context.Context, deliberationID string) (*AnalysisResult, error) {
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+
+	// Atomic status transition: prevents concurrent analysis race condition
+	ok, err := s.store.TrySetAnalyzing(deliberationID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("deliberation is not open (current status: %s)", d.Status)
+	}
+
+	// From here, we must reset status on any error
+	resetStatus := func() {
+		// Note: log to stderr, NOT stdout — stdout is the MCP protocol channel in stdio mode
+		if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
+			fmt.Fprintf(os.Stderr, "gemot: warning: failed to reset deliberation status: %v\n", err)
+		}
+	}
+
+	positions, err := s.store.GetPositions(deliberationID, nil)
+	if err != nil {
+		resetStatus()
+		return nil, err
+	}
+	votes, err := s.store.GetVotes(deliberationID)
+	if err != nil {
+		resetStatus()
+		return nil, err
+	}
+
+	// Resolve delegated votes (liquid democracy)
+	delegations, _ := s.store.GetDelegations(deliberationID)
+	if len(delegations) > 0 {
+		votes = resolveDelegations(votes, delegations)
+	}
+
+	// Collect unique agent IDs (sorted for deterministic output)
+	agentSet := map[string]bool{}
+	for _, p := range positions {
+		agentSet[p.AgentID] = true
+	}
+	for _, v := range votes {
+		agentSet[v.AgentID] = true
+	}
+	// Include delegators in agent set even if they only delegated
+	for _, d := range delegations {
+		if d.Active {
+			agentSet[d.FromAgent] = true
+		}
+	}
+	agents := make([]string, 0, len(agentSet))
+	for a := range agentSet {
+		agents = append(agents, a)
+	}
+	sort.Strings(agents)
+
+	// Set the deliberation topic on positions so the analyzer sees the real topic, not the UUID
+	for i := range positions {
+		positions[i].DeliberationID = d.Topic
+	}
+
+	// Attach deliberation ID, type, and progress callback to context
+	analysisCtx := context.WithValue(ctx, ContextKeyDeliberationID{}, deliberationID)
+	if d.Type != "" {
+		analysisCtx = context.WithValue(analysisCtx, ContextKeyDeliberationType{}, d.Type)
+	}
+	// Thread prior round's norms and constitutional rules into analysis
+	if d.Round > 1 {
+		prevResult, _ := s.store.GetAnalysisResult(deliberationID, d.Round-1)
+		if prevResult != nil {
+			if len(prevResult.EmergentNorms) > 0 {
+				analysisCtx = context.WithValue(analysisCtx, ContextKeyPriorNorms{}, prevResult.EmergentNorms)
+			}
+			if len(prevResult.ConstitutionalRules) > 0 {
+				analysisCtx = context.WithValue(analysisCtx, ContextKeyConstitutionalRules{}, prevResult.ConstitutionalRules)
+			}
+		}
+	}
+
+	progressFn := ProgressFunc(func(subStatus string) {
+		_ = s.store.UpdateSubStatus(deliberationID, subStatus)
+	})
+	analysisCtx = context.WithValue(analysisCtx, ContextKeyProgressFunc{}, progressFn)
+
+	result, err := s.analyzer.Analyze(analysisCtx, positions, votes, agents)
+	if err != nil {
+		resetStatus()
+		return nil, fmt.Errorf("analysis failed: %w", err)
+	}
+
+	// Surface any pending disputes as integrity warnings
+	disputes, _ := s.store.GetDisputes(deliberationID)
+	for _, disp := range disputes {
+		result.IntegrityWarnings = append(result.IntegrityWarnings,
+			fmt.Sprintf("DISPUTED: agent %q challenges crux %q — correction: %s",
+				disp.AgentID, truncate(disp.CruxClaim, 80), truncate(disp.Correction, 200)),
+		)
+	}
+
+	result.DeliberationID = deliberationID
+	result.Round = d.Round
+
+	// Round drift detection: compare with previous round's analysis
+	if d.Round > 0 {
+		if driftWarnings := s.detectRoundDrift(deliberationID, d.Round, result, votes); len(driftWarnings) > 0 {
+			result.IntegrityWarnings = append(result.IntegrityWarnings, driftWarnings...)
+		}
+	}
+
+	if err := s.store.SaveAnalysisResult(deliberationID, d.Round, result); err != nil {
+		resetStatus()
+		return nil, err
+	}
+
+	if err := s.store.AdvanceRound(deliberationID); err != nil {
+		return nil, err
+	}
+
+	if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (s *Service) GetContext(deliberationID, agentID string) (*AgentContext, error) {
+	result, err := s.store.GetLatestAnalysisResult(deliberationID)
+	if err != nil {
+		return nil, fmt.Errorf("no analysis results found: %w", err)
+	}
+
+	ctx := &AgentContext{
+		AgentID:              agentID,
+		NearestAllies:        []string{},
+		BiggestDisagreements: []string{},
+		RelevantCruxes:       []Crux{},
+		IntegrityWarnings:    result.IntegrityWarnings,
+	}
+
+	// Find the agent's cluster
+	for _, c := range result.Clusters {
+		for _, id := range c.AgentIDs {
+			if id == agentID {
+				clusterID := c.ID
+				ctx.ClusterID = &clusterID
+				for _, ally := range c.AgentIDs {
+					if ally != agentID {
+						ctx.NearestAllies = append(ctx.NearestAllies, ally)
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// Find cruxes involving this agent
+	for _, crux := range result.Cruxes {
+		involved := false
+		isAgreer := false
+		for _, a := range crux.AgreeAgents {
+			if a == agentID {
+				involved = true
+				isAgreer = true
+				break
+			}
+		}
+		if !involved {
+			for _, a := range crux.DisagreeAgents {
+				if a == agentID {
+					involved = true
+					break
+				}
+			}
+		}
+		if involved {
+			ctx.RelevantCruxes = append(ctx.RelevantCruxes, crux)
+			if isAgreer {
+				for _, d := range crux.DisagreeAgents {
+					if !contains(ctx.BiggestDisagreements, d) {
+						ctx.BiggestDisagreements = append(ctx.BiggestDisagreements, d)
+					}
+				}
+			} else {
+				for _, a := range crux.AgreeAgents {
+					if !contains(ctx.BiggestDisagreements, a) {
+						ctx.BiggestDisagreements = append(ctx.BiggestDisagreements, a)
+					}
+				}
+			}
+		}
+	}
+
+	// Anti-sycophancy: generate a diversity nudge based on the agent's unique position
+	ctx.DiversityNudge = buildDiversityNudge(ctx, result)
+
+	// Surface pending invitations for this agent
+	if invitations, err := s.store.GetInvitations(deliberationID); err == nil {
+		for _, inv := range invitations {
+			if inv.InvitedAgent == agentID && inv.Status == "pending" {
+				ctx.PendingInvitations = append(ctx.PendingInvitations, inv)
+			}
+		}
+	}
+
+	return ctx, nil
+}
+
+// buildDiversityNudge generates a message encouraging agents to maintain genuine disagreement.
+// Adapts FREE-MAD's anti-conformity mechanism for MCP: rather than modifying agent prompts
+// directly, we provide context that agents can use to resist sycophantic convergence.
+func buildDiversityNudge(ctx *AgentContext, result *AnalysisResult) string {
+	if len(ctx.RelevantCruxes) == 0 {
+		return ""
+	}
+
+	// Count how many cruxes this agent is in the minority on
+	minorityCruxes := 0
+	for _, crux := range ctx.RelevantCruxes {
+		for _, a := range crux.AgreeAgents {
+			if a == ctx.AgentID && len(crux.AgreeAgents) < len(crux.DisagreeAgents) {
+				minorityCruxes++
+			}
+		}
+		for _, a := range crux.DisagreeAgents {
+			if a == ctx.AgentID && len(crux.DisagreeAgents) < len(crux.AgreeAgents) {
+				minorityCruxes++
+			}
+		}
+	}
+
+	if minorityCruxes > 0 {
+		return fmt.Sprintf(
+			"You hold a minority position on %d crux(es). Your perspective is valuable precisely because it differs from the majority. "+
+				"If you genuinely still hold these views after seeing the analysis, maintain them — minority viewpoints often surface important considerations that majorities overlook. "+
+				"Only change your position if you've been genuinely persuaded by specific arguments, not because of social pressure to conform.",
+			minorityCruxes,
+		)
+	}
+
+	if len(ctx.BiggestDisagreements) > 0 {
+		return fmt.Sprintf(
+			"You have significant disagreements with %d agent(s). These disagreements drive the deliberation's crux detection. "+
+				"If you refine your position, focus on addressing the specific crux claims rather than moving toward generic agreement.",
+			len(ctx.BiggestDisagreements),
+		)
+	}
+
+	return ""
+}
+
+func (s *Service) ReframePosition(ctx context.Context, deliberationID, positionID string) (string, error) {
+	if s.reframer == nil {
+		return "", fmt.Errorf("reframing not available")
+	}
+
+	pos, err := s.store.GetPositionByID(positionID)
+	if err != nil {
+		return "", fmt.Errorf("position not found: %w", err)
+	}
+
+	// Get other positions for context
+	positions, err := s.store.GetPositions(deliberationID, nil)
+	if err != nil {
+		return "", err
+	}
+	var otherSummary string
+	for _, p := range positions {
+		if p.ID != positionID {
+			otherSummary += fmt.Sprintf("- %s: %s\n", p.AgentID, p.Content)
+		}
+	}
+	if otherSummary == "" {
+		otherSummary = "No other positions submitted yet."
+	}
+
+	// Get cruxes if available
+	var cruxSummary string
+	result, err := s.store.GetLatestAnalysisResult(deliberationID)
+	if err == nil {
+		for _, c := range result.Cruxes {
+			cruxSummary += fmt.Sprintf("- %s (agree: %v, disagree: %v)\n", c.Claim, c.AgreeAgents, c.DisagreeAgents)
+		}
+	}
+	if cruxSummary == "" {
+		cruxSummary = "No cruxes detected yet."
+	}
+
+	return s.reframer.Reframe(ctx, pos.Content, otherSummary, cruxSummary)
+}
+
+// resolveDelegations expands votes to include delegated votes.
+// If alice delegates to bob, bob's votes count for alice too (on positions alice hasn't voted on).
+func resolveDelegations(votes []Vote, delegations []Delegation) []Vote {
+	if len(delegations) == 0 {
+		return votes
+	}
+
+	// Build delegation graph: from -> to (active only)
+	delegateOf := map[string]string{}
+	for _, d := range delegations {
+		if d.Active {
+			delegateOf[d.FromAgent] = d.ToAgent
+		}
+	}
+
+	// Resolve transitive chains (max depth 5)
+	resolve := func(agent string) string {
+		seen := map[string]bool{agent: true}
+		current := agent
+		for i := 0; i < 5; i++ {
+			next, ok := delegateOf[current]
+			if !ok || seen[next] {
+				return current
+			}
+			seen[next] = true
+			current = next
+		}
+		return current
+	}
+
+	// Build existing vote set
+	voted := map[string]map[string]bool{} // agent -> position -> voted
+	for _, v := range votes {
+		if voted[v.AgentID] == nil {
+			voted[v.AgentID] = map[string]bool{}
+		}
+		voted[v.AgentID][v.PositionID] = true
+	}
+
+	// For each delegator, copy delegatee's votes where delegator hasn't voted
+	var expanded []Vote
+	expanded = append(expanded, votes...)
+	for from := range delegateOf {
+		effective := resolve(from)
+		if effective == from {
+			continue // no actual delegation
+		}
+		// Copy effective delegatee's votes for positions from hasn't voted on
+		for _, v := range votes {
+			if v.AgentID == effective {
+				if voted[from] != nil && voted[from][v.PositionID] {
+					continue // direct vote overrides
+				}
+				expanded = append(expanded, Vote{
+					ID:             "delegated-" + from + "-" + v.PositionID,
+					DeliberationID: v.DeliberationID,
+					AgentID:        from,
+					PositionID:     v.PositionID,
+					Value:          v.Value,
+					CreatedAt:      v.CreatedAt,
+				})
+			}
+		}
+	}
+
+	return expanded
+}
+
+func (s *Service) Delegate(deliberationID, fromAgent, toAgent, scope string) (*Delegation, error) {
+	d := &Delegation{
+		DeliberationID: deliberationID,
+		FromAgent:      fromAgent,
+		ToAgent:        toAgent,
+		Scope:          scope,
+	}
+	if err := s.store.CreateDelegation(d); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+func (s *Service) RevokeDelegation(deliberationID, fromAgent string) error {
+	return s.store.RevokeDelegation(deliberationID, fromAgent)
+}
+
+func (s *Service) PublishPosition(positionID string) error {
+	return s.store.PublishPosition(positionID)
+}
+
+func (s *Service) Commit(deliberationID, agentID, statement, conditional string) (*Commitment, error) {
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+	c := &Commitment{
+		DeliberationID: deliberationID,
+		AgentID:        agentID,
+		AnalysisRound:  d.Round - 1, // commit to the latest completed analysis
+		Statement:      statement,
+		Conditional:    conditional,
+	}
+	if err := s.store.CreateCommitment(c); err != nil {
+		return nil, err
+	}
+
+	// Check if conditional commitments should activate
+	if conditional == "" {
+		c.Status = "active"
+		_ = s.store.UpdateCommitmentStatus(c.ID, "active")
+	}
+	return c, nil
+}
+
+func (s *Service) GetCommitments(deliberationID string) ([]Commitment, error) {
+	return s.store.GetCommitments(deliberationID)
+}
+
+// GenerateJoinCode creates a short-lived join code for a deliberation.
+// The code allows an unauthenticated agent to join a single deliberation
+// with a temporary identity. Used for PR review workflows where the
+// contributor doesn't need a gemot account.
+func (s *Service) GenerateJoinCode(deliberationID, role string, ttl time.Duration) (*JoinCode, error) {
+	if _, err := s.store.GetDeliberation(deliberationID); err != nil {
+		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+
+	// Generate a memorable, human-readable code like "bold-cedar-7291"
+	code := generateMemorableCode()
+
+	jc := &JoinCode{
+		Code:           code,
+		DeliberationID: deliberationID,
+		Role:           role,
+		ExpiresAt:      time.Now().Add(ttl),
+		CreatedAt:      time.Now(),
+	}
+	if err := s.store.CreateJoinCode(jc); err != nil {
+		return nil, err
+	}
+	return jc, nil
+}
+
+// JoinDeliberation claims a join code and adds the agent to the deliberation.
+// Returns the deliberation ID so the agent knows where to participate.
+func (s *Service) JoinDeliberation(code, agentID string) (string, string, error) {
+	jc, err := s.store.ClaimJoinCode(code, agentID)
+	if err != nil {
+		return "", "", err
+	}
+	return jc.DeliberationID, jc.Role, nil
+}
+
+// LookupJoinCode returns join code metadata without claiming it.
+func (s *Service) LookupJoinCode(code string) (*JoinCode, *Deliberation, error) {
+	jc, err := s.store.LookupJoinCode(code)
+	if err != nil {
+		return nil, nil, err
+	}
+	d, err := s.store.GetDeliberation(jc.DeliberationID)
+	if err != nil {
+		return jc, nil, nil
+	}
+	return jc, d, nil
+}
+
+// CheckAccess verifies that the given key_id has access to the deliberation.
+// Returns nil if access is allowed, error if denied.
+func (s *Service) CheckAccess(deliberationID, keyID string) error {
+	if keyID == "" {
+		return nil // admin or dev mode
+	}
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	switch d.Visibility {
+	case "open", "":
+		return nil // anyone can access
+	case "link":
+		return nil // UUID is the capability token
+	case "private":
+		if d.CreatorKey == keyID {
+			return nil
+		}
+		allowed, err := s.store.CheckACL(deliberationID, keyID)
+		if err != nil || !allowed {
+			return fmt.Errorf("access denied: this is a private deliberation")
+		}
+		return nil
+	}
+	return nil
+}
+
+func (s *Service) InviteAgent(deliberationID, invitedBy, invitedAgent, role, reason string) (*Invitation, error) {
+	if len(reason) > maxContentLen {
+		return nil, fmt.Errorf("reason exceeds %d characters", maxContentLen)
+	}
+	validRoles := map[string]bool{"moderator": true, "expert": true, "mediator": true, "observer": true, "": true}
+	if !validRoles[role] {
+		return nil, fmt.Errorf("invalid role %q — use moderator, expert, mediator, or observer", role)
+	}
+	inv := &Invitation{
+		DeliberationID: deliberationID,
+		InvitedBy:      invitedBy,
+		InvitedAgent:   invitedAgent,
+		Role:           role,
+		Reason:         reason,
+	}
+	if err := s.store.CreateInvitation(inv); err != nil {
+		return nil, err
+	}
+	return inv, nil
+}
+
+func (s *Service) GetInvitations(deliberationID string) ([]Invitation, error) {
+	return s.store.GetInvitations(deliberationID)
+}
+
+func (s *Service) AcceptInvitation(invitationID string) error {
+	return s.store.UpdateInvitationStatus(invitationID, "accepted")
+}
+
+func (s *Service) GetPositionByID(id string) (*Position, error) {
+	return s.store.GetPositionByID(id)
+}
+
+func (s *Service) GetVotes(deliberationID string) ([]Vote, error) {
+	return s.store.GetVotes(deliberationID)
+}
+
+func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction string) (*Dispute, error) {
+	if len(cruxClaim) > maxContentLen {
+		return nil, fmt.Errorf("crux_claim exceeds %d characters", maxContentLen)
+	}
+	if len(correction) > maxContentLen {
+		return nil, fmt.Errorf("correction exceeds %d characters", maxContentLen)
+	}
+	d := &Dispute{
+		DeliberationID: deliberationID,
+		AgentID:        agentID,
+		CruxClaim:      cruxClaim,
+		Correction:      correction,
+	}
+	if err := s.store.CreateDispute(d); err != nil {
+		return nil, err
+	}
+	return d, nil
+}
+
+// RecoverStuck resets deliberations stuck in "analyzing" status back to "open"
+// if they have been in that state for more than 10 minutes.
+func (s *Service) RecoverStuck() (int, error) {
+	return s.store.RecoverStuckAnalyzing(10 * time.Minute)
+}
+
+func (s *Service) GetAnalysisResult(deliberationID string, round int) (*AnalysisResult, error) {
+	return s.store.GetAnalysisResult(deliberationID, round)
+}
+
+// detectRoundDrift compares the current analysis with the previous round's analysis.
+// Flags suspiciously rapid convergence that may indicate sycophantic agreement or
+// coordinated manipulation rather than genuine deliberation.
+func (s *Service) detectRoundDrift(deliberationID string, currentRound int, current *AnalysisResult, currentVotes []Vote) []string {
+	prev, err := s.store.GetAnalysisResult(deliberationID, currentRound-1)
+	if err != nil || prev == nil {
+		return nil
+	}
+
+	var warnings []string
+
+	// 1. Check if crux count dropped dramatically (may indicate convergence or silencing)
+	if len(prev.Cruxes) > 0 && len(current.Cruxes) == 0 {
+		warnings = append(warnings, "DRIFT: all cruxes disappeared between rounds — check for artificial consensus")
+	}
+
+	// 2. Check if cluster count collapsed (everyone moved to one cluster)
+	if len(prev.Clusters) >= 2 && len(current.Clusters) <= 1 {
+		warnings = append(warnings,
+			fmt.Sprintf("DRIFT: clusters collapsed from %d to %d between rounds — rapid convergence may indicate sycophantic agreement",
+				len(prev.Clusters), len(current.Clusters)))
+	}
+
+	// 3. Check vote pattern shift: compare how agents voted on positions that exist in both rounds
+	// Build vote maps for current round
+	prevVotes, err := s.store.GetVotesByRound(deliberationID, currentRound-1)
+	if err != nil || len(prevVotes) == 0 {
+		return warnings
+	}
+
+	// Build per-agent vote vectors for both rounds
+	prevAgentVotes := map[string]map[string]int{}
+	for _, v := range prevVotes {
+		if prevAgentVotes[v.AgentID] == nil {
+			prevAgentVotes[v.AgentID] = map[string]int{}
+		}
+		prevAgentVotes[v.AgentID][v.PositionID] = v.Value
+	}
+	currAgentVotes := map[string]map[string]int{}
+	for _, v := range currentVotes {
+		if currAgentVotes[v.AgentID] == nil {
+			currAgentVotes[v.AgentID] = map[string]int{}
+		}
+		currAgentVotes[v.AgentID][v.PositionID] = v.Value
+	}
+
+	// Count agents whose votes shifted toward agreement (disagree→agree or pass→agree)
+	agentsShiftedToAgree := 0
+	agentsWithComparableVotes := 0
+	for agent, currVotes := range currAgentVotes {
+		prevV, ok := prevAgentVotes[agent]
+		if !ok {
+			continue
+		}
+		shiftedToAgree := 0
+		sharedPositions := 0
+		for posID, currVal := range currVotes {
+			if prevVal, ok := prevV[posID]; ok {
+				sharedPositions++
+				if prevVal < currVal { // moved toward agreement
+					shiftedToAgree++
+				}
+			}
+		}
+		if sharedPositions >= 2 {
+			agentsWithComparableVotes++
+			if shiftedToAgree > sharedPositions/2 {
+				agentsShiftedToAgree++
+			}
+		}
+	}
+
+	// Flag if >50% of agents with comparable votes shifted toward agreement
+	if agentsWithComparableVotes >= 3 && agentsShiftedToAgree > agentsWithComparableVotes/2 {
+		warnings = append(warnings,
+			fmt.Sprintf("DRIFT: %d/%d agents shifted votes toward agreement between rounds — possible sycophantic convergence",
+				agentsShiftedToAgree, agentsWithComparableVotes))
+	}
+
+	return warnings
+}
+
+var joinAdjectives = []string{
+	"bold", "calm", "dark", "fair", "glad", "keen", "mild", "pure", "rare", "sage",
+	"warm", "wise", "blue", "cool", "deep", "firm", "gold", "iron", "just", "kind",
+	"lean", "neat", "open", "pale", "rich", "safe", "tall", "vast", "wild", "free",
+	"apt", "dry", "fit", "hot", "icy", "low", "new", "odd", "raw", "shy",
+	"dim", "due", "lax", "red", "tan", "wet", "big", "old", "few", "real",
+	"grey", "pink", "soft", "hard", "thin", "long", "fast", "slow", "high", "flat",
+	"true", "full", "late", "live", "ripe", "sane", "sure", "tidy", "wary", "zesty",
+}
+
+var joinNouns = []string{
+	"cedar", "delta", "ember", "forge", "grove", "haven", "jewel", "knoll", "latch", "marsh",
+	"nexus", "ocean", "pearl", "quill", "ridge", "shore", "torch", "union", "vault", "woods",
+	"amber", "birch", "cliff", "drift", "field", "glade", "heron", "ivory", "maple", "oasis",
+	"prism", "river", "spark", "thorn", "wheel", "cloud", "flame", "grain", "light", "orbit",
+	"plume", "slate", "steam", "stone", "tidal", "bloom", "comet", "frost", "lotus", "pivot",
+	"quartz", "rowan", "shade", "stork", "trove", "viola", "crane", "basin", "coral", "fjord",
+	"aspen", "flint", "hazel", "linen", "petal", "sable", "terra", "wren", "finch", "olive",
+}
+
+func generateMemorableCode() string {
+	b := make([]byte, 6)
+	rand.Read(b) //nolint:errcheck
+	adj := joinAdjectives[int(b[0])%len(joinAdjectives)]
+	noun := joinNouns[int(b[1])%len(joinNouns)]
+	// 6-digit suffix from 4 bytes = ~4 billion possibilities for the number alone
+	num := (int(b[2])<<24 | int(b[3])<<16 | int(b[4])<<8 | int(b[5])) % 1000000
+	return fmt.Sprintf("%s-%s-%06d", adj, noun, num)
+}
+
+// 70 adjectives × 70 nouns × 1,000,000 numbers = ~4.9 billion combinations
+// At 10 guesses/sec with rate limiting, brute force = ~15 years
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+func contains(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

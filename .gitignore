@@ -1,0 +1,14 @@
+gemot
+.gemot/
+*.db
+.env
+
+# defn database
+.defn/
+.codex/
+.agent-key.pem
+.mcp-registry-key.pem
+.plancheck-debug.json
+defn-adoption-feedback.md
+mcp-publisher
+.mcp.json

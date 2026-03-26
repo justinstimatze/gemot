@@ -1,0 +1,178 @@
+name: Gemot PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # Only auto-review PRs from trusted contributors
+    if: >
+      github.event.pull_request.author_association == 'MEMBER' ||
+      github.event.pull_request.author_association == 'COLLABORATOR' ||
+      github.event.pull_request.author_association == 'OWNER'
+    env:
+      GEMOT_URL: https://gemot.dev/a2a
+      GEMOT_KEY: ${{ secrets.GEMOT_REVIEW_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        id: diff
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          DIFF=$(git diff "origin/$BASE_REF"...HEAD | head -c 50000)
+          echo "$DIFF" > /tmp/pr-diff.txt
+          echo "lines=$(echo "$DIFF" | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: Run gemot review
+        id: review
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          DIFF_LINES: ${{ steps.diff.outputs.lines }}
+        run: |
+          set -euo pipefail
+
+          rpc() {
+            local method="$1" params="$2"
+            curl -sf "$GEMOT_URL" -X POST \
+              -H "Authorization: Bearer $GEMOT_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$method\",\"params\":$params}"
+          }
+
+          result_field() {
+            echo "$1" | jq -r ".result.$2 // empty"
+          }
+
+          echo "::group::Creating deliberation"
+          CREATE=$(rpc "gemot/create_deliberation" "$(jq -n \
+            --arg topic "PR #${PR_NUM}: ${PR_TITLE}" \
+            --arg desc "Review of PR #${PR_NUM} (${DIFF_LINES} diff lines). Agents review for code quality, security, and architecture." \
+            '{topic: $topic, description: $desc, type: "reasoning", visibility: "private", max_participants: 10}')")
+          DELIB_ID=$(result_field "$CREATE" "deliberation_id")
+          echo "Deliberation: $DELIB_ID"
+          echo "::endgroup::"
+
+          # Read diff for position content (truncate for prompt size)
+          DIFF_SUMMARY=$(head -c 8000 /tmp/pr-diff.txt)
+
+          echo "::group::Submitting reviewer positions"
+
+          # Code quality reviewer
+          rpc "gemot/submit_position" "$(jq -n \
+            --arg did "$DELIB_ID" \
+            --arg diff "$DIFF_SUMMARY" \
+            '{deliberation_id: $did, agent_id: "code-quality-reviewer", content: ("Review this PR diff for code quality: readability, maintainability, naming, error handling, test coverage.\n\nDiff:\n" + $diff), conviction: 0.7}')" > /dev/null
+
+          # Security reviewer
+          rpc "gemot/submit_position" "$(jq -n \
+            --arg did "$DELIB_ID" \
+            --arg diff "$DIFF_SUMMARY" \
+            '{deliberation_id: $did, agent_id: "security-reviewer", content: ("Review this PR diff for security: injection risks, auth bypass, data exposure, dependency vulnerabilities, input validation.\n\nDiff:\n" + $diff), conviction: 0.8, reservation: "Cannot approve PRs with unvalidated user input reaching SQL or shell commands"}')" > /dev/null
+
+          # Architecture reviewer
+          rpc "gemot/submit_position" "$(jq -n \
+            --arg did "$DELIB_ID" \
+            --arg diff "$DIFF_SUMMARY" \
+            '{deliberation_id: $did, agent_id: "architecture-reviewer", content: ("Review this PR diff for architecture: separation of concerns, API design, backward compatibility, performance implications.\n\nDiff:\n" + $diff), conviction: 0.6}')" > /dev/null
+
+          echo "::endgroup::"
+
+          echo "::group::Voting"
+          # Each reviewer votes on the other two's positions.
+          # Code quality and architecture tend to agree (+1 each way).
+          # Security often surfaces issues the others miss (0 from them, +1 toward them).
+          POSITIONS=$(rpc "gemot/get_positions" "{\"deliberation_id\":\"$DELIB_ID\"}")
+          CQ_POS=$(echo "$POSITIONS" | jq -r '.result[] | select(.agent_id | endswith("code-quality-reviewer")) | .position_id')
+          SEC_POS=$(echo "$POSITIONS" | jq -r '.result[] | select(.agent_id | endswith("security-reviewer")) | .position_id')
+          ARCH_POS=$(echo "$POSITIONS" | jq -r '.result[] | select(.agent_id | endswith("architecture-reviewer")) | .position_id')
+
+          # code-quality on others
+          rpc "gemot/vote" "{\"deliberation_id\":\"$DELIB_ID\",\"agent_id\":\"code-quality-reviewer\",\"position_id\":\"$SEC_POS\",\"value\":0}" > /dev/null 2>&1 || true
+          rpc "gemot/vote" "{\"deliberation_id\":\"$DELIB_ID\",\"agent_id\":\"code-quality-reviewer\",\"position_id\":\"$ARCH_POS\",\"value\":1}" > /dev/null 2>&1 || true
+          # security on others
+          rpc "gemot/vote" "{\"deliberation_id\":\"$DELIB_ID\",\"agent_id\":\"security-reviewer\",\"position_id\":\"$CQ_POS\",\"value\":0}" > /dev/null 2>&1 || true
+          rpc "gemot/vote" "{\"deliberation_id\":\"$DELIB_ID\",\"agent_id\":\"security-reviewer\",\"position_id\":\"$ARCH_POS\",\"value\":0}" > /dev/null 2>&1 || true
+          # architecture on others
+          rpc "gemot/vote" "{\"deliberation_id\":\"$DELIB_ID\",\"agent_id\":\"architecture-reviewer\",\"position_id\":\"$CQ_POS\",\"value\":1}" > /dev/null 2>&1 || true
+          rpc "gemot/vote" "{\"deliberation_id\":\"$DELIB_ID\",\"agent_id\":\"architecture-reviewer\",\"position_id\":\"$SEC_POS\",\"value\":0}" > /dev/null 2>&1 || true
+          echo "::endgroup::"
+
+          echo "::group::Analyzing"
+          rpc "gemot/analyze" "{\"deliberation_id\":\"$DELIB_ID\"}" > /dev/null
+
+          for i in $(seq 1 60); do
+            sleep 5
+            STATUS=$(rpc "gemot/get_deliberation" "{\"deliberation_id\":\"$DELIB_ID\"}")
+            CURRENT=$(result_field "$STATUS" "status")
+            SUB=$(result_field "$STATUS" "sub_status")
+            echo "  [$i] $CURRENT / $SUB"
+            if [ "$CURRENT" != "analyzing" ]; then
+              break
+            fi
+          done
+          echo "::endgroup::"
+
+          echo "::group::Generating join code"
+          JOIN=$(rpc "gemot/generate_join_code" "{\"deliberation_id\":\"$DELIB_ID\",\"role\":\"contributor\",\"ttl_hours\":72}")
+          JOIN_CODE=$(result_field "$JOIN" "code")
+          echo "Join code: $JOIN_CODE"
+          echo "::endgroup::"
+
+          echo "::group::Building comment"
+          CONTEXT=$(rpc "gemot/get_context" "{\"deliberation_id\":\"$DELIB_ID\",\"agent_id\":\"code-quality-reviewer\"}")
+
+          CRUX_COUNT=$(echo "$CONTEXT" | jq '.result.cruxes // [] | length')
+          CRUX_LIST=""
+          if [ "$CRUX_COUNT" -gt 0 ]; then
+            CRUX_LIST=$(echo "$CONTEXT" | jq -r '.result.cruxes[] | "- **\(.crux_claim // .claim)** (\(.controversy_score // 0 | . * 100 | floor)% controversial)"' 2>/dev/null || echo "- (crux details in deliberation)")
+          fi
+
+          cat > /tmp/pr-comment.md << COMMENT_EOF
+          ## Gemot PR Review
+
+          **3 agents reviewed this PR** and found **${CRUX_COUNT} crux(es)**.
+
+          ### Cruxes
+          ${CRUX_LIST:-No cruxes detected — reviewers largely agree.}
+
+          ### Join the deliberation
+
+          Your agent can argue back. Join code: \`${JOIN_CODE}\`
+
+          **Already have gemot configured?** Tell your agent:
+          > Join the gemot deliberation with code ${JOIN_CODE} and argue back.
+
+          **First time?** Visit https://gemot.dev/join/${JOIN_CODE}
+
+          <!-- gemot:join_code=${JOIN_CODE} deliberation_id=${DELIB_ID} -->
+          COMMENT_EOF
+          echo "::endgroup::"
+
+          echo "delib_id=$DELIB_ID" >> "$GITHUB_OUTPUT"
+          echo "join_code=$JOIN_CODE" >> "$GITHUB_OUTPUT"
+          echo "crux_count=$CRUX_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Post PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/pr-comment.md', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body.trim()
+            });

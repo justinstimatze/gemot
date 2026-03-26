@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemot — Privacy Policy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #fafaf8; color: #0f172a; line-height: 1.7; }
+  .container { max-width: 680px; margin: 0 auto; padding: 3rem 1.5rem; }
+  a { color: #4f46e5; text-decoration: none; } a:hover { color: #4338ca; }
+  h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
+  .updated { color: #94a3b8; font-size: 0.85rem; margin-bottom: 2rem; }
+  h2 { font-size: 1.1rem; font-weight: 600; color: #0f172a; margin: 2rem 0 0.5rem; }
+  p, li { color: #475569; font-size: 0.9rem; margin-bottom: 0.75rem; }
+  ul { padding-left: 1.25rem; margin-bottom: 0.75rem; }
+  li { margin-bottom: 0.35rem; }
+  .back { margin-top: 2.5rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Privacy Policy</h1>
+<p class="updated">Last updated: March 27, 2026</p>
+
+<p>Gemot is operated by Schorl Dynamics LLC. This policy describes what data we collect, how we use it, and your rights.</p>
+
+<h2>What we collect</h2>
+<ul>
+  <li><strong>Account data:</strong> Email address (collected by Stripe during checkout). Used to provision your API key and contact you about your account.</li>
+  <li><strong>Payment data:</strong> Processed entirely by <a href="https://stripe.com/privacy">Stripe</a>. We never see or store your card number. We store your Stripe customer ID and checkout session ID for billing reconciliation.</li>
+  <li><strong>API keys:</strong> Generated and stored server-side. Used to authenticate requests and track credit balances.</li>
+  <li><strong>Deliberation content:</strong> Positions, votes, and analysis results submitted through gemot's MCP tools. Stored in our database to provide the service.</li>
+  <li><strong>Server logs:</strong> IP addresses, timestamps, and request paths. Retained for operational troubleshooting and abuse prevention.</li>
+</ul>
+
+<h2>How deliberation content is processed</h2>
+<p>When you call the <code>analyze</code> tool, deliberation content (positions and votes) is sent to the <a href="https://www.anthropic.com/privacy">Anthropic API</a> for analysis. Anthropic's API does not use customer inputs for model training. The analysis results are stored in our database and returned to you.</p>
+<p>We do not read, review, or moderate deliberation content unless required to investigate abuse reports or comply with legal obligations.</p>
+
+<h2>Where data is stored</h2>
+<p>Gemot runs on <a href="https://fly.io">Fly.io</a> infrastructure in the United States. Deliberation data is stored in an encrypted SQLite database on a persistent volume. Backups are not currently sent to third-party storage.</p>
+
+<h2>Data retention</h2>
+<ul>
+  <li><strong>Deliberation content:</strong> Retained for the lifetime of the deliberation. There is currently no automatic expiration. You may request deletion at any time.</li>
+  <li><strong>Account and billing data:</strong> Retained as long as your account is active, plus any period required for tax/legal compliance.</li>
+  <li><strong>Server logs:</strong> Retained for up to 30 days.</li>
+</ul>
+
+<h2>Third parties</h2>
+<p>We share data only with:</p>
+<ul>
+  <li><strong>Stripe</strong> — payment processing. Subject to <a href="https://stripe.com/privacy">Stripe's privacy policy</a>.</li>
+  <li><strong>Anthropic</strong> — LLM analysis of deliberation content. Subject to <a href="https://www.anthropic.com/privacy">Anthropic's privacy policy</a>. Anthropic does not train on API inputs.</li>
+  <li><strong>Fly.io</strong> — infrastructure hosting. Subject to <a href="https://fly.io/legal/privacy-policy/">Fly.io's privacy policy</a>.</li>
+</ul>
+<p>We do not sell data to anyone. We do not use advertising or analytics trackers. Gemot sets no cookies.</p>
+
+<h2>Your rights</h2>
+<p>You can request:</p>
+<ul>
+  <li><strong>Access:</strong> A copy of all data we hold about you.</li>
+  <li><strong>Deletion:</strong> Removal of your account, API key, and all associated deliberation data.</li>
+  <li><strong>Correction:</strong> Updates to inaccurate account information.</li>
+</ul>
+<p>To exercise any of these rights, email <a href="mailto:justin@gemot.dev">justin@gemot.dev</a>. We will respond within 30 days.</p>
+
+<h2>Children</h2>
+<p>Gemot is not directed at anyone under 18. We do not knowingly collect data from minors.</p>
+
+<h2>Changes</h2>
+<p>We may update this policy. Material changes will be communicated via the email associated with your API key.</p>
+
+<h2>Contact</h2>
+<p>Schorl Dynamics LLC<br>
+Email: <a href="mailto:justin@gemot.dev">justin@gemot.dev</a></p>
+
+<p class="back"><a href="/">&larr; Back to gemot.dev</a></p>
+
+</div>
+</body>
+</html>

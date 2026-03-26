@@ -1,0 +1,29 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: false
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+
+formatters:
+  enable:
+    - gofmt
+
+linters-settings:
+  errcheck:
+    exclude-functions:
+      - fmt.Fprintf
+      - fmt.Fprint
+      - (net/http.ResponseWriter).Write
+
+issues:
+  exclude-dirs:
+    - testdata
+    - scripts
