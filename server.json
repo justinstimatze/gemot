@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "dev.gemot/gemot",
+  "title": "Gemot Deliberation Server",
+  "description": "Deliberation primitive for multi-agent systems. Crux detection, vote clustering, consensus.",
+  "version": "0.3.0",
+  "repository": {
+    "url": "https://github.com/justinstimatze/gemot",
+    "source": "github"
+  },
+  "remotes": [
+    {
+      "type": "sse",
+      "url": "https://gemot.dev/mcp"
+    }
+  ]
+}

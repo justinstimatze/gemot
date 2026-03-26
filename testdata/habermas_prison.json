@@ -1,0 +1,127 @@
+{
+  "question": "Should we be trying to reduce the number of people in prison?",
+  "total_responses": 145,
+  "sample_size": 15,
+  "positions": [
+    {
+      "agent_id": "hm-00",
+      "participant_id": "bd91b4ceb7",
+      "content": "I believe we should not be trying to reduce the number of people in prison. They are there for a reason & must serve their sentence. Prisoners released from prison puts too much risk on the rest of society. I would not feel safe if someone was released. We should consider the reasons why someone would be out on early release and what impact this would have on the victims families",
+      "view_change": "YES",
+      "view_movement": "CLOSER_TO_CONSENSUS",
+      "best_expression": "OWN_OPINION"
+    },
+    {
+      "agent_id": "hm-01",
+      "participant_id": "a77c5c62ec",
+      "content": "Yes. While we shouldn't reduce the number of people in prison just because our prisons our struggling to cope, we should make sure that certain crimes have lower sentences, since those sentences might be high for political purposes. Additionally, prison may not be the best place for prisoners to rehabilitate. Once a prisoner has served enough time in prison to be punished for the crime, we don't necessary have to keep them in prison to rehabilitate them into society.",
+      "view_change": "YES",
+      "view_movement": "CLOSER_TO_CONSENSUS",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-02",
+      "participant_id": "58868f7ef0",
+      "content": "We should absolutely try and reduce the amount of people in prison, because of the high cost involved in keeping these prisoners. In some cases it may be possible to keep people \"locked at home\" using electronic measures of some sort. Other cases may be solved in a financial manner. I do believe that some prison sentences should be longer then you sometimes see in the news.",
+      "view_change": "YES",
+      "view_movement": "CLOSER_TO_CONSENSUS",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-03",
+      "participant_id": "63de8aeea8",
+      "content": "in some what need to reduce. they need to adaptation proggram and getting job in prison before release",
+      "view_change": "YES",
+      "view_movement": "SOME_OTHER_WAY",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-04",
+      "participant_id": "5d156fc542",
+      "content": "I depends on what crimes we are thinking of being more lenient around. Any violent or antisocial crimes should remain in place. Other crimes relating to company fraud perhaps we should be more lenient. Perhaps we should build more prisons instead. The country is over run with criminality and it should be clamped down. Putting more money into the system and giving ex-cons better support after they leave prison would be more productive. Just reducing sentences to reduce the numbers in prisons really is not solving the problem.",
+      "view_change": "YES",
+      "view_movement": "SOME_OTHER_WAY",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-05",
+      "participant_id": "3992deee25",
+      "content": "No.  If they have been sent to prison it is for a reason.  Prison should be a deterrent and by reducing the number of people in prison this will encourage people to commit crime safe in the knowledge that they would do no prison time for it.  Sentences are already too lenient and most prisoners are released after serving only half their sentence.  By having a strong custodial punishment, this will reduce the number of people willing to commit crime in the first place.  By reducing the number of people in prison, this could potentially put criminal back on the street instead of serving the punishment they were sent to prison for in the first place.  The emphasis should be on a strong deterrent and not the fact that a custodial sentence is not an option.",
+      "view_change": "NO",
+      "view_movement": "NO_CHANGE",
+      "best_expression": "OWN_OPINION"
+    },
+    {
+      "agent_id": "hm-06",
+      "participant_id": "98926b97d1",
+      "content": "I think we should try and reduce the number of people in prison and focus on rehabilitation of certain offenders. They can then be returned to society to work and contribute in other ways. As a taxpayer I don't want to pay for the upkeep of criminals unless they are deemed unsuitable to live amongst non-criminals.",
+      "view_change": "NO",
+      "view_movement": "NO_CHANGE",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-07",
+      "participant_id": "99ef538c8f",
+      "content": "It is important that it is a deterrent to criminals but too many people inside are return offenders. More resources should be provided to try and reintegrate them into society.This may need to address their drug dependence issues or lack of a skill hindering future employment. Providing support after release could help them to not re-offend again. Also a project which identifies problem youngsters at an early age and deters them from a life of crime by encouraging ex offenders to talk to them about the bad life choices they had made and how they regretted them. Reducing future offenders is key. ",
+      "view_change": "NO",
+      "view_movement": "CLOSER_TO_CONSENSUS",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-08",
+      "participant_id": "06fdd9daac",
+      "content": "Prison is the right place for people who have committed serious crimes but I think that there needs to be other options for people that carry out lesser crimes. Rehabilitation needs to be given priority for prisoners to try and turn their life around with prisons themselves seeming to be rife with drug problems and violence which only keeps the cycle going. If people were given more support to try and build their life again and treatment for their addictions the numbers in prisons would probably fall.",
+      "view_change": "NO",
+      "view_movement": "NO_CHANGE",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-09",
+      "participant_id": "972568ef89",
+      "content": "I think that the number of people in prison directly correlates to the crimes committed and therefore we should not be trying to reduce this. For example, if someone committed a crime and they were released from prison without completing their sentence where are they going to go? And further, what it stopping them from doing it again?",
+      "view_change": "NO",
+      "view_movement": "NO_CHANGE",
+      "best_expression": "OWN_OPINION"
+    },
+    {
+      "agent_id": "hm-10",
+      "participant_id": "d5016b9667",
+      "content": "Yes, we should be trying to reduce the number of people in prison. Current prison populations are unsustainable. The current prison system is not helping to prevent reoffending: there is a lack of effective rehabilitation.  Though there will always be people who are a risk to others and need to be detained for a long time, un other situations,\n short prison sentences can cause people to become more hardened criminals that might otherwise have been the case.",
+      "view_change": "NO",
+      "view_movement": "CLOSER_TO_CONSENSUS",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-11",
+      "participant_id": "39fabcc825",
+      "content": "I believe the prison population in the UK is big and is rising. I also understand that for many prisoners being incarcerated does nothing to help prevent them from reoffending so it does not serve a major part of the intention of imprisonment. I also believe that prisoners suffer from being locked up for most of the day - particularly since Covid and their miserable experience can result in aggressive behaviour self harm and even suicide.",
+      "view_change": "NO",
+      "view_movement": "CLOSER_TO_CONSENSUS",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-12",
+      "participant_id": "450e50c805",
+      "content": "Yes, the Prison System is overinflated with people who could do better in rehabilitation centres or for drug crimes that aren't worth taking up space in prison. We should reform how punishment of crimes is done and approach a better system like some Nordic countries that focus more on rehabilitation rather than putting people in a cell to rot until they're released. It doesn't work and too many reoffend without the proper support.",
+      "view_change": "NO",
+      "view_movement": "NO_CHANGE",
+      "best_expression": "OWN_OPINION"
+    },
+    {
+      "agent_id": "hm-13",
+      "participant_id": "63f49521de",
+      "content": "Yes, we should be trying to reduce the number of people in prison. Prison should be a last resort, not a first line of punishment. First time offenders who are sent to prison often end up \"radicalised\" and become career criminals as a result of their experience. Imprisonment has a negative impact on the families of prisoners, both socially and financially. It may also be very hard to find a job after release from prison, which perpetuates the cycle of poverty and reoffending. Instead of imprisoning people for minor offences, we should focus on rehabilitation and efforts to prevent future offending. Imprisonment should be reserved for criminals who are found guilty of the most serious offences, or who pose a danger to the public.",
+      "view_change": "NO",
+      "view_movement": "NO_CHANGE",
+      "best_expression": "FINAL_CONSENSUS"
+    },
+    {
+      "agent_id": "hm-14",
+      "participant_id": "6a3b50c383",
+      "content": "yes, the prison in the UK are overcrowded and underfunded. I believe we should be trying to reduce the number if people sentenced with custodial sentences ",
+      "view_change": "NO",
+      "view_movement": "NO_CHANGE",
+      "best_expression": "FINAL_CONSENSUS"
+    }
+  ]
+}
