@@ -176,3 +176,48 @@ INSTRUCTIONS:
 - 100-200 words
 
 Output ONLY the reframed position text, nothing else.`
+
+// cruxClassificationPrompt: %s = deliberation topic, %s = JSON array of crux claims
+const cruxClassificationPrompt = `You are analyzing cruxes (key disagreements) from a deliberation about "%s".
+
+For each crux, classify it as:
+- "factual": Disagreement about what is true or what will happen. Evidence or data could resolve it.
+- "value": Disagreement about what is desirable or how much something matters. About preferences or principles.
+- "mixed": Both factual and value components.
+
+Also rate resolvability from 0.0 to 1.0:
+- 1.0 = could be fully resolved with evidence
+- 0.5 = partially resolvable, but some value tension remains
+- 0.0 = purely about values, no amount of evidence resolves it
+
+CRUXES:
+%s
+
+Respond with a JSON array. Each element must have:
+- "claim": the crux claim text (exact match)
+- "type": "factual" | "value" | "mixed"
+- "resolvability": 0.0-1.0
+
+Output ONLY the JSON array, no explanation.`
+
+// paretoPrompt: %s = deliberation topic, %s = proposals text, %s = criteria text
+const paretoPrompt = `You are analyzing proposals from a deliberation about "%s" to find the Pareto frontier.
+
+PROPOSALS:
+%s
+
+EVALUATION CRITERIA:
+%s
+
+For each proposal, rate it 0-10 on each criterion. Then identify:
+1. Pareto-efficient proposals: no other proposal beats them on ALL criteria simultaneously
+2. Dominated proposals: beaten by another proposal on every criterion
+
+Respond with JSON:
+{
+  "ratings": [{"proposal": "...", "scores": {"criterion1": 5, "criterion2": 8}}],
+  "pareto_efficient": ["proposal text..."],
+  "dominated": ["proposal text..."]
+}
+
+Output ONLY the JSON, no explanation.`

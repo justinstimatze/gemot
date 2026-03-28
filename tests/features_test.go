@@ -118,7 +118,7 @@ func TestTrustWeights(t *testing.T) {
 		`COVERAGE: agent "carol" submitted a position but no claims were extracted from it`,
 	}
 
-	weights := analysis.TrustWeights(agents, nil, nil, warnings)
+	weights := analysis.TrustWeights(agents, nil, nil, warnings, 1)
 
 	if weights["alice"] >= 1.0 {
 		t.Fatalf("expected alice trust < 1.0 (sybil), got %f", weights["alice"])
@@ -133,7 +133,7 @@ func TestTrustWeights(t *testing.T) {
 
 func TestTrustWeightsClean(t *testing.T) {
 	agents := []string{"alice", "bob"}
-	weights := analysis.TrustWeights(agents, nil, nil, nil)
+	weights := analysis.TrustWeights(agents, nil, nil, nil, 1)
 
 	if weights["alice"] != 1.0 {
 		t.Fatalf("expected 1.0 for clean agent, got %f", weights["alice"])

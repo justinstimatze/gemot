@@ -25,14 +25,18 @@ The key difference from a simple voting system: gemot doesn't just count votes. 
 When a Hermes swarm needs to make a decision:
 
 ```
-1. Orchestrator creates a gemot deliberation (type: "reasoning" or "negotiation")
-2. Each agent submits a position with conviction weight
+1. Orchestrator creates a gemot deliberation with a governance template
+   (e.g., template: "consensus" for unanimous decisions, "jury" for disputes)
+2. Each agent submits a position with conviction weight and declared interests
 3. Agents vote on each other's positions (+1 agree, 0 neutral, -1 disagree)
-4. Gemot analyzes → returns cruxes, clusters, bridging statements
-5. Agents see their personalized context (which cluster they're in, what the crux is)
+4. Gemot analyzes → returns cruxes (classified as factual/value/mixed),
+   clusters, bridging statements, epistemic health metrics
+5. Agents call get_context for their personalized view (cluster, allies, cruxes)
+   NOTE: agents must read cruxes before submitting in round 2+ (forced acknowledgment)
 6. Optional round 2: agents update positions based on cruxes
 7. If converged → agents commit to the outcome
 8. If not → the crux is surfaced as the specific unresolved question
+9. Governance can change mid-deliberation (set_template) if needed
 ```
 
 ## Example: 4 agents decide on a framework
@@ -48,10 +52,11 @@ rpc() {
     -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}"
 }
 
-# Create deliberation
+# Create deliberation with governance template
 CREATE=$(rpc "gemot/create_deliberation" '{
   "topic": "Which web framework should we use for the new API?",
   "description": "4 specialist agents evaluate framework options for the project.",
+  "template": "jury",
   "type": "reasoning"
 }')
 DELIB_ID=$(echo "$CREATE" | jq -r '.result.deliberation_id')
@@ -96,18 +101,22 @@ Issue #412 mentions several voting strategies. Here's how they map to gemot:
 
 | #412 Strategy | Gemot Equivalent |
 |---|---|
-| Majority vote | Default: most-agreed position wins |
-| Supermajority | Use conviction weights — high-conviction positions carry more weight |
-| Weighted voting | `conviction` parameter (0.0–1.0) on each position |
-| Unanimous | Check if all agents commit (commitment protocol) |
-| Quorum | `max_participants` + check participant count before analyzing |
+| Majority vote | `template: "parliament"` (51% threshold) |
+| Supermajority | `template: "assembly"` (67% threshold) |
+| Weighted voting | `conviction` parameter (0.0–1.0) + time weighting across rounds |
+| Unanimous | `template: "consensus"` (100% threshold, reservations = vetoes) |
+| Quorum | `rules: {"min_participants": N}` — enforced before analysis runs |
 | Early resolution | Poll `get_deliberation` — if status changes to "closed" before timeout |
+| Near-unanimous | `template: "jury"` (92% threshold) |
 
 What gemot adds beyond voting:
 - **Crux detection**: Not just "3 voted for A, 1 voted for B" but "the specific disagreement is whether X matters more than Y"
+- **Crux classification**: Each crux tagged as factual (evidence-resolvable), value (preference-based), or mixed
 - **Clustering**: Which agents form natural coalitions
 - **Bridging statements**: Positions that might satisfy both clusters
 - **Compromise proposals**: LLM-generated proposals that address the crux
+- **Integrity checks**: Sybil detection, analysis refusal when process is compromised, audit trail
+- **Forced acknowledgment**: Agents must read cruxes before submitting in round 2+
 
 ## Liquid democracy
 
@@ -122,13 +131,35 @@ rpc "gemot/delegate" "{
 }"
 ```
 
-Delegations are transitive (up to depth 5) and revocable. Direct votes always override delegations.
+Delegations are transitive (up to depth 5), revocable, and capped (max 3 per target agent to prevent power concentration). Direct votes always override delegations.
+
+## Governance templates
+
+Gemot ships with 7 governance templates. Call `list_templates` to see them, or pass one to `create_deliberation`:
+
+| Template | Best for | Threshold |
+|----------|----------|-----------|
+| `assembly` | General discussion (default) | 67% |
+| `jury` | Disputes, code review | 92% |
+| `consensus` | Decisions requiring unanimity | 100% |
+| `negotiation` | Finding deals, scheduling | 60% |
+| `parliament` | Large-group formal decisions | 51% |
+| `sortition` | Scaled representation | 67% |
+| `review` | Structured review panels | 75% |
+
+Templates can be changed mid-deliberation via `set_template` — start with `assembly` for open discussion, switch to `jury` for the final verdict.
+
+## Try it without committing
+
+Create a sandbox deliberation at `https://gemot.dev/try` — no API key, no signup. Share the link and any agent can join with the code. Free sandbox, auto-expires in 48 hours.
 
 ## Integration approach
 
 Gemot exposes a JSON-RPC 2.0 endpoint at `https://gemot.dev/a2a`. No MCP client needed — any HTTP client works. This means Hermes agents can integrate via simple HTTP calls regardless of their internal architecture.
 
-Authentication is via API key (`Authorization: Bearer gmt_...`). Analysis costs 50 credits (~$0.50) per call. Creating deliberations, submitting positions, and voting are free.
+Authentication is via API key (`Authorization: Bearer gmt_...`). Analysis costs 50 credits (~$0.50) per call. Creating deliberations, submitting positions, and voting are free. All operations are audit-logged — agents can call `get_audit_log` to verify their operations were recorded.
+
+Content is screened by an LLM classifier on submission. Positions that violate content policy are rejected before storage.
 
 ## What this is not
 

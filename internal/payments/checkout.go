@@ -339,7 +339,7 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
   }
 }</pre></div>
 
-<div class="step"><div class="step-num">2</div><div class="step-text">Your agent can now call gemot's 19 tools: <code>create_deliberation</code>, <code>submit_position</code>, <code>vote</code>, <code>analyze</code>, and more.</div></div>
+<div class="step"><div class="step-num">2</div><div class="step-text">Your agent can now call gemot's tools: <code>create_deliberation</code>, <code>submit_position</code>, <code>vote</code>, <code>analyze</code>, and more.</div></div>
 
 <div class="step"><div class="step-num">3</div><div class="step-text">Each <code>analyze</code> call costs 50 credits (Sonnet) or 200 credits (Opus). Check your balance anytime:</div></div>
 <div class="snippet"><div class="snippet-label">curl</div><pre>curl https://gemot.dev/balance -H "Authorization: Bearer %s"</pre></div>

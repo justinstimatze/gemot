@@ -31,7 +31,13 @@ type A2AResponse struct {
 
 // A2AHandler provides a JSON-RPC 2.0 endpoint translating A2A task messages
 // into gemot service calls. Non-MCP agents can use gemot via this endpoint.
-func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter) http.HandlerFunc {
+// AuditStore logs write operations and provides audit queries.
+type AuditStore interface {
+	LogAuditEvent(keyID, ip, method, deliberationID, agentID string)
+	GetAuditLog(deliberationID string, limit int) ([]map[string]string, error)
+}
+
+func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter, auditLog AuditStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
@@ -101,6 +107,28 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 		}
 
+		// Audit log write operations
+		if auditLog != nil {
+			writeOps := map[string]bool{
+				"gemot/create_deliberation": true, "gemot/submit_position": true,
+				"gemot/vote": true, "gemot/analyze": true, "gemot/commit": true,
+				"gemot/propose_compromise": true, "gemot/delegate": true,
+				"gemot/invite_agent": true, "gemot/dispute_crux": true,
+				"gemot/delete_deliberation": true, "gemot/report_abuse": true,
+				"gemot/set_template": true, "gemot/generate_join_code": true,
+				"gemot/join_deliberation": true,
+			}
+			if writeOps[req.Method] {
+				ip := r.RemoteAddr
+				if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+					ip = strings.Split(fwd, ",")[0]
+				}
+				did, _ := req.Params["deliberation_id"].(string)
+				aid, _ := req.Params["agent_id"].(string)
+				auditLog.LogAuditEvent(keyID, strings.TrimSpace(ip), req.Method, did, aid)
+			}
+		}
+
 		// Helper to get string param
 		str := func(key string) string {
 			if v, ok := req.Params[key]; ok {
@@ -124,15 +152,19 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		case "agent/info":
 			writeA2AResult(w, req.ID, map[string]any{
 				"name":        "Gemot",
-				"description": "Structured deliberation for AI agent coordination. 19 tools.",
+				"description": "Structured deliberation for AI agent coordination.",
 				"version":     Version,
 				"url":         "https://gemot.dev",
 				"docs":        "https://gemot.dev/docs",
-				"tools":       19,
+				"tools":       24,
 			})
 
 		case "gemot/create_deliberation":
 			var dopts []deliberation.DeliberationOption
+			// Template first — explicit options below override its defaults
+			if t := str("template"); t != "" {
+				dopts = append(dopts, deliberation.WithTemplate(t))
+			}
 			if t := str("type"); t != "" {
 				dopts = append(dopts, deliberation.WithType(t))
 			}
@@ -142,6 +174,11 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			if mp, ok := req.Params["max_participants"]; ok {
 				if f, ok := mp.(float64); ok && f > 0 {
 					dopts = append(dopts, deliberation.WithMaxParticipants(int(f)))
+				}
+			}
+			if rules, ok := req.Params["rules"]; ok {
+				if rulesMap, ok := rules.(map[string]any); ok {
+					dopts = append(dopts, deliberation.WithRules(rulesMap))
 				}
 			}
 			if keyID != "" {
@@ -183,15 +220,38 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			if ob := str("on_behalf_of"); ob != "" {
 				popts = append(popts, deliberation.WithOnBehalfOf(ob))
 			}
+			if interests := str("interests"); interests != "" {
+				popts = append(popts, deliberation.WithInterests(interests))
+			}
+			isDraft := false
 			if d, ok := req.Params["draft"]; ok {
 				if b, ok := d.(bool); ok && b {
+					isDraft = true
 					popts = append(popts, deliberation.WithDraft())
+				}
+			}
+			// Check position cost (deduction after successful submission)
+			var posCost int
+			if !isDraft && !isAdmin {
+				if dd, err := svc.GetDeliberation(str("deliberation_id")); err == nil {
+					posCost = deliberation.RuleInt(dd, "position_cost", 0)
+					if posCost > 0 && creditStore != nil && token != "" && strings.HasPrefix(token, "gmt_") {
+						balance, _ := creditStore.GetBalance(token)
+						if balance < posCost {
+							writeA2AError(w, req.ID, -32000, fmt.Sprintf("position cost: insufficient credits: have %d, need %d", balance, posCost))
+							return
+						}
+					}
 				}
 			}
 			p, err := svc.SubmitPosition(str("deliberation_id"), agentID, content, popts...)
 			if err != nil {
 				writeA2AError(w, req.ID, -32000, err.Error())
 				return
+			}
+			// Deduct after success
+			if posCost > 0 && creditStore != nil && token != "" && strings.HasPrefix(token, "gmt_") {
+				creditStore.Deduct(token, posCost) //nolint:errcheck
 			}
 			writeA2AResult(w, req.ID, p)
 
@@ -392,9 +452,75 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				"status":          "joined",
 			})
 
+		case "gemot/get_audit_log":
+			deliberationID := str("deliberation_id")
+			if deliberationID == "" {
+				writeA2AError(w, req.ID, -32000, "deliberation_id is required")
+				return
+			}
+			var opLog []map[string]string
+			if auditLog != nil {
+				opLog, _ = auditLog.GetAuditLog(deliberationID, 50)
+			}
+			var analysisAudit []deliberation.AuditEntry
+			if result, err := svc.GetLatestAnalysisResult(deliberationID); err == nil && result != nil {
+				analysisAudit = result.AuditLog
+			}
+			writeA2AResult(w, req.ID, map[string]any{
+				"operations":         opLog,
+				"analysis_decisions": analysisAudit,
+			})
+
+		case "gemot/list_templates":
+			writeA2AResult(w, req.ID, deliberation.ListTemplates())
+
+		case "gemot/delete_deliberation":
+			deliberationID := str("deliberation_id")
+			if deliberationID == "" {
+				writeA2AError(w, req.ID, -32000, "deliberation_id is required")
+				return
+			}
+			if err := svc.DeleteDeliberation(deliberationID, keyID, isAdmin); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			writeA2AResult(w, req.ID, map[string]string{"status": "deleted"})
+
+		case "gemot/report_abuse":
+			deliberationID := str("deliberation_id")
+			reason := str("reason")
+			if deliberationID == "" || reason == "" {
+				writeA2AError(w, req.ID, -32000, "deliberation_id and reason are required")
+				return
+			}
+			if err := svc.ReportAbuse(deliberationID, keyID, reason); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			writeA2AResult(w, req.ID, map[string]string{"status": "report filed"})
+
+		case "gemot/set_template":
+			deliberationID := str("deliberation_id")
+			template := str("template")
+			if deliberationID == "" || template == "" {
+				writeA2AError(w, req.ID, -32000, "deliberation_id and template are required")
+				return
+			}
+			if err := svc.SetTemplate(deliberationID, template, keyID); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			tmpl, _ := deliberation.GetTemplate(template)
+			writeA2AResult(w, req.ID, map[string]any{
+				"deliberation_id": deliberationID,
+				"template":        template,
+				"description":     tmpl.Description,
+				"threshold":       tmpl.SuggestedThreshold,
+			})
+
 		default:
 			writeA2AError(w, req.ID, -32601,
-				fmt.Sprintf("Method not found: %s. Available methods: agent/info, gemot/create_deliberation, gemot/submit_position, gemot/vote, gemot/analyze, gemot/get_deliberation, gemot/get_positions, gemot/get_context, gemot/list_deliberations, gemot/propose_compromise, gemot/dispute_crux, gemot/commit, gemot/invite_agent, gemot/delegate, gemot/generate_join_code, gemot/join_deliberation", req.Method))
+				fmt.Sprintf("Method not found: %s. Available methods: agent/info, gemot/create_deliberation, gemot/submit_position, gemot/vote, gemot/analyze, gemot/get_deliberation, gemot/get_positions, gemot/get_context, gemot/list_deliberations, gemot/propose_compromise, gemot/dispute_crux, gemot/commit, gemot/invite_agent, gemot/delegate, gemot/generate_join_code, gemot/join_deliberation, gemot/list_templates, gemot/set_template, gemot/delete_deliberation, gemot/report_abuse, gemot/get_audit_log", req.Method))
 		}
 	}
 }

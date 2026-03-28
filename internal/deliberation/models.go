@@ -14,7 +14,9 @@ type Deliberation struct {
 	Visibility      string      `json:"visibility,omitempty"`        // open (default) | private | link
 	CreatorKey      string `json:"creator_key,omitempty"`      // key_id of the creator (for access control)
 	MaxParticipants int    `json:"max_participants,omitempty"` // 0 = unlimited
-	CreatedAt   time.Time `json:"created_at"`
+	Template        string         `json:"template,omitempty"`         // governance template (assembly, jury, etc.)
+	Rules           map[string]any `json:"rules,omitempty"`            // governance rules (quorum, timelock, etc.)
+	CreatedAt       time.Time      `json:"created_at"`
 }
 
 type Position struct {
@@ -27,6 +29,7 @@ type Position struct {
 	Conviction     float64 `json:"conviction,omitempty"`    // 0.0-1.0, strength of belief (default 0.5)
 	Reservation    string  `json:"reservation,omitempty"`   // what outcome is unacceptable to this agent
 	OnBehalfOf     string  `json:"on_behalf_of,omitempty"`  // principal this agent represents
+	Interests      string  `json:"interests,omitempty"`     // what this agent optimizes for (transparent objectives)
 	Draft          bool    `json:"draft,omitempty"`         // if true, not yet visible to others
 	Round          int     `json:"round_number"`
 	CreatedAt      time.Time `json:"created_at"`

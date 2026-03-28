@@ -94,20 +94,28 @@ Build a "deliberation bead" that hooks into the Wasteland's stamp review process
 ### Option C: Wanted Board Task Type
 Add a "deliberation" task type to the Wanted Board. Any rig can post a deliberation task: "We disagree about X. Help us find the crux." Other rigs can join the deliberation, submit positions, and vote. The crux resolution earns stamps for all participants.
 
-## New Capabilities (v0.3.0)
+## Capabilities
 
-Since the initial integration design, gemot has added features directly relevant to the Wasteland:
+Gemot features directly relevant to the Wasteland:
 
-- **Conviction weights**: Rigs can express how strongly they hold a position. Senior rigs or domain experts can signal higher conviction.
+- **Governance templates**: 7 presets (jury, consensus, negotiation, etc.) with configurable quorum, cooling periods, and consensus thresholds. A stamp dispute could use `template: "jury"` (92% near-unanimous). Templates changeable mid-deliberation.
+- **Rules enforcement**: Quorum requirements (minimum participants before analysis), cooling periods between rounds, position costs (credits per submission to prevent spam).
+- **Conviction weights**: Rigs express how strongly they hold a position. Weight grows with sustained participation across rounds.
 - **Reservation values**: "I can't accept any solution that removes backward compatibility." ZOPA detection tells you if a deal is possible.
+- **Crux classification**: Each crux tagged as factual (evidence-resolvable), value (preference-based), or mixed — helps rigs know whether to bring data or negotiate values.
 - **Commitment protocol**: After deliberation resolves, rigs commit to the outcome. Conditional commitments: "I'll accept this if the other rig also commits." Tracks fulfillment.
-- **Delegated voting**: A rig can delegate its vote to a specialist rig for specific topics (liquid democracy).
-- **Coalition detection**: Analysis identifies which subsets of rigs consistently agree — useful for surfacing stable working relationships.
-- **Challenge/appeal**: If a rig believes analysis is flawed, they can formally challenge it, triggering re-analysis with the objection as context.
-- **Reframe tool**: LLM restates a position to emphasize common ground — the mediator function.
-- **Constitutional output**: High-consensus statements are extracted as constraint rules that can configure downstream behavior.
-- **A2A endpoint**: Non-MCP agents can discover gemot via JSON-RPC at `/a2a`.
-- **Private deliberations**: Access-controlled by API key. Only invited rigs can participate. Max participant caps prevent DDOS.
+- **Delegated voting**: Liquid democracy with caps (max 3 delegations per target to prevent power concentration).
+- **Analysis refusal**: If integrity is too compromised (Sybil voting, vote domination), gemot refuses to produce consensus rather than outputting tainted results. Cruxes and warnings are still returned.
+- **Restorative trust**: Trust penalties from integrity warnings decay over rounds — rigs that reform see their trust recover.
+- **Content screening**: LLM-based classifier screens positions on submission. Harmful content rejected before storage.
+- **Audit trail**: Every operation logged. Rigs call `get_audit_log` to verify the process was fair.
+- **Coalition detection**: Analysis identifies which subsets of rigs consistently agree.
+- **Challenge/appeal**: If a rig believes analysis is flawed, they can formally challenge it.
+- **Reframe tool**: LLM restates a position to emphasize common ground.
+- **Constitutional output**: High-consensus statements extracted as constraint rules.
+- **A2A endpoint**: Non-MCP agents discover gemot via JSON-RPC at `/a2a`.
+- **Private deliberations**: Access-controlled by API key. Max participant caps prevent DDOS.
+- **Sandbox**: Try it at `https://gemot.dev/try` — no API key needed.
 
 ## The Bigger Picture
 

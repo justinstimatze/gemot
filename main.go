@@ -80,6 +80,11 @@ func cmdServe(httpMode bool, addr string) {
 		svc.SetCompromiseGenerator(synth)
 		svc.SetReframer(synth)
 	}
+	// LLM content screening (Haiku classifier for position moderation)
+	if cfg.AnthropicKey != "" {
+		screeningClient := llm.NewClient(cfg.AnthropicKey, "claude-haiku-4-5")
+		svc.SetContentClassifier(screeningClient.Classify)
+	}
 
 	// Background janitor: recover stuck deliberations and jobs
 	go func() {
@@ -95,6 +100,12 @@ func cmdServe(httpMode bool, addr string) {
 				fmt.Fprintf(os.Stderr, "gemot: stuck job recovery error: %v\n", err)
 			} else if n > 0 {
 				fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck job(s)\n", n)
+			}
+			// Clean up expired sandbox deliberations (48h TTL)
+			if n, err := db.DeleteExpiredSandboxDeliberations(48 * time.Hour); err != nil {
+				fmt.Fprintf(os.Stderr, "gemot: sandbox cleanup error: %v\n", err)
+			} else if n > 0 {
+				fmt.Fprintf(os.Stderr, "gemot: cleaned up %d expired sandbox deliberation(s)\n", n)
 			}
 		}
 	}()

@@ -47,7 +47,13 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 		t.Fatalf("expected 'not open' error, got: %v", err)
 	}
 
-	// 5. RecoverStuck should recover 0 (created_at is too recent)
+	// 5. Ensure status_changed_at is clearly recent (same clock as recovery check)
+	recentTime := time.Now().Format(time.RFC3339)
+	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = ? WHERE id = ?`, recentTime, d.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// RecoverStuck should recover 0 (status_changed_at is clearly within 10 min)
 	n, err := svc.RecoverStuck()
 	if err != nil {
 		t.Fatal(err)

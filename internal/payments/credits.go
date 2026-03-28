@@ -34,6 +34,8 @@ func NewCreditStore(db *sql.DB) (*CreditStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating api_keys table: %w", err)
 	}
+	// Migration: add suspended column (idempotent)
+	db.Exec("ALTER TABLE api_keys ADD COLUMN suspended INTEGER DEFAULT 0") //nolint:errcheck
 	return &CreditStore{db: db}, nil
 }
 
@@ -151,17 +153,32 @@ func (s *CreditStore) GetBalance(key string) (int, error) {
 	return balance, nil
 }
 
-// ValidateKey checks if a key exists and has credits > 0.
+// ValidateKey checks if a key exists, has credits > 0, and is not suspended.
 func (s *CreditStore) ValidateKey(key string) (bool, error) {
-	var balance int
-	err := s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = ?`, key).Scan(&balance)
+	var balance, suspended int
+	err := s.db.QueryRow(`SELECT credits_remaining, COALESCE(suspended, 0) FROM api_keys WHERE key = ?`, key).Scan(&balance, &suspended)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	if suspended != 0 {
+		return false, nil
+	}
 	return balance > 0, nil
+}
+
+// SuspendKey marks an API key as suspended. Suspended keys fail validation.
+func (s *CreditStore) SuspendKey(key string) error {
+	_, err := s.db.Exec(`UPDATE api_keys SET suspended = 1 WHERE key = ?`, key)
+	return err
+}
+
+// UnsuspendKey removes the suspension from an API key.
+func (s *CreditStore) UnsuspendKey(key string) error {
+	_, err := s.db.Exec(`UPDATE api_keys SET suspended = 0 WHERE key = ?`, key)
+	return err
 }
 
 func randomKey() (string, error) {

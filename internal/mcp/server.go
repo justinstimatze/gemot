@@ -27,8 +27,17 @@ type server struct {
 	shutdown context.Context // server lifetime context — cancelled on shutdown
 }
 
+// audit logs a write operation from an MCP tool handler.
+func (s *server) audit(ctx context.Context, method, deliberationID, agentID string) {
+	if s.db == nil {
+		return
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	s.db.LogAuditEvent(keyID, "mcp", method, deliberationID, agentID)
+}
+
 // Version is the current gemot release version.
-const Version = "0.3.0"
+const Version = "0.4.0"
 
 // newServer creates an MCP server with all tools registered.
 func newServer(s *server) *sdkmcp.Server {
@@ -132,6 +141,31 @@ func newServer(s *server) *sdkmcp.Server {
 		Description: "Challenge a crux classification. If the analysis misrepresents your position on a crux, file a dispute with your correction. Disputes are surfaced as integrity warnings in the next analysis.",
 	}, s.handleDisputeCrux)
 
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "list_templates",
+		Description: "List available governance templates for deliberations. Each template pre-configures defaults for a governance model (assembly, sortition, parliament, jury, consensus, negotiation, review). Pass a template name to create_deliberation to use one.",
+	}, s.handleListTemplates)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "delete_deliberation",
+		Description: "Soft-delete a deliberation. It becomes invisible and no longer accepts positions or votes. Data is preserved for compliance. Only the creator or admin can delete.",
+	}, s.handleDeleteDeliberation)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "report_abuse",
+		Description: "Report abusive or harmful content in a deliberation. Takes deliberation_id and reason. Reports are stored for manual review.",
+	}, s.handleReportAbuse)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "get_audit_log",
+		Description: "Get the audit trail for a deliberation — who did what and when. Also includes analysis decisions (claim counts, crux classifications, integrity checks). For transparency: verify your operations were recorded, or review what happened in a deliberation.",
+	}, s.handleGetAuditLog)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "set_template",
+		Description: "Change the governance template on an existing deliberation. Only the creator can do this. Affects analysis behavior (consensus threshold, analysis hints) for future rounds. Existing positions and votes are preserved. Use this to switch governance models mid-deliberation — e.g., start with 'assembly' for open discussion, switch to 'jury' for the final verdict.",
+	}, s.handleSetTemplate)
+
 	return srv
 }
 
@@ -145,11 +179,13 @@ func Run(ctx context.Context, svc *deliberation.Service) error {
 // --- Parameter types ---
 
 type createDeliberationParams struct {
-	Topic           string `json:"topic"`
-	Description     string `json:"description,omitempty"`
-	Type            string `json:"type,omitempty"`            // optional: "reasoning", "knowledge", "negotiation", "policy"
-	Visibility      string `json:"visibility,omitempty"`      // optional: "open" (default), "private", "link"
-	MaxParticipants int    `json:"max_participants,omitempty"` // optional: 0 = unlimited
+	Topic           string         `json:"topic"`
+	Description     string         `json:"description,omitempty"`
+	Type            string         `json:"type,omitempty"`            // optional: "reasoning", "knowledge", "negotiation", "policy"
+	Visibility      string         `json:"visibility,omitempty"`      // optional: "open" (default), "private", "link"
+	MaxParticipants int            `json:"max_participants,omitempty"` // optional: 0 = unlimited
+	Template        string         `json:"template,omitempty"`         // optional: governance template (assembly, jury, etc.)
+	Rules           map[string]any `json:"rules,omitempty"`           // optional: governance rules (min_participants, cooling_period_minutes, position_cost)
 }
 
 type proposeCompromiseParams struct {
@@ -217,6 +253,24 @@ type disputeCruxParams struct {
 	Correction     string `json:"correction"`
 }
 
+type setTemplateParams struct {
+	DeliberationID string `json:"deliberation_id"`
+	Template       string `json:"template"`
+}
+
+type getAuditLogParams struct {
+	DeliberationID string `json:"deliberation_id"`
+}
+
+type deleteDeliberationParams struct {
+	DeliberationID string `json:"deliberation_id"`
+}
+
+type reportAbuseParams struct {
+	DeliberationID string `json:"deliberation_id"`
+	Reason         string `json:"reason"`
+}
+
 type submitPositionParams struct {
 	DeliberationID string  `json:"deliberation_id"`
 	AgentID        string  `json:"agent_id"`
@@ -226,6 +280,7 @@ type submitPositionParams struct {
 	Conviction     float64 `json:"conviction,omitempty"`    // optional: 0.0-1.0, how strongly held (default 0.5)
 	Reservation    string  `json:"reservation,omitempty"`   // optional: what outcome is unacceptable
 	OnBehalfOf     string  `json:"on_behalf_of,omitempty"`  // optional: principal this agent represents
+	Interests      string  `json:"interests,omitempty"`     // optional: what this agent optimizes for (transparent objectives)
 	Draft          bool    `json:"draft,omitempty"`         // optional: create as invisible draft, publish later
 }
 
@@ -266,6 +321,10 @@ func (s *server) handleCreateDeliberation(ctx context.Context, _ *sdkmcp.CallToo
 		return errResult(fmt.Errorf("topic is required"))
 	}
 	var dopts []deliberation.DeliberationOption
+	// Template first — explicit options below override its defaults
+	if args.Template != "" {
+		dopts = append(dopts, deliberation.WithTemplate(args.Template))
+	}
 	if args.Type != "" {
 		dopts = append(dopts, deliberation.WithType(args.Type))
 	}
@@ -274,6 +333,9 @@ func (s *server) handleCreateDeliberation(ctx context.Context, _ *sdkmcp.CallToo
 	}
 	if args.MaxParticipants > 0 {
 		dopts = append(dopts, deliberation.WithMaxParticipants(args.MaxParticipants))
+	}
+	if len(args.Rules) > 0 {
+		dopts = append(dopts, deliberation.WithRules(args.Rules))
 	}
 	// Set creator key for access control
 	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
@@ -284,7 +346,8 @@ func (s *server) handleCreateDeliberation(ctx context.Context, _ *sdkmcp.CallToo
 	if err != nil {
 		return errResult(err)
 	}
-	return jsonResultWithHints(d, "Next: submit_position to add your view, or share the deliberation_id with other agents.")
+		s.audit(ctx, "create_deliberation", d.ID, "")
+return jsonResultWithHints(d, "Next: submit_position to add your view, or share the deliberation_id with other agents.")
 }
 
 func (s *server) handleSubmitPosition(ctx context.Context, _ *sdkmcp.CallToolRequest, args submitPositionParams) (*sdkmcp.CallToolResult, any, error) {
@@ -297,6 +360,24 @@ func (s *server) handleSubmitPosition(ctx context.Context, _ *sdkmcp.CallToolReq
 	if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
 		return errResult(err)
 	}
+	// Check position cost (deduction happens after successful submission)
+	var posCost int
+	var posApiKey string
+	if !args.Draft {
+		if d, err := s.svc.GetDeliberation(args.DeliberationID); err == nil {
+			posCost = deliberation.RuleInt(d, "position_cost", 0)
+			if posCost > 0 {
+				posApiKey, _ = ctx.Value(payments.ContextKeyAPIKey{}).(string)
+				if posApiKey != "" && s.credits != nil {
+					balance, _ := s.credits.GetBalance(posApiKey)
+					if balance < posCost {
+						return errResult(fmt.Errorf("position cost: insufficient credits: have %d, need %d", balance, posCost))
+					}
+				}
+			}
+		}
+	}
+
 	var opts []deliberation.PositionOption
 	if args.ModelFamily != "" {
 		opts = append(opts, deliberation.WithModelFamily(args.ModelFamily))
@@ -313,12 +394,20 @@ func (s *server) handleSubmitPosition(ctx context.Context, _ *sdkmcp.CallToolReq
 	if args.OnBehalfOf != "" {
 		opts = append(opts, deliberation.WithOnBehalfOf(args.OnBehalfOf))
 	}
+	if args.Interests != "" {
+		opts = append(opts, deliberation.WithInterests(args.Interests))
+	}
 	if args.Draft {
 		opts = append(opts, deliberation.WithDraft())
 	}
 	p, err := s.svc.SubmitPosition(args.DeliberationID, args.AgentID, args.Content, opts...)
 	if err != nil {
 		return errResult(err)
+	}
+		s.audit(ctx, "submit_position", args.DeliberationID, args.AgentID)
+// Deduct position cost after successful submission (not before — avoids losing credits on rejection)
+	if posCost > 0 && posApiKey != "" && s.credits != nil {
+		s.credits.Deduct(posApiKey, posCost) //nolint:errcheck
 	}
 	hint := "Next: get_positions to read others' views, then vote on them."
 	if p.Draft {
@@ -339,7 +428,8 @@ func (s *server) handleVote(ctx context.Context, _ *sdkmcp.CallToolRequest, args
 	if err := s.svc.Vote(args.DeliberationID, args.AgentID, args.PositionID, args.Value, args.CriterionID); err != nil {
 		return errResult(err)
 	}
-	return textResult("vote recorded\n\n---\nNext: vote on more positions, or call analyze when all votes are in."), nil, nil
+		s.audit(ctx, "vote", args.DeliberationID, args.AgentID)
+return textResult("vote recorded\n\n---\nNext: vote on more positions, or call analyze when all votes are in."), nil, nil
 }
 
 func (s *server) handleGetPositions(_ context.Context, _ *sdkmcp.CallToolRequest, args getPositionsParams) (*sdkmcp.CallToolResult, any, error) {
@@ -395,6 +485,14 @@ func (s *server) handleAnalyze(ctx context.Context, _ *sdkmcp.CallToolRequest, a
 		analyzeCtx = context.WithValue(analyzeCtx, llm.ContextKeyModel{}, args.Model)
 	}
 
+	// Sandbox users can't analyze (requires credits)
+	if sandbox, _ := ctx.Value(payments.ContextKeySandbox{}).(bool); sandbox {
+		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
+		if apiKey == "" {
+			return errResult(fmt.Errorf("analysis requires an API key — get one at https://gemot.dev/pricing"))
+		}
+	}
+
 	// Deduct credits for customer API keys (admin keys skip deduction)
 	apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
 	var creditCost int
@@ -431,7 +529,8 @@ func (s *server) handleAnalyze(ctx context.Context, _ *sdkmcp.CallToolRequest, a
 	}
 
 	// Run analysis asynchronously
-	go func() {
+		s.audit(ctx, "analyze", args.DeliberationID, "")
+go func() {
 		result, err := s.svc.Analyze(analyzeCtx, args.DeliberationID)
 		if err != nil {
 			if apiKey != "" && creditCost > 0 && s.credits != nil {
@@ -510,6 +609,7 @@ func (s *server) handleProposeCompromise(ctx context.Context, _ *sdkmcp.CallTool
 		return errResult(err)
 	}
 
+	s.audit(ctx, "propose_compromise", args.DeliberationID, "")
 	return jsonResult(map[string]string{
 		"deliberation_id":     args.DeliberationID,
 		"compromise_proposal": proposal,
@@ -582,6 +682,7 @@ func (s *server) handleDelegate(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 	if err != nil {
 		return errResult(err)
 	}
+	s.audit(ctx, "delegate", args.DeliberationID, args.FromAgent)
 	return jsonResult(d)
 }
 
@@ -615,6 +716,7 @@ func (s *server) handleCommit(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 	if err != nil {
 		return errResult(err)
 	}
+	s.audit(ctx, "commit", args.DeliberationID, args.AgentID)
 	return jsonResult(c)
 }
 
@@ -687,7 +789,75 @@ func (s *server) handleDisputeCrux(ctx context.Context, _ *sdkmcp.CallToolReques
 	if err != nil {
 		return errResult(err)
 	}
+	s.audit(ctx, "dispute_crux", args.DeliberationID, args.AgentID)
 	return jsonResult(d)
+}
+
+func (s *server) handleListTemplates(_ context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
+	return jsonResult(deliberation.ListTemplates())
+}
+
+func (s *server) handleSetTemplate(ctx context.Context, _ *sdkmcp.CallToolRequest, args setTemplateParams) (*sdkmcp.CallToolResult, any, error) {
+	if args.DeliberationID == "" || args.Template == "" {
+		return errResult(fmt.Errorf("deliberation_id and template are required"))
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := s.svc.SetTemplate(args.DeliberationID, args.Template, keyID); err != nil {
+		return errResult(err)
+	}
+	tmpl, _ := deliberation.GetTemplate(args.Template)
+	s.audit(ctx, "set_template", args.DeliberationID, "")
+	return jsonResultWithHints(map[string]any{
+		"deliberation_id": args.DeliberationID,
+		"template":        args.Template,
+		"description":     tmpl.Description,
+		"threshold":       tmpl.SuggestedThreshold,
+	}, "Template updated. The next analysis will use this template's governance model and consensus threshold.")
+}
+
+func (s *server) handleGetAuditLog(_ context.Context, _ *sdkmcp.CallToolRequest, args getAuditLogParams) (*sdkmcp.CallToolResult, any, error) {
+	if args.DeliberationID == "" {
+		return errResult(fmt.Errorf("deliberation_id is required"))
+	}
+	// Combine operation log + analysis decisions
+	opLog, err := s.db.GetAuditLog(args.DeliberationID, 50)
+	if err != nil {
+		opLog = nil // soft fail on operations log
+	}
+	// Get analysis audit trail (LLM decisions)
+	var analysisAudit []deliberation.AuditEntry
+	if result, err := s.db.GetLatestAnalysisResult(args.DeliberationID); err == nil && result != nil {
+		analysisAudit = result.AuditLog
+	}
+	return jsonResult(map[string]any{
+		"operations":        opLog,
+		"analysis_decisions": analysisAudit,
+	})
+}
+
+func (s *server) handleDeleteDeliberation(ctx context.Context, _ *sdkmcp.CallToolRequest, args deleteDeliberationParams) (*sdkmcp.CallToolResult, any, error) {
+	if args.DeliberationID == "" {
+		return errResult(fmt.Errorf("deliberation_id is required"))
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	isAdmin, _ := ctx.Value(payments.ContextKeyIsAdmin{}).(bool)
+	if err := s.svc.DeleteDeliberation(args.DeliberationID, keyID, isAdmin); err != nil {
+		return errResult(err)
+	}
+		s.audit(ctx, "delete_deliberation", args.DeliberationID, "")
+return textResult("deliberation deleted"), nil, nil
+}
+
+func (s *server) handleReportAbuse(ctx context.Context, _ *sdkmcp.CallToolRequest, args reportAbuseParams) (*sdkmcp.CallToolResult, any, error) {
+	if args.DeliberationID == "" || args.Reason == "" {
+		return errResult(fmt.Errorf("deliberation_id and reason are required"))
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := s.svc.ReportAbuse(args.DeliberationID, keyID, args.Reason); err != nil {
+		return errResult(err)
+	}
+		s.audit(ctx, "report_abuse", args.DeliberationID, "")
+return textResult("abuse report filed — thank you"), nil, nil
 }
 
 // --- Helpers ---

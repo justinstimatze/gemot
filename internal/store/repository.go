@@ -13,27 +13,28 @@ func (s *DB) CreateDeliberation(d *deliberation.Deliberation) error {
 	d.ID = uuid.New().String()
 	d.CreatedAt = time.Now().UTC()
 	_, err := s.db.Exec(
-		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.CreatedAt.Format(time.RFC3339),
+		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, template, rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.Template, marshalRules(d.Rules), d.CreatedAt.Format(time.RFC3339),
 	)
 	return err
 }
 
 func (s *DB) GetDeliberation(id string) (*deliberation.Deliberation, error) {
 	d := &deliberation.Deliberation{}
-	var createdAt string
+	var createdAt, rulesJSON string
 	err := s.db.QueryRow(
-		`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), created_at FROM deliberations WHERE id = ?`, id,
-	).Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &createdAt)
+		`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), created_at FROM deliberations WHERE id = ?`, id,
+	).Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &createdAt)
 	if err != nil {
 		return nil, err
 	}
 	d.CreatedAt = parseTime(createdAt)
+	d.Rules = unmarshalRules(rulesJSON)
 	return d, nil
 }
 
 func (s *DB) ListDeliberations() ([]deliberation.Deliberation, error) {
-	rows, err := s.db.Query(`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), created_at FROM deliberations ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), created_at FROM deliberations WHERE status != 'deleted' ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -43,13 +44,44 @@ func (s *DB) ListDeliberations() ([]deliberation.Deliberation, error) {
 	for rows.Next() {
 		var d deliberation.Deliberation
 		var createdAt string
-		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &createdAt); err != nil {
+		var rulesJSON string
+		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &createdAt); err != nil {
 			return nil, err
 		}
 		d.CreatedAt = parseTime(createdAt)
+		d.Rules = unmarshalRules(rulesJSON)
 		result = append(result, d)
 	}
 	return result, rows.Err()
+}
+
+func (s *DB) UpdateDeliberationTemplate(id, template string) error {
+	res, err := s.db.Exec(`UPDATE deliberations SET template = ? WHERE id = ?`, template, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("deliberation not found: %s", id)
+	}
+	return nil
+}
+
+// DeleteDeliberation soft-deletes a deliberation by setting status to "deleted".
+// Data is preserved for compliance and abuse auditing.
+func (s *DB) DeleteDeliberation(id string) error {
+	res, err := s.db.Exec(
+		`UPDATE deliberations SET status = 'deleted', sub_status = '', status_changed_at = datetime('now') WHERE id = ? AND status != 'deleted'`,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("deliberation not found or already deleted: %s", id)
+	}
+	return nil
 }
 
 func (s *DB) UpdateDeliberationStatus(id, status string) error {
@@ -107,8 +139,8 @@ func (s *DB) CreatePosition(p *deliberation.Position) error {
 		draft = 1
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, draft, round_number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, draft, p.Round, p.CreatedAt.Format(time.RFC3339),
+		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, interests, draft, round_number, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, p.Interests, draft, p.Round, p.CreatedAt.Format(time.RFC3339),
 	)
 	return err
 }
@@ -117,7 +149,7 @@ func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Pos
 	var rows *rowsWrapper
 	if round != nil {
 		r, err := s.db.Query(
-			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE deliberation_id = ? AND round_number = ? AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
+			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE deliberation_id = ? AND round_number = ? AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID, *round,
 		)
 		if err != nil {
@@ -126,7 +158,7 @@ func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Pos
 		rows = &rowsWrapper{r}
 	} else {
 		r, err := s.db.Query(
-			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE deliberation_id = ? AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
+			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE deliberation_id = ? AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID,
 		)
 		if err != nil {
@@ -141,7 +173,7 @@ func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Pos
 		var p deliberation.Position
 		var createdAt string
 		var draftInt int
-		if err := rows.Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &draftInt, &p.Round, &createdAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt); err != nil {
 			return nil, err
 		}
 		p.Draft = draftInt == 1
@@ -156,8 +188,8 @@ func (s *DB) GetPositionByID(id string) (*deliberation.Position, error) {
 	var createdAt string
 	var draftInt int
 	err := s.db.QueryRow(
-		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE id = ?`, id,
-	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &draftInt, &p.Round, &createdAt)
+		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE id = ?`, id,
+	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt)
 	p.Draft = draftInt == 1
 	if err != nil {
 		return nil, err
@@ -610,6 +642,28 @@ func (s *DB) TestExec(query string, args ...any) error {
 	return err
 }
 
+func marshalRules(rules map[string]any) string {
+	if len(rules) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(rules)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func unmarshalRules(s string) map[string]any {
+	if s == "" || s == "{}" {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil
+	}
+	return m
+}
+
 // parseTime tries RFC3339 first, then falls back to SQLite's datetime('now') format.
 func parseTime(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)
@@ -633,3 +687,120 @@ func (r *rowsWrapper) Close() error           { return r.rows.Close() }
 func (r *rowsWrapper) Next() bool             { return r.rows.Next() }
 func (r *rowsWrapper) Scan(dest ...any) error { return r.rows.Scan(dest...) }
 func (r *rowsWrapper) Err() error             { return r.rows.Err() }
+
+// GetStatusChangedAt returns the time of the last status change for a deliberation.
+func (s *DB) GetStatusChangedAt(deliberationID string) (time.Time, error) {
+	var ts string
+	err := s.db.QueryRow(
+		`SELECT COALESCE(status_changed_at, '') FROM deliberations WHERE id = ?`, deliberationID,
+	).Scan(&ts)
+	if err != nil || ts == "" {
+		return time.Time{}, err
+	}
+	return parseTime(ts), nil
+}
+
+// RecordContextAccess tracks that an agent called get_context for a given round.
+func (s *DB) RecordContextAccess(deliberationID, agentID string, round int) error {
+	_, err := s.db.Exec(
+		`INSERT OR IGNORE INTO context_access (deliberation_id, agent_id, round) VALUES (?, ?, ?)`,
+		deliberationID, agentID, round,
+	)
+	return err
+}
+
+// HasContextAccess checks if an agent has called get_context for a given round.
+func (s *DB) HasContextAccess(deliberationID, agentID string, round int) (bool, error) {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM context_access WHERE deliberation_id = ? AND agent_id = ? AND round = ?`,
+		deliberationID, agentID, round,
+	).Scan(&count)
+	return count > 0, err
+}
+
+// GetAuditLog returns audit entries for a deliberation.
+// Agents can query this to verify their operations were recorded (mutual verification).
+func (s *DB) GetAuditLog(deliberationID string, limit int) ([]map[string]string, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.db.Query(
+		`SELECT COALESCE(timestamp,''), COALESCE(key_id,''), method, COALESCE(agent_id,'') FROM audit_log WHERE deliberation_id = ? ORDER BY timestamp DESC LIMIT ?`,
+		deliberationID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var result []map[string]string
+	for rows.Next() {
+		var ts, kid, method, aid string
+		if err := rows.Scan(&ts, &kid, &method, &aid); err != nil {
+			return nil, err
+		}
+		result = append(result, map[string]string{
+			"timestamp": ts, "key_id": kid, "method": method, "agent_id": aid,
+		})
+	}
+	return result, nil
+}
+
+// CreateAbuseReport stores an abuse report for manual review.
+func (s *DB) CreateAbuseReport(deliberationID, reporterKey, reason string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO abuse_reports (id, deliberation_id, reporter_key, reason) VALUES (?, ?, ?, ?)`,
+		uuid.New().String(), deliberationID, reporterKey, reason,
+	)
+	return err
+}
+
+// LogAuditEvent records a write operation for audit purposes.
+func (s *DB) LogAuditEvent(keyID, ip, method, deliberationID, agentID string) {
+	s.db.Exec( //nolint:errcheck
+		`INSERT INTO audit_log (key_id, ip, method, deliberation_id, agent_id) VALUES (?, ?, ?, ?, ?)`,
+		keyID, ip, method, deliberationID, agentID,
+	)
+}
+
+// DeleteExpiredSandboxDeliberations hard-deletes old sandbox deliberations.
+// Sandbox data has no compliance value — safe to purge.
+func (s *DB) DeleteExpiredSandboxDeliberations(maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge).UTC().Format(time.RFC3339)
+	rows, err := s.db.Query(
+		`SELECT id FROM deliberations WHERE visibility = 'link' AND template != '' AND created_at < ?`, cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		s.hardDeleteDeliberation(id) //nolint:errcheck
+	}
+	return len(ids), nil
+}
+
+// hardDeleteDeliberation permanently removes a deliberation and all related data.
+func (s *DB) hardDeleteDeliberation(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, table := range []string{
+		"analysis_results", "votes", "positions", "commitments",
+		"delegations", "disputes", "invitations", "join_codes", "deliberation_acl",
+	} {
+		tx.Exec("DELETE FROM "+table+" WHERE deliberation_id = ?", id) //nolint:errcheck
+	}
+	tx.Exec("DELETE FROM deliberations WHERE id = ?", id) //nolint:errcheck
+	return tx.Commit()
+}

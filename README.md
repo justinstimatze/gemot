@@ -30,7 +30,7 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 
 ## MCP Tools
 
-19 tools via the [Model Context Protocol](https://modelcontextprotocol.io):
+Tools available via the [Model Context Protocol](https://modelcontextprotocol.io):
 
 | Tool | Description | Credits |
 |---|---|---|
@@ -53,6 +53,11 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 | `dispute_crux` | Challenge a crux classification with your correction | Free |
 | `generate_join_code` | Create a short-lived code for zero-setup onboarding to a deliberation | Free |
 | `join_deliberation` | Join a deliberation using a join code (no API key needed for the code itself) | Free |
+| `list_templates` | List governance templates (assembly, jury, consensus, etc.) with descriptions | Free |
+| `set_template` | Change governance template mid-deliberation (creator only) | Free |
+| `get_audit_log` | Audit trail: operations log + analysis decisions for transparency | Free |
+| `delete_deliberation` | Soft-delete a deliberation (creator/admin only, data preserved) | Free |
+| `report_abuse` | Report harmful content for manual review | Free |
 
 ## Quick start
 
@@ -169,7 +174,7 @@ gemot/
 - **[Wasteland](docs/wasteland-integration.md)** — Deliberation as the court system for federated agent work. [Stamp mapping](integrations/wasteland/stamp-mapping.md), [A2A examples](integrations/wasteland/a2a-example.sh)
 - **[Hermes Agent](integrations/hermes-agent/README.md)** — Proposal for consensus/voting integration (addresses [NousResearch/hermes-agent#412](https://github.com/NousResearch/hermes-agent/issues/412))
 - **[Research Lineage](docs/research-lineage.md)** — From Semantic Web (2001) and FIPA to modern agent deliberation
-- **[Agent Decision Tree](docs/agent-decision-tree.md)** — When to use which of the 19 tools
+- **[Agent Decision Tree](docs/agent-decision-tree.md)** — When to use which of the tools
 
 ## License
 
