@@ -13,7 +13,7 @@ go test ./...           # Test
 
 ## Architecture
 
-- `internal/mcp/` — MCP server + HTTP transport, 19 tools
+- `internal/mcp/` — MCP server + HTTP transport
 - `internal/deliberation/` — Business logic, models, service layer
 - `internal/analysis/` — T3C pipeline (text) + Polis vote math + synthesizer
 - `internal/store/` — SQLite persistence

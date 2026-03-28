@@ -229,6 +229,11 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 			priorContext += "- " + r + "\n"
 		}
 	}
+	if tmplName, ok := ctx.Value(deliberation.ContextKeyTemplate{}).(string); ok {
+		if tmpl, found := deliberation.GetTemplate(tmplName); found {
+			priorContext += "\nGOVERNANCE TEMPLATE: " + tmplName + "\n" + tmpl.AnalysisHint + "\n"
+		}
+	}
 
 	// Append prior context to position text so LLM sees it during taxonomy/claim extraction
 	enrichedPositionText := positionText
@@ -485,21 +490,74 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	// Integrity: check model diversity
 	warnings = append(warnings, validateModelDiversity(positions)...)
 
+	// Process integrity pre-check (must run before refusal gate)
+	if len(agents) < 3 {
+		warnings = append(warnings, "INSUFFICIENT_AGENTS: fewer than 3 agents — analysis may be unreliable")
+	}
+	votesByAgent := map[string]int{}
+	for _, v := range votes {
+		votesByAgent[v.AgentID]++
+	}
+	if len(votes) > 0 {
+		for ag, count := range votesByAgent {
+			if float64(count)/float64(len(votes)) > 0.6 {
+				warnings = append(warnings, fmt.Sprintf("VOTE_DOMINATION: agent %q cast %.0f%% of all votes", ag, float64(count)/float64(len(votes))*100))
+			}
+		}
+	}
+
+	// Integrity gate: refuse to produce consensus/bridging if process is too compromised
+	criticalCount := 0
+	hasSybil := false
+	for _, w := range warnings {
+		if strings.Contains(w, "SYBIL_SIGNAL") {
+			hasSybil = true
+			criticalCount++
+		}
+		if strings.Contains(w, "DEGENERATE") || strings.Contains(w, "VOTE_DOMINATION") {
+			criticalCount++
+		}
+	}
+	refused := hasSybil || criticalCount >= 3
+
+	// Classify cruxes as factual/value/mixed (Bench-Capon value-based argumentation)
+	if len(cruxes) > 0 {
+		a.classifyCruxes(ctx, deliberationTopic, cruxes)
+	}
+
 	// Step 4: Build clusters from crux alignment
 	reportProgress(ctx, "clustering")
 	clusters := buildClusters(cruxes, agents)
 
 	// Step 5: Compute effective weights, then find consensus and bridging
 	// Trust weights from integrity signals
-	trustWeightsEarly := TrustWeights(agents, positions, votes, warnings)
+	// Determine current round from positions for trust decay
+	currentRound := 1
+	for _, p := range positions {
+		if p.Round > currentRound {
+			currentRound = p.Round
+		}
+	}
+	trustWeightsEarly := TrustWeights(agents, positions, votes, warnings, currentRound)
 	// Correlation discounting (Plurality: degressive proportionality)
 	correlationWeightsEarly := CorrelationDiscountedWeights(votes, agents)
-	// Effective weights: trust × correlation × sqrt(conviction)
+	// Effective weights: trust × correlation × sqrt(conviction × time_weight)
+	// Conviction voting: agents who sustain positions across rounds gain weight.
+	// time_weight = 1 + 0.2*(roundsActive-1), so round 1 = 1.0, round 2 = 1.2, round 3 = 1.4
 	effectiveWeights := map[string]float64{}
 	convictionByAgent := map[string]float64{}
+	// Track distinct rounds per agent for conviction time-weight
+	type agentRound struct{ agent string; round int }
+	seenRounds := map[agentRound]bool{}
+	roundCount := map[string]int{}
 	for _, p := range positions {
 		if p.Conviction > convictionByAgent[p.AgentID] {
 			convictionByAgent[p.AgentID] = p.Conviction
+		}
+		ar := agentRound{p.AgentID, p.Round}
+		if !seenRounds[ar] {
+			seenRounds[ar] = true
+			roundCount[p.AgentID]++
 		}
 	}
 	for _, a := range agents {
@@ -507,11 +565,21 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		if conv <= 0 {
 			conv = 0.5
 		}
-		effectiveWeights[a] = trustWeightsEarly[a] * correlationWeightsEarly[a] * math.Sqrt(conv)
+		timeWeight := 1.0 + 0.2*float64(roundCount[a]-1)
+		if timeWeight < 1.0 {
+			timeWeight = 1.0
+		}
+		effectiveWeights[a] = trustWeightsEarly[a] * correlationWeightsEarly[a] * math.Sqrt(conv*timeWeight)
 	}
 
-	consensus := findConsensus(ctx, positions, votes, clusters, effectiveWeights)
-	bridging := findBridging(positions, votes, clusters, effectiveWeights)
+	var consensus []deliberation.ConsensusStatement
+	var bridging []deliberation.BridgingStatement
+	if refused {
+		warnings = append(warnings, "ANALYSIS_REFUSED: integrity too compromised to produce reliable consensus/bridging. Cruxes and warnings are still available. Fix the underlying issues and re-analyze.")
+	} else {
+		consensus = findConsensus(ctx, positions, votes, clusters, effectiveWeights)
+		bridging = findBridging(positions, votes, clusters, effectiveWeights)
+	}
 
 	// Per-criterion analysis (multi-criteria voting)
 	criteriaResults := map[string]any{}
@@ -532,9 +600,17 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	// ZOPA: Zone of Possible Agreement
 	zopa := ComputeZOPA(positions, consensus, bridging)
 
+	// Pareto analysis: identify Pareto-efficient proposals when criteria are defined
+	var paretoEfficient, dominatedProposals []string
+	if len(criteriaResults) > 0 && !refused && (len(consensus) > 0 || len(bridging) > 0) {
+		paretoEfficient, dominatedProposals = a.analyzeParetoSurface(ctx, deliberationTopic, consensus, bridging, criteriaResults)
+	}
+
 	// Determine confidence level based on agent count and vote data
 	confidence := "low" // 3-4 agents
-	if len(agents) >= 10 && len(votes) > 0 {
+	if refused {
+		confidence = "refused"
+	} else if len(agents) >= 10 && len(votes) > 0 {
 		confidence = "high"
 	} else if len(agents) >= 5 {
 		confidence = "medium"
@@ -645,8 +721,12 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		TrustWeights:        trustWeights,
 		CorrelationWeights:  correlationWeights,
 		EffectiveWeights:    effectiveWeights,
-		IntegrityWarnings:   warnings,
-		AuditLog:            audit,
+		IntegrityWarnings:    warnings,
+		AuditLog:             audit,
+		ParticipationRate:    participationRate(len(agents), len(positions), len(votes)),
+		PerspectiveDiversity: perspectiveDiversity(len(clusters), len(agents)),
+		ParetoEfficient:     paretoEfficient,
+		DominatedProposals:  dominatedProposals,
 	}, nil
 }
 
@@ -945,7 +1025,12 @@ func formatPositions(positions []deliberation.Position, agentToNum map[string]st
 	var sb strings.Builder
 	for _, p := range positions {
 		num := agentToNum[p.AgentID]
-		fmt.Fprintf(&sb, "<position participant=\"%s\">%s</position>\n\n", num, p.Content)
+		content := p.Content
+		// Inject declared interests so LLM sees what the agent optimizes for
+		if p.Interests != "" {
+			content = "[Declared interests: " + p.Interests + "]\n" + content
+		}
+		fmt.Fprintf(&sb, "<position participant=\"%s\">%s</position>\n\n", num, content)
 	}
 	return sb.String()
 }
@@ -1188,6 +1273,50 @@ func deAnonymize(nums []string, numToAgent map[string]string) []string {
 	return result
 }
 
+// classifyCruxes uses LLM to classify each crux as factual/value/mixed.
+// Modifies cruxes in place. Failures are silently ignored (classification is optional enrichment).
+func (a *TextAnalyzer) classifyCruxes(ctx context.Context, topic string, cruxes []deliberation.Crux) {
+	claims := make([]map[string]string, len(cruxes))
+	for i, c := range cruxes {
+		claims[i] = map[string]string{"claim": c.Claim}
+	}
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		return
+	}
+	prompt := fmt.Sprintf(cruxClassificationPrompt, topic, string(claimsJSON))
+	schema := map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"claim":         map[string]any{"type": "string"},
+				"type":          map[string]any{"type": "string", "enum": []string{"factual", "value", "mixed"}},
+				"resolvability": map[string]any{"type": "number"},
+			},
+			"required": []string{"claim", "type", "resolvability"},
+		},
+	}
+	var results []struct {
+		Claim         string  `json:"claim"`
+		Type          string  `json:"type"`
+		Resolvability float64 `json:"resolvability"`
+	}
+	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &results); err != nil {
+		return
+	}
+	// Match results back to cruxes by claim text
+	for _, r := range results {
+		for i := range cruxes {
+			if cruxes[i].Claim == r.Claim {
+				cruxes[i].CruxType = r.Type
+				cruxes[i].Resolvability = r.Resolvability
+				break
+			}
+		}
+	}
+}
+
 // buildClusters creates opinion clusters from crux alignment patterns.
 func buildClusters(cruxes []deliberation.Crux, agents []string) []deliberation.OpinionCluster {
 	if len(cruxes) == 0 || len(agents) < 2 {
@@ -1260,6 +1389,13 @@ func patternsEqual(a, b []bool) bool {
 // Reasoning tasks use a higher threshold (voting is more reliable).
 // Knowledge/policy tasks use the standard 67%.
 func consensusThreshold(ctx context.Context) float64 {
+	// Template threshold takes precedence if set
+	if tmplName, ok := ctx.Value(deliberation.ContextKeyTemplate{}).(string); ok {
+		if tmpl, found := deliberation.GetTemplate(tmplName); found && tmpl.SuggestedThreshold > 0 {
+			return tmpl.SuggestedThreshold
+		}
+	}
+	// Fall back to type-based threshold
 	if dt, ok := ctx.Value(deliberation.ContextKeyDeliberationType{}).(string); ok {
 		switch dt {
 		case "reasoning":
@@ -1277,6 +1413,22 @@ func findConsensus(ctx context.Context, positions []deliberation.Position, votes
 	}
 
 	threshold := consensusThreshold(ctx)
+
+	// Adaptive quorum: for non-templated deliberations, scale threshold with group size
+	// 4 agents → 50%, 9 agents → 67%, 25 agents → 80%
+	// Only applies when no template set (templates have explicit thresholds)
+	if _, hasTemplate := ctx.Value(deliberation.ContextKeyTemplate{}).(string); !hasTemplate {
+		uniqueVoters := map[string]bool{}
+		for _, v := range votes {
+			uniqueVoters[v.AgentID] = true
+		}
+		if n := len(uniqueVoters); n > 3 {
+			adaptive := 1.0 - 1.0/math.Sqrt(float64(n))
+			if adaptive > threshold {
+				threshold = adaptive
+			}
+		}
+	}
 
 	// Helper: get effective weight for an agent (default 1.0)
 	w := func(agentID string) float64 {
@@ -1465,4 +1617,69 @@ func findBridging(positions []deliberation.Position, votes []deliberation.Vote, 
 		bridging = bridging[:5]
 	}
 	return bridging
+}
+
+// participationRate = votes / (agents × positions). 1.0 = every agent voted on every position.
+func participationRate(agents, positions, votes int) float64 {
+	if agents == 0 || positions == 0 {
+		return 0
+	}
+	maxVotes := agents * positions
+	rate := float64(votes) / float64(maxVotes)
+	if rate > 1 {
+		rate = 1
+	}
+	return math.Round(rate*100) / 100
+}
+
+// perspectiveDiversity = clusters / agents. Higher = more diverse opinion landscape.
+func perspectiveDiversity(clusters, agents int) float64 {
+	if agents == 0 {
+		return 0
+	}
+	diversity := float64(clusters) / float64(agents)
+	return math.Round(diversity*100) / 100
+}
+
+// analyzeParetoSurface identifies Pareto-efficient proposals via LLM analysis.
+// Only called when multi-criteria voting is used.
+func (a *TextAnalyzer) analyzeParetoSurface(ctx context.Context, topic string, consensus []deliberation.ConsensusStatement, bridging []deliberation.BridgingStatement, criteria map[string]any) (paretoEfficient, dominated []string) {
+	// Build proposals text
+	var proposals []string
+	for _, c := range consensus {
+		proposals = append(proposals, c.PositionID+": "+c.Content)
+	}
+	for _, b := range bridging {
+		proposals = append(proposals, b.Content)
+	}
+	if len(proposals) < 2 {
+		return nil, nil // need 2+ proposals to compare
+	}
+
+	// Build criteria text
+	criteriaText := ""
+	for k := range criteria {
+		criteriaText += "- " + k + "\n"
+	}
+
+	proposalsText := strings.Join(proposals, "\n\n")
+	prompt := fmt.Sprintf(paretoPrompt, topic, proposalsText, criteriaText)
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"pareto_efficient": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"dominated":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+		},
+		"required": []string{"pareto_efficient", "dominated"},
+	}
+
+	var result struct {
+		ParetoEfficient []string `json:"pareto_efficient"`
+		Dominated       []string `json:"dominated"`
+	}
+	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
+		return nil, nil // soft fail
+	}
+	return result.ParetoEfficient, result.Dominated
 }

@@ -290,30 +290,25 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 
 	// ── Step 4: Analyze to find the crux ──────────────────────────────
 	fmt.Fprintf(os.Stderr, "  Running analysis (finding scheduling crux)...\n")
-	analyzeRes := callTool(ctx, session, "analyze", map[string]any{
+	callTool(ctx, session, "analyze", map[string]any{
 		"deliberation_id": delib.ID,
 	})
 
-	// Wait for async analysis
+	// Poll until analysis completes (analyze runs async)
 	fmt.Fprintf(os.Stderr, "  Waiting for analysis...\n")
-	var analysisResult map[string]any
-	if err := json.Unmarshal([]byte(analyzeRes), &analysisResult); err == nil {
-		if status, ok := analysisResult["status"].(string); ok && status == "analyzing" {
-			for i := 0; i < 60; i++ {
-				time.Sleep(5 * time.Second)
-				statusRes := callTool(ctx, session, "get_deliberation", map[string]any{
-					"deliberation_id": delib.ID,
-				})
-				var d struct {
-					Status    string `json:"status"`
-					SubStatus string `json:"sub_status"`
-				}
-				mustParse(statusRes, &d)
-				fmt.Fprintf(os.Stderr, "    Status: %s/%s\n", d.Status, d.SubStatus)
-				if d.Status != "analyzing" {
-					break
-				}
-			}
+	for i := 0; i < 120; i++ {
+		time.Sleep(5 * time.Second)
+		statusRes := callTool(ctx, session, "get_deliberation", map[string]any{
+			"deliberation_id": delib.ID,
+		})
+		var d struct {
+			Status    string `json:"status"`
+			SubStatus string `json:"sub_status"`
+		}
+		mustParse(statusRes, &d)
+		fmt.Fprintf(os.Stderr, "    Status: %s/%s\n", d.Status, d.SubStatus)
+		if d.Status != "analyzing" {
+			break
 		}
 	}
 
@@ -413,6 +408,10 @@ func callTool(ctx context.Context, s *sdkmcp.ClientSession, name string, args ma
 }
 
 func mustParse(jsonStr string, v any) {
+	// Server may append hints after "---" separator; strip them
+	if idx := strings.Index(jsonStr, "\n\n---\n"); idx != -1 {
+		jsonStr = jsonStr[:idx]
+	}
 	if err := json.Unmarshal([]byte(jsonStr), v); err != nil {
 		fmt.Fprintf(os.Stderr, "parse error: %v\nraw: %s\n", err, jsonStr[:min(200, len(jsonStr))])
 		os.Exit(1)

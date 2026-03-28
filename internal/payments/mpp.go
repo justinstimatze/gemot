@@ -40,6 +40,9 @@ type ContextKeyKeyID struct{}
 // ContextKeyIsAdmin is set to true when the request uses the admin secret.
 type ContextKeyIsAdmin struct{}
 
+// ContextKeySandbox is set to true for unauthenticated sandbox connections.
+type ContextKeySandbox struct{}
+
 // Middleware returns HTTP middleware that implements MPP 402 payment gating.
 // It also supports traditional bearer token auth as a fallback.
 // If a CreditStore is provided, customer API keys (gmt_...) are validated against it.
@@ -90,7 +93,18 @@ func Middleware(cfg Config, bearerSecret string, creditStore ...*CreditStore) fu
 					next.ServeHTTP(w, r)
 					return
 				}
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				// Allow unauthenticated MCP connections for sandbox mode
+				// Rate-limit by IP to prevent abuse (10 req/min for sandbox)
+				ip := r.RemoteAddr
+				if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+					ip = strings.Split(fwd, ",")[0]
+				}
+				if !limiter.Allow("sandbox:" + strings.TrimSpace(ip)) {
+					http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)
+					return
+				}
+				ctx := context.WithValue(r.Context(), ContextKeySandbox{}, true)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
@@ -134,8 +148,19 @@ func Middleware(cfg Config, bearerSecret string, creditStore ...*CreditStore) fu
 				return
 			}
 
-			// No valid auth — return 402 challenge
-			writeChallenge(w, cfg)
+			// No valid auth — allow sandbox mode for free tools
+			// Rate-limit by IP (10 req/min for sandbox)
+			ip := r.RemoteAddr
+			if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+				ip = strings.Split(fwd, ",")[0]
+			}
+			if !limiter.Allow("sandbox:" + strings.TrimSpace(ip)) {
+				http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)
+				return
+			}
+			ctx := context.WithValue(r.Context(), ContextKeySandbox{}, true)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
 		})
 	}
 }

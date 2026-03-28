@@ -15,7 +15,7 @@ func TestEffectiveWeightsComputation(t *testing.T) {
 	// This is the Plurality quadratic voting mechanism: influence grows sub-linearly
 
 	// Verify via the analysis package directly
-	weights := analysis.TrustWeights([]string{"alice", "bob"}, nil, nil, nil)
+	weights := analysis.TrustWeights([]string{"alice", "bob"}, nil, nil, nil, 1)
 	if weights["alice"] != 1.0 || weights["bob"] != 1.0 {
 		t.Fatal("clean agents should have trust 1.0")
 	}

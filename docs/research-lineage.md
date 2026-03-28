@@ -53,7 +53,7 @@ The Semantic Web agent vision stalled for reinforcing reasons:
 
 ## The resurrection (2024–2026)
 
-LLMs dissolve the ontology bottleneck. Agents can now understand natural language positions, detect implicit disagreements, and bridge vocabularies without pre-agreed schemas.
+LLMs dramatically reduce the ontology bottleneck. Agents can now understand natural language positions, detect implicit disagreements, and bridge vocabularies without pre-agreed schemas.
 
 | Then (2001–2006) | Now (2024–2026) |
 |---|---|
@@ -98,11 +98,11 @@ What they had that gemot could learn from:
 
 ### Deliberation platforms
 
-10. Small, C. et al. (2021). "Polis: Scaling deliberation by mapping high dimensional opinion spaces." *Reckhow Foundation*.
+10. Small, C. et al. (2021). "Polis: Scaling deliberation by mapping high dimensional opinion spaces." *RECERCA: Revista de Pensament i Analisi*, 26(2).
 11. Tessler, M.H. et al. (2024). "AI Can Help Humans Find Common Ground in Democratic Deliberation." *Science*.
 12. Fish, S. et al. (2023). "Generative Social Choice." *arXiv:2309.01291*.
 13. Weyl, E.G. & Tang, A. (2024). *Plurality: The Future of Collaborative Technology and Democracy.*
-14. Serapio-Garcia, G. et al. (2025). "Moltbook." *arXiv:2602.14299*.
+14. Li, M., Li, X., & Zhou, T. (2026). "Does Socialization Emerge in AI Agent Society? A Case Study of Moltbook." *arXiv:2602.14299*.
 
 ### Modern agent coordination
 

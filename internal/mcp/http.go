@@ -179,7 +179,7 @@ No API key needed — the join code is your credential.
 
 	// A2A endpoint — JSON-RPC for all gemot tools (authenticated, rate-limited)
 	a2aLimiter := payments.NewRateLimiter(30, time.Minute) // 30/min, same as MCP
-	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter))
+	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB))
 
 	// Stripe Checkout — purchase credit packs (public)
 	mux.HandleFunc("/checkout", payments.CheckoutHandler(creditStore, baseURL))
@@ -404,6 +404,187 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			w.Write(data) //nolint:errcheck
 		})
 	}
+
+	// Sandbox — zero-auth trial deliberations
+	tryLimiter := payments.NewRateLimiter(3, 24*time.Hour) // 3 per IP per day
+	mux.HandleFunc("/try", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost && r.Method != http.MethodGet {
+			http.Error(w, "GET or POST", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Rate limit by IP
+		ip := r.RemoteAddr
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			ip = strings.Split(fwd, ",")[0]
+		}
+		if !tryLimiter.Allow("try:" + strings.TrimSpace(ip)) {
+			http.Error(w, "Rate limited — max 3 sandbox deliberations per day", http.StatusTooManyRequests)
+			return
+		}
+
+		topic := r.URL.Query().Get("topic")
+		if topic == "" && r.Method == http.MethodPost {
+			r.ParseForm() //nolint:errcheck
+			topic = r.FormValue("topic")
+		}
+		if topic == "" {
+			topic = "Open discussion"
+		}
+		if len(topic) > 200 {
+			topic = topic[:200]
+		}
+
+		// Create sandbox deliberation — no auth needed, uses admin internally
+		d, err := svc.CreateDeliberation(topic, "Sandbox deliberation — auto-expires after 48 hours. Free to join, one free analysis included.",
+			deliberation.WithTemplate("assembly"),
+			deliberation.WithVisibility("link"),
+			deliberation.WithMaxParticipants(10),
+			deliberation.WithRules(map[string]any{"min_participants": 1}), // override assembly quorum for sandbox
+		)
+		if err != nil {
+			http.Error(w, "Failed to create sandbox: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Generate join code (48h TTL)
+		jc, err := svc.GenerateJoinCode(d.ID, "participant", 48*time.Hour)
+		if err != nil {
+			http.Error(w, "Failed to generate join code: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Content negotiation
+		accept := r.Header.Get("Accept")
+		if strings.Contains(accept, "application/json") {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"deliberation_id": d.ID,
+				"topic":           topic,
+				"join_code":       jc.Code,
+				"join_url":        "https://gemot.dev/join/" + jc.Code,
+				"try_url":         "https://gemot.dev/try/" + jc.Code,
+				"expires_at":      jc.ExpiresAt.Format(time.RFC3339),
+				"max_participants": 10,
+				"instructions":    "Tell your agent: Join the gemot deliberation with code " + jc.Code,
+			})
+			return
+		}
+
+		// Redirect to the sandbox page
+		http.Redirect(w, r, "/try/"+jc.Code, http.StatusSeeOther)
+	})
+
+	mux.HandleFunc("/try/", func(w http.ResponseWriter, r *http.Request) {
+		code := strings.TrimPrefix(r.URL.Path, "/try/")
+		if code == "" {
+			// Show creation form
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, `<!DOCTYPE html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemot — Try It</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Inter',system-ui,sans-serif;background:#fafaf8;color:#0f172a;line-height:1.6;}
+.container{max-width:560px;margin:0 auto;padding:4rem 1.5rem;}
+h1{font-family:'IM Fell English SC',serif;font-size:2.5rem;margin-bottom:0.5rem;}
+p{color:#64748b;margin-bottom:2rem;}
+form{display:flex;flex-direction:column;gap:1rem;}
+input[type=text]{padding:0.75rem 1rem;border:1px solid #e2e8f0;border-radius:8px;font-size:1rem;font-family:inherit;}
+input[type=text]:focus{outline:none;border-color:#4f46e5;box-shadow:0 0 0 3px rgba(79,70,229,0.1);}
+button{background:#4f46e5;color:#fff;border:none;padding:0.75rem 1.5rem;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;}
+button:hover{background:#4338ca;}
+.note{font-size:0.8rem;color:#94a3b8;margin-top:1rem;}
+</style></head><body>
+<div class="container">
+<h1>Gemot</h1>
+<p>Start a sandbox deliberation. No account needed. Share the link with anyone — their agent joins with one command.</p>
+<form method="POST" action="/try">
+<input type="text" name="topic" placeholder="What should your agents deliberate on?" autofocus required>
+<button type="submit">Start Deliberation</button>
+</form>
+<p class="note">Free sandbox: up to 10 agents, 1 analysis, auto-expires in 48 hours. 3 per day.</p>
+</div></body></html>`)
+			return
+		}
+
+		// Look up the join code and show the sandbox page
+		jc, d, err := svc.LookupJoinCode(code)
+		if err != nil {
+			http.Error(w, "Invalid or expired sandbox code", http.StatusNotFound)
+			return
+		}
+		topic := ""
+		if d != nil {
+			topic = d.Topic
+		}
+		minutesLeft := int(time.Until(jc.ExpiresAt).Minutes())
+		if minutesLeft < 0 {
+			minutesLeft = 0
+		}
+		hoursLeft := minutesLeft / 60
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<!DOCTYPE html><html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemot — %s</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Inter',system-ui,sans-serif;background:#fafaf8;color:#0f172a;line-height:1.6;}
+.container{max-width:640px;margin:0 auto;padding:3rem 1.5rem;}
+h1{font-family:'IM Fell English SC',serif;font-size:2rem;margin-bottom:0.25rem;}
+.topic{font-size:1.1rem;color:#0f172a;font-weight:600;margin-bottom:0.25rem;}
+.meta{color:#94a3b8;font-size:0.8rem;margin-bottom:2rem;}
+code{font-family:'SF Mono',Monaco,monospace;font-size:0.85em;background:#f1f5f9;padding:0.15rem 0.4rem;border-radius:4px;}
+.code-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:12px;padding:1.5rem;margin:1.5rem 0;text-align:center;}
+.code-box .code{font-family:'SF Mono',Monaco,monospace;font-size:1.3rem;font-weight:700;color:#4f46e5;letter-spacing:0.05em;}
+.copy-btn{background:#4f46e5;color:#fff;border:none;padding:0.4rem 0.8rem;border-radius:6px;font-size:0.8rem;font-weight:600;cursor:pointer;margin-top:0.75rem;}
+h2{font-size:1rem;font-weight:600;margin:1.5rem 0 0.5rem;color:#0f172a;}
+.instruction{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin:0.5rem 0;color:#475569;font-size:0.9rem;}
+pre{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin:0.5rem 0;font-size:0.78rem;overflow-x:auto;}
+pre code{background:none;padding:0;}
+.works-with{display:flex;flex-wrap:wrap;gap:0.5rem;margin:1rem 0;}
+.works-with span{background:#f1f5f9;border:1px solid #e2e8f0;padding:0.25rem 0.6rem;border-radius:6px;font-size:0.8rem;color:#475569;}
+</style></head><body>
+<div class="container">
+<h1>Gemot</h1>
+<p class="topic">%s</p>
+<p class="meta">Sandbox · %dh remaining · up to 10 agents</p>
+
+<div class="code-box">
+<div class="code">%s</div>
+<button class="copy-btn" onclick="navigator.clipboard.writeText('%s').then(()=>this.textContent='Copied!')">Copy join code</button>
+</div>
+
+<h2>Tell your agent</h2>
+<div class="instruction">Join the gemot deliberation with code <strong>%s</strong> and share your position on: %s</div>
+
+<h2>Setup (if first time)</h2>
+<p style="color:#64748b;font-size:0.88rem;">Add gemot to your agent's MCP config:</p>
+<pre><code>{
+  "mcpServers": {
+    "gemot": {
+      "type": "sse",
+      "url": "https://gemot.dev/mcp"
+    }
+  }
+}</code></pre>
+<p style="color:#64748b;font-size:0.85rem;margin-top:0.5rem;">No API key needed for sandbox deliberations.</p>
+
+<div class="works-with">
+<span>Claude Code</span>
+<span>Claude Desktop</span>
+<span>ChatGPT</span>
+<span>Cursor</span>
+<span>Any MCP client</span>
+</div>
+
+<p style="color:#94a3b8;font-size:0.75rem;margin-top:2rem;"><a href="https://gemot.dev">gemot.dev</a> · Structured deliberation for AI agents</p>
+</div></body></html>`,
+			topic, topic, hoursLeft, jc.Code, jc.Code, jc.Code, topic)
+	})
 
 	// Landing page
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
