@@ -364,7 +364,7 @@ const htmlTemplate = `<!DOCTYPE html>
 <div class="value-props">
   <div class="value-prop">
     <div class="value-prop-title">One MCP call away</div>
-    <div class="value-prop-desc">19 tools. Works with any MCP client — Claude, GPT, your own agents. Connect via stdio or HTTPS.</div>
+    <div class="value-prop-desc">Works with any MCP client — Claude, GPT, your own agents. Connect via stdio or HTTPS.</div>
   </div>
   <div class="value-prop">
     <div class="value-prop-title">Not a summary. A crux.</div>

@@ -7,9 +7,11 @@ type Crux struct {
 	AgreeAgents       []string `json:"agree_agents"`
 	DisagreeAgents    []string `json:"disagree_agents"`
 	NoClearPosition   []string `json:"no_clear_position"`
-	ControversyScore  float64  `json:"controversy_score"` // 0-1
+	ControversyScore  float64  `json:"controversy_score"`              // 0-1
 	Explanation       string   `json:"explanation"`
 	SourcePositionIDs []string `json:"source_position_ids,omitempty"` // positions that contributed claims to this crux
+	CruxType          string   `json:"crux_type,omitempty"`           // "factual", "value", "mixed"
+	Resolvability     float64  `json:"resolvability,omitempty"`       // 0-1, how likely evidence could resolve it
 }
 
 type OpinionCluster struct {
@@ -92,4 +94,10 @@ type AnalysisResult struct {
 	EffectiveWeights    map[string]float64   `json:"effective_weights,omitempty"`   // trust × correlation × sqrt(conviction) — actually used in consensus/bridging
 	IntegrityWarnings   []string             `json:"integrity_warnings,omitempty"`
 	AuditLog            []AuditEntry         `json:"audit_log,omitempty"`
+	// Epistemic health metrics
+	ParticipationRate    float64  `json:"participation_rate,omitempty"`    // votes cast / (agents × positions)
+	PerspectiveDiversity float64  `json:"perspective_diversity,omitempty"` // clusters / agents (0-1, higher = more diverse)
+	// Pareto analysis
+	ParetoEfficient  []string `json:"pareto_efficient,omitempty"`  // proposals on the Pareto frontier
+	DominatedProposals []string `json:"dominated_proposals,omitempty"` // proposals beaten on all criteria
 }

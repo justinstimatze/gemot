@@ -110,3 +110,39 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 
 	return fmt.Errorf("no tool_use block in response")
 }
+
+// Classify sends a short prompt and returns the text response.
+// Uses Haiku for speed and cost (~$0.001 per call).
+func (c *Client) Classify(ctx context.Context, system, prompt string) (string, error) {
+	select {
+	case apiSemaphore <- struct{}{}:
+		defer func() { <-apiSemaphore }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+
+	resp, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     "claude-haiku-4-5",
+		MaxTokens: 100,
+		System: []anthropic.TextBlockParam{
+			{Text: system},
+		},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("classify API call failed: %w", err)
+	}
+
+	if c.OnUsage != nil {
+		c.OnUsage(ctx, int(resp.Usage.InputTokens), int(resp.Usage.OutputTokens))
+	}
+
+	for _, block := range resp.Content {
+		if block.Type == "text" {
+			return block.AsText().Text, nil
+		}
+	}
+	return "", fmt.Errorf("no text block in response")
+}

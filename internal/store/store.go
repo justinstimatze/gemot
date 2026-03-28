@@ -54,6 +54,39 @@ func Open(path string) (*DB, error) {
 	db.Exec("ALTER TABLE positions ADD COLUMN on_behalf_of TEXT DEFAULT ''")               //nolint:errcheck
 	db.Exec("ALTER TABLE positions ADD COLUMN draft INTEGER DEFAULT 0")                    //nolint:errcheck
 	db.Exec("ALTER TABLE votes ADD COLUMN criterion_id TEXT DEFAULT ''")                   //nolint:errcheck
+	db.Exec("ALTER TABLE deliberations ADD COLUMN template TEXT DEFAULT ''")               //nolint:errcheck
+
+	// Security tables
+	db.Exec(`CREATE TABLE IF NOT EXISTS abuse_reports (
+		id TEXT PRIMARY KEY,
+		deliberation_id TEXT NOT NULL,
+		reporter_key TEXT DEFAULT '',
+		reason TEXT NOT NULL,
+		created_at TEXT DEFAULT (datetime('now'))
+	)`) //nolint:errcheck
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS audit_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp TEXT DEFAULT (datetime('now')),
+		key_id TEXT DEFAULT '',
+		ip TEXT DEFAULT '',
+		method TEXT NOT NULL,
+		deliberation_id TEXT DEFAULT '',
+		agent_id TEXT DEFAULT ''
+	)`) //nolint:errcheck
+
+	// Note: api_keys.suspended column is added in payments.NewCreditStore (where the table is created)
+	db.Exec("ALTER TABLE deliberations ADD COLUMN rules TEXT DEFAULT '{}'") //nolint:errcheck
+	db.Exec("ALTER TABLE positions ADD COLUMN interests TEXT DEFAULT ''")  //nolint:errcheck
+
+	// Forced acknowledgment: track which agents have read context before round 2+
+	db.Exec(`CREATE TABLE IF NOT EXISTS context_access (
+		deliberation_id TEXT NOT NULL,
+		agent_id TEXT NOT NULL,
+		round INTEGER NOT NULL,
+		accessed_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (deliberation_id, agent_id, round)
+	)`) //nolint:errcheck
 
 	return &DB{db: db, path: path}, nil
 }

@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"time"
+
+	"github.com/justinstimatze/gemot/internal/sanitize"
 )
 
 const (
@@ -23,6 +25,12 @@ type Store interface {
 	GetDeliberation(id string) (*Deliberation, error)
 	ListDeliberations() ([]Deliberation, error)
 	UpdateDeliberationStatus(id, status string) error
+	UpdateDeliberationTemplate(id, template string) error
+	DeleteDeliberation(id string) error
+	CreateAbuseReport(deliberationID, reporterKey, reason string) error
+	RecordContextAccess(deliberationID, agentID string, round int) error
+	HasContextAccess(deliberationID, agentID string, round int) (bool, error)
+	GetStatusChangedAt(deliberationID string) (time.Time, error)
 	UpdateSubStatus(id, subStatus string) error
 	TrySetAnalyzing(id string) (bool, error)
 	AdvanceRound(id string) error
@@ -129,6 +137,11 @@ func WithOnBehalfOf(principal string) PositionOption {
 	return func(p *Position) { p.OnBehalfOf = principal }
 }
 
+// WithInterests declares what this agent optimizes for (transparent objectives).
+func WithInterests(interests string) PositionOption {
+	return func(p *Position) { p.Interests = interests }
+}
+
 // WithDraft creates a draft position (invisible to others until published).
 func WithDraft() PositionOption {
 	return func(p *Position) { p.Draft = true }
@@ -136,14 +149,20 @@ func WithDraft() PositionOption {
 
 // Service orchestrates deliberation operations.
 type Service struct {
-	store       Store
-	analyzer    Analyzer
-	compromiser CompromiseGenerator
-	reframer    Reframer
+	store            Store
+	analyzer         Analyzer
+	compromiser      CompromiseGenerator
+	reframer         Reframer
+	contentClassifier sanitize.Classifier
 }
 
 func NewService(store Store, analyzer Analyzer) *Service {
 	return &Service{store: store, analyzer: analyzer}
+}
+
+// SetContentClassifier sets the LLM content screening function.
+func (s *Service) SetContentClassifier(c sanitize.Classifier) {
+	s.contentClassifier = c
 }
 
 // SetCompromiseGenerator sets the compromise generation engine.
@@ -202,6 +221,65 @@ func WithMaxParticipants(n int) DeliberationOption {
 	return func(d *Deliberation) { d.MaxParticipants = n }
 }
 
+// WithTemplate applies a governance template's defaults.
+// Apply this BEFORE other options so explicit params override template defaults.
+func WithTemplate(name string) DeliberationOption {
+	return func(d *Deliberation) {
+		tmpl, ok := GetTemplate(name)
+		if !ok {
+			d.Template = name // store it; validation happens in CreateDeliberation
+			return
+		}
+		d.Template = name
+		if d.Type == "" && tmpl.DefaultType != "" {
+			d.Type = tmpl.DefaultType
+		}
+		if d.MaxParticipants == 0 && tmpl.DefaultMaxPart > 0 {
+			d.MaxParticipants = tmpl.DefaultMaxPart
+		}
+		// Apply default rules (explicit rules override later)
+		if d.Rules == nil && len(tmpl.DefaultRules) > 0 {
+			d.Rules = make(map[string]any)
+			for k, v := range tmpl.DefaultRules {
+				d.Rules[k] = v
+			}
+		}
+	}
+}
+
+// WithRules sets explicit governance rules, overriding template defaults.
+func WithRules(rules map[string]any) DeliberationOption {
+	return func(d *Deliberation) {
+		if d.Rules == nil {
+			d.Rules = make(map[string]any)
+		}
+		for k, v := range rules {
+			d.Rules[k] = v
+		}
+	}
+}
+
+// ContextKeyTemplate is the context key for passing the template name through analysis.
+type ContextKeyTemplate struct{}
+
+// RuleInt reads an integer rule from a deliberation, returning the default if not set.
+func RuleInt(d *Deliberation, key string, defaultVal int) int {
+	if d.Rules == nil {
+		return defaultVal
+	}
+	v, ok := d.Rules[key]
+	if !ok {
+		return defaultVal
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	}
+	return defaultVal
+}
+
 func (s *Service) CreateDeliberation(topic, description string, opts ...DeliberationOption) (*Deliberation, error) {
 	if len(topic) > maxTopicLen {
 		return nil, fmt.Errorf("topic exceeds %d characters", maxTopicLen)
@@ -218,6 +296,12 @@ func (s *Service) CreateDeliberation(topic, description string, opts ...Delibera
 	}
 	for _, opt := range opts {
 		opt(d)
+	}
+	// Validate template
+	if d.Template != "" {
+		if _, ok := GetTemplate(d.Template); !ok {
+			return nil, fmt.Errorf("unknown template %q — use list_templates to see available templates", d.Template)
+		}
 	}
 	// Validate deliberation type
 	if d.Type != "" {
@@ -251,6 +335,49 @@ func (s *Service) GetDeliberation(id string) (*Deliberation, error) {
 	return s.store.GetDeliberation(id)
 }
 
+// SetTemplate changes the governance template on an existing deliberation.
+// Only the creator can change the template. Only affects future analysis rounds.
+func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) error {
+	if _, ok := GetTemplate(template); !ok {
+		return fmt.Errorf("unknown template %q — use list_templates to see available templates", template)
+	}
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.CreatorKey != "" && d.CreatorKey != callerKeyID {
+		return fmt.Errorf("only the deliberation creator can change the template")
+	}
+	return s.store.UpdateDeliberationTemplate(deliberationID, template)
+}
+
+// DeleteDeliberation removes a deliberation and all its data.
+// Only the creator or an admin can delete.
+func (s *Service) DeleteDeliberation(deliberationID, callerKeyID string, isAdmin bool) error {
+	if !isAdmin {
+		d, err := s.store.GetDeliberation(deliberationID)
+		if err != nil {
+			return fmt.Errorf("deliberation not found: %w", err)
+		}
+		if d.CreatorKey == "" || d.CreatorKey != callerKeyID {
+			return fmt.Errorf("only the deliberation creator or admin can delete")
+		}
+	}
+	return s.store.DeleteDeliberation(deliberationID)
+}
+
+// ReportAbuse files an abuse report for manual review.
+func (s *Service) ReportAbuse(deliberationID, reporterKey, reason string) error {
+	if _, err := s.store.GetDeliberation(deliberationID); err != nil {
+		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	return s.store.CreateAbuseReport(deliberationID, reporterKey, reason)
+}
+
+func (s *Service) GetLatestAnalysisResult(deliberationID string) (*AnalysisResult, error) {
+	return s.store.GetLatestAnalysisResult(deliberationID)
+}
+
 func (s *Service) ListDeliberations() ([]Deliberation, error) {
 	return s.store.ListDeliberations()
 }
@@ -263,12 +390,37 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 		return nil, fmt.Errorf("content exceeds %d characters", maxContentLen)
 	}
 
+	// Content screening — LLM classifier (Haiku, ~200ms, ~$0.001)
+	var screeningWarning string
+	if s.contentClassifier != nil {
+		screenCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		blocked, reason := sanitize.ScreenContent(screenCtx, s.contentClassifier, content)
+		if blocked {
+			return nil, fmt.Errorf("content rejected: %s", reason)
+		}
+		if reason != "" {
+			screeningWarning = reason // "UNSCREENED: classifier unavailable"
+		}
+	}
+	if screeningWarning != "" {
+		fmt.Fprintf(os.Stderr, "gemot: %s for position in deliberation (content length: %d)\n", screeningWarning, len(content))
+	}
+
 	d, err := s.store.GetDeliberation(deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
 	}
 	if d.Status != "open" {
 		return nil, fmt.Errorf("deliberation is %s, not accepting positions", d.Status)
+	}
+
+	// Forced acknowledgment: in round 2+, agents must call get_context first
+	if d.Round > 1 {
+		accessed, _ := s.store.HasContextAccess(deliberationID, agentID, d.Round)
+		if !accessed {
+			return nil, fmt.Errorf("round %d requires reviewing cruxes first — call get_context before submitting a new position", d.Round)
+		}
 	}
 
 	count, err := s.store.CountPositions(deliberationID)
@@ -368,6 +520,35 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		return nil, fmt.Errorf("deliberation not found: %w", err)
 	}
 
+	// Enforce cooling period (minimum time between analyses)
+	coolingMinutes := RuleInt(d, "cooling_period_minutes", 0)
+	if coolingMinutes > 0 && d.Round > 1 {
+		if lastChanged, err := s.store.GetStatusChangedAt(deliberationID); err == nil && !lastChanged.IsZero() {
+			elapsed := time.Since(lastChanged)
+			required := time.Duration(coolingMinutes) * time.Minute
+			if elapsed < required {
+				remaining := required - elapsed
+				return nil, fmt.Errorf("cooling period active — %d minutes remaining before next analysis", int(remaining.Minutes())+1)
+			}
+		}
+	}
+
+	// Enforce quorum (minimum participants before analysis)
+	minParticipants := RuleInt(d, "min_participants", 0)
+	if minParticipants > 0 {
+		positions, err := s.store.GetPositions(deliberationID, nil)
+		if err != nil {
+			return nil, err
+		}
+		uniqueAgents := map[string]bool{}
+		for _, p := range positions {
+			uniqueAgents[p.AgentID] = true
+		}
+		if len(uniqueAgents) < minParticipants {
+			return nil, fmt.Errorf("quorum not met: %d participants, need %d", len(uniqueAgents), minParticipants)
+		}
+	}
+
 	// Atomic status transition: prevents concurrent analysis race condition
 	ok, err := s.store.TrySetAnalyzing(deliberationID)
 	if err != nil {
@@ -432,6 +613,9 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	if d.Type != "" {
 		analysisCtx = context.WithValue(analysisCtx, ContextKeyDeliberationType{}, d.Type)
 	}
+	if d.Template != "" {
+		analysisCtx = context.WithValue(analysisCtx, ContextKeyTemplate{}, d.Template)
+	}
 	// Thread prior round's norms and constitutional rules into analysis
 	if d.Round > 1 {
 		prevResult, _ := s.store.GetAnalysisResult(deliberationID, d.Round-1)
@@ -495,6 +679,11 @@ func (s *Service) GetContext(deliberationID, agentID string) (*AgentContext, err
 	result, err := s.store.GetLatestAnalysisResult(deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("no analysis results found: %w", err)
+	}
+
+	// Record that this agent accessed context (for forced acknowledgment)
+	if d, err := s.store.GetDeliberation(deliberationID); err == nil {
+		_ = s.store.RecordContextAccess(deliberationID, agentID, d.Round)
 	}
 
 	ctx := &AgentContext{
@@ -725,6 +914,19 @@ func resolveDelegations(votes []Vote, delegations []Delegation) []Vote {
 }
 
 func (s *Service) Delegate(deliberationID, fromAgent, toAgent, scope string) (*Delegation, error) {
+	// Delegation cap: no agent can receive more than 3 delegations
+	// Prevents power concentration (Uniswap VC-delegate pattern)
+	delegations, _ := s.store.GetDelegations(deliberationID)
+	count := 0
+	for _, existing := range delegations {
+		if existing.Active && existing.ToAgent == toAgent {
+			count++
+		}
+	}
+	if count >= 3 {
+		return nil, fmt.Errorf("delegation cap reached: %s already has %d delegations (max 3)", toAgent, count)
+	}
+
 	d := &Delegation{
 		DeliberationID: deliberationID,
 		FromAgent:      fromAgent,

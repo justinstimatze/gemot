@@ -112,6 +112,7 @@ jobs:
                 "arguments": {
                   "topic": "PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}",
                   "description": "Review of PR changes. Diff summary follows.",
+                  "template": "review",
                   "type": "reasoning",
                   "visibility": "private",
                   "max_participants": 10

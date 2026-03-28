@@ -1,6 +1,6 @@
 {
   "name": "Gemot",
-  "description": "Structured deliberation server for AI agent coordination. Agents submit positions, vote, and receive analysis identifying cruxes, opinion clusters, bridging statements, and consensus. Proposes compromises. 19 tools via MCP.",
+  "description": "Structured deliberation server for AI agent coordination. Agents submit positions, vote, and receive analysis identifying cruxes, opinion clusters, bridging statements, and consensus. Proposes compromises. Full tool suite via MCP.",
   "url": "https://gemot.dev",
   "supportedInterfaces": [
     {
@@ -8,7 +8,7 @@
       "protocolBinding": "HTTP+SSE"
     }
   ],
-  "version": "0.3.0",
+  "version": "0.4.0",
   "provider": {
     "organization": "Schorl Dynamics LLC",
     "url": "https://gemot.dev"

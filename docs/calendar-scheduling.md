@@ -19,7 +19,7 @@ The crux: morning people (Alice, Eve) vs afternoon people (Bob) vs midday-only p
 
 ## How it works
 
-1. **Create a negotiation-type deliberation** for the target week
+1. **Create a deliberation** with `template: "negotiation"` for the target week
 2. **Each agent submits availability windows** as a position:
    - Available time slots (not event names — privacy preserving)
    - `conviction` reflects preference strength (0.7 = "I really prefer mornings")
