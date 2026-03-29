@@ -89,7 +89,11 @@ def run_diplomacy_year(
 
 
 def generate_gemot_briefings(game_json: Path, year: int, output_dir: Path):
-    """Run gemot analysis on game messages and output briefing files."""
+    """Run gemot analysis on game messages and output briefing files.
+
+    Powers are processed in parallel by the Go script. If some fail or the
+    process times out, we still use whatever briefings were written to disk.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -111,16 +115,21 @@ def generate_gemot_briefings(game_json: Path, year: int, output_dir: Path):
 
     print(f"\n  Generating gemot briefings for Year {year}...")
 
-    result = subprocess.run(
-        cmd, cwd=GEMOT_DIR, env=env, capture_output=True, text=True, timeout=1800
-    )  # 30 min timeout
+    timed_out = False
+    try:
+        result = subprocess.run(
+            cmd, cwd=GEMOT_DIR, env=env, capture_output=True, text=True, timeout=3600
+        )  # 1 hour timeout (powers run in parallel, ~5 min total)
+        print(result.stderr)
+        if result.returncode != 0:
+            print(f"  WARNING: Go script exited with code {result.returncode}")
+    except subprocess.TimeoutExpired as e:
+        timed_out = True
+        print("  WARNING: Briefing generation timed out after 60 min")
+        if e.stderr:
+            print(e.stderr[-500:] if len(e.stderr) > 500 else e.stderr)
 
-    print(result.stderr)  # Go script logs to stderr
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Gemot briefing generation failed: {result.stderr[-500:]}")
-
-    # Verify all 7 briefings exist and have content
+    # Collect whatever briefings were written to disk (partial results are fine)
     briefings = {}
     for power in POWERS:
         bf = output_dir / f"{power}_briefing.txt"
@@ -130,6 +139,11 @@ def generate_gemot_briefings(game_json: Path, year: int, output_dir: Path):
         else:
             print(f"    WARNING: {power} briefing missing or empty")
 
+    if not briefings:
+        raise RuntimeError("No briefings produced at all")
+
+    status = "timed out" if timed_out else "complete"
+    print(f"  Briefing generation {status}: {len(briefings)}/7 powers")
     return briefings
 
 

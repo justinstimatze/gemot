@@ -171,6 +171,14 @@ type summaryResult struct {
 	Summary string `json:"summary"`
 }
 
+// claimSource tracks a quote from a specific position that supports a claim.
+type claimSource struct {
+	PositionID string
+	AgentID    string
+	Quote      string
+	ClaimText  string // the original extracted claim text
+}
+
 // claim tracks an extracted claim with its source agent and position.
 type claim struct {
 	AgentID      string
@@ -180,6 +188,7 @@ type claim struct {
 	Quote        string
 	TopicName    string
 	SubtopicName string
+	Sources      []claimSource // all source quotes (populated during dedup)
 }
 
 // reportProgress sends a sub-status update if a progress callback is in the context.
@@ -456,6 +465,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 			crux.Topic = topic.TopicName
 			crux.Subtopic = subtopic.SubtopicName
 			crux.SourcePositionIDs = collectPositionIDs(subtopicClaims)
+			crux.SourceQuotes = collectSourceQuotes(subtopicClaims)
 			cruxes = append(cruxes, *crux)
 			foundSubtopicCrux = true
 		}
@@ -470,6 +480,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 					crux.Topic = topic.TopicName
 					crux.Subtopic = "(topic-level)"
 					crux.SourcePositionIDs = collectPositionIDs(topicClaims)
+					crux.SourceQuotes = collectSourceQuotes(topicClaims)
 					cruxes = append(cruxes, *crux)
 				}
 			}
@@ -886,36 +897,53 @@ func (a *TextAnalyzer) deduplicateClaims(ctx context.Context, deliberationTopic,
 	}
 
 	// Build deduplicated claims: each group becomes one claim, preserving all source agents
+	// and collecting source quotes from all original claims in the group.
 	var deduped []claim
 	for _, g := range result.Groups {
-		// Collect all agents from the original claims in this group
+		// Collect all agents and source quotes from the original claims in this group
 		agentSet := map[string]bool{}
+		var sources []claimSource
 		var firstClaim claim
 		for _, id := range g.OriginalClaimIDs {
 			if id >= 0 && id < len(claims) {
-				agentSet[claims[id].AgentID] = true
+				c := claims[id]
+				agentSet[c.AgentID] = true
 				if firstClaim.AgentID == "" {
-					firstClaim = claims[id]
+					firstClaim = c
+				}
+				if c.Quote != "" {
+					sources = append(sources, claimSource{
+						PositionID: c.PositionID,
+						AgentID:    c.AgentID,
+						Quote:      c.Quote,
+						ClaimText:  c.Claim,
+					})
 				}
 			}
 		}
 		// Use the group's higher-level claim text, but keep the first agent's identity
-		// for the crux detection stage (which needs agent attribution)
+		// for the crux detection stage (which needs agent attribution).
+		// Attach all source quotes so they can be traced through to crux generation.
 		for agentID := range agentSet {
 			num := ""
+			posID := ""
 			for _, c := range claims {
 				if c.AgentID == agentID {
 					num = c.AgentNum
+					if posID == "" {
+						posID = c.PositionID
+					}
 					break
 				}
 			}
 			deduped = append(deduped, claim{
 				AgentID:      agentID,
 				AgentNum:     num,
-				PositionID:   firstClaim.PositionID,
+				PositionID:   posID,
 				Claim:        g.ClaimText,
 				TopicName:    firstClaim.TopicName,
 				SubtopicName: firstClaim.SubtopicName,
+				Sources:      sources,
 			})
 		}
 	}
@@ -1243,8 +1271,52 @@ func collectPositionIDs(claims []claim) []string {
 			seen[c.PositionID] = true
 			ids = append(ids, c.PositionID)
 		}
+		// Also collect IDs from dedup sources
+		for _, s := range c.Sources {
+			if s.PositionID != "" && !seen[s.PositionID] {
+				seen[s.PositionID] = true
+				ids = append(ids, s.PositionID)
+			}
+		}
 	}
 	return ids
+}
+
+// collectSourceQuotes gathers all unique source quotes from claims.
+func collectSourceQuotes(claims []claim) []deliberation.SourceQuote {
+	type quoteKey struct{ posID, quote string }
+	seen := map[quoteKey]bool{}
+	var quotes []deliberation.SourceQuote
+
+	for _, c := range claims {
+		// Direct quote on the claim itself
+		if c.Quote != "" && c.PositionID != "" {
+			k := quoteKey{c.PositionID, c.Quote}
+			if !seen[k] {
+				seen[k] = true
+				quotes = append(quotes, deliberation.SourceQuote{
+					PositionID: c.PositionID,
+					AgentID:    c.AgentID,
+					Quote:      c.Quote,
+					ClaimText:  c.Claim,
+				})
+			}
+		}
+		// Quotes from dedup sources
+		for _, s := range c.Sources {
+			k := quoteKey{s.PositionID, s.Quote}
+			if !seen[k] {
+				seen[k] = true
+				quotes = append(quotes, deliberation.SourceQuote{
+					PositionID: s.PositionID,
+					AgentID:    s.AgentID,
+					Quote:      s.Quote,
+					ClaimText:  s.ClaimText,
+				})
+			}
+		}
+	}
+	return quotes
 }
 
 func uniqueSpeakers(claims []claim) map[string]bool {
@@ -1258,7 +1330,15 @@ func uniqueSpeakers(claims []claim) map[string]bool {
 func formatClaimsForCrux(claims []claim) string {
 	var sb strings.Builder
 	for _, c := range claims {
-		fmt.Fprintf(&sb, "<claim participant=\"%s\">%s</claim>\n", c.AgentNum, c.Claim)
+		// Include quote when available so the LLM can ground cruxes in evidence
+		if c.Quote != "" {
+			fmt.Fprintf(&sb, "<claim participant=\"%s\" quote=\"%s\">%s</claim>\n", c.AgentNum, c.Quote, c.Claim)
+		} else if len(c.Sources) > 0 {
+			// Use first source quote from dedup
+			fmt.Fprintf(&sb, "<claim participant=\"%s\" quote=\"%s\">%s</claim>\n", c.AgentNum, c.Sources[0].Quote, c.Claim)
+		} else {
+			fmt.Fprintf(&sb, "<claim participant=\"%s\">%s</claim>\n", c.AgentNum, c.Claim)
+		}
 	}
 	return sb.String()
 }

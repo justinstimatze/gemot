@@ -1,17 +1,26 @@
 package deliberation
 
+// SourceQuote traces a crux back to a specific quote from an agent's position.
+type SourceQuote struct {
+	PositionID string `json:"position_id"`
+	AgentID    string `json:"agent_id"`
+	Quote      string `json:"quote"`
+	ClaimText  string `json:"claim_text"` // the extracted claim this quote supports
+}
+
 type Crux struct {
-	Claim             string   `json:"crux_claim"`
-	Topic             string   `json:"topic"`
-	Subtopic          string   `json:"subtopic"`
-	AgreeAgents       []string `json:"agree_agents"`
-	DisagreeAgents    []string `json:"disagree_agents"`
-	NoClearPosition   []string `json:"no_clear_position"`
-	ControversyScore  float64  `json:"controversy_score"`              // 0-1
-	Explanation       string   `json:"explanation"`
-	SourcePositionIDs []string `json:"source_position_ids,omitempty"` // positions that contributed claims to this crux
-	CruxType          string   `json:"crux_type,omitempty"`           // "factual", "value", "mixed"
-	Resolvability     float64  `json:"resolvability,omitempty"`       // 0-1, how likely evidence could resolve it
+	Claim             string        `json:"crux_claim"`
+	Topic             string        `json:"topic"`
+	Subtopic          string        `json:"subtopic"`
+	AgreeAgents       []string      `json:"agree_agents"`
+	DisagreeAgents    []string      `json:"disagree_agents"`
+	NoClearPosition   []string      `json:"no_clear_position"`
+	ControversyScore  float64       `json:"controversy_score"`              // 0-1
+	Explanation       string        `json:"explanation"`
+	SourcePositionIDs []string      `json:"source_position_ids,omitempty"` // positions that contributed claims to this crux
+	SourceQuotes      []SourceQuote `json:"source_quotes,omitempty"`       // verbatim quotes grounding this crux
+	CruxType          string        `json:"crux_type,omitempty"`           // "factual", "value", "mixed"
+	Resolvability     float64       `json:"resolvability,omitempty"`       // 0-1, how likely evidence could resolve it
 }
 
 type OpinionCluster struct {
