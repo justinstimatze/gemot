@@ -452,6 +452,44 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				"status":          "joined",
 			})
 
+		case "gemot/get_analysis_result":
+			deliberationID := str("deliberation_id")
+			if deliberationID == "" {
+				writeA2AError(w, req.ID, -32000, "deliberation_id is required")
+				return
+			}
+			if err := checkAccess(deliberationID); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			result, err := svc.GetLatestAnalysisResult(deliberationID)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			if result == nil {
+				writeA2AResult(w, req.ID, nil)
+				return
+			}
+			writeA2AResult(w, req.ID, result)
+
+		case "gemot/get_votes":
+			deliberationID := str("deliberation_id")
+			if deliberationID == "" {
+				writeA2AError(w, req.ID, -32000, "deliberation_id is required")
+				return
+			}
+			if err := checkAccess(deliberationID); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			votes, err := svc.GetVotes(deliberationID)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			writeA2AResult(w, req.ID, votes)
+
 		case "gemot/get_audit_log":
 			deliberationID := str("deliberation_id")
 			if deliberationID == "" {
@@ -520,7 +558,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 
 		default:
 			writeA2AError(w, req.ID, -32601,
-				fmt.Sprintf("Method not found: %s. Available methods: agent/info, gemot/create_deliberation, gemot/submit_position, gemot/vote, gemot/analyze, gemot/get_deliberation, gemot/get_positions, gemot/get_context, gemot/list_deliberations, gemot/propose_compromise, gemot/dispute_crux, gemot/commit, gemot/invite_agent, gemot/delegate, gemot/generate_join_code, gemot/join_deliberation, gemot/list_templates, gemot/set_template, gemot/delete_deliberation, gemot/report_abuse, gemot/get_audit_log", req.Method))
+				fmt.Sprintf("Method not found: %s. Available methods: agent/info, gemot/create_deliberation, gemot/submit_position, gemot/vote, gemot/analyze, gemot/get_deliberation, gemot/get_positions, gemot/get_context, gemot/list_deliberations, gemot/propose_compromise, gemot/dispute_crux, gemot/commit, gemot/invite_agent, gemot/delegate, gemot/generate_join_code, gemot/join_deliberation, gemot/list_templates, gemot/set_template, gemot/delete_deliberation, gemot/report_abuse, gemot/get_audit_log, gemot/get_analysis_result, gemot/get_votes", req.Method))
 		}
 	}
 }
