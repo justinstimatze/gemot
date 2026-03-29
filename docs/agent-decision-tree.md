@@ -152,7 +152,7 @@ Want to change the governance model mid-deliberation?
 
 Want to see what happened?
   → get_audit_log(deliberation_id)
-    Returns operations log + analysis decisions (T3C-style transparency)
+    Returns operations log + analysis decisions
 
 Need to report harmful content?
   → report_abuse(deliberation_id, reason)

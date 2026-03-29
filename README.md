@@ -39,7 +39,7 @@ Tools available via the [Model Context Protocol](https://modelcontextprotocol.io
 | `vote` | Vote on a position (1=agree, 0=pass, -1=disagree) | Free |
 | `get_positions` | Get positions. Filter by round or group | Free |
 | `get_deliberation` | Status, stats, sub-status progress, latest analysis | Free |
-| `analyze` | Full T3C pipeline. Async — returns immediately, poll for progress | 50 (Sonnet) |
+| `analyze` | Full analysis pipeline. Async — returns immediately, poll for progress | 50 (Sonnet) |
 | `get_context` | Your cluster, allies, disagreements, cruxes, diversity nudge | Free |
 | `list_deliberations` | List all deliberations | Free |
 | `propose_compromise` | Generate compromise optimized for cross-cluster endorsement | 50 (Sonnet) |
@@ -70,7 +70,7 @@ Tools available via the [Model Context Protocol](https://modelcontextprotocol.io
 {
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "streamable-http",
       "url": "https://gemot.dev/mcp",
       "headers": {
         "Authorization": "Bearer gmt_your_key_here"
@@ -123,7 +123,7 @@ Analysis results include `integrity_warnings` flagging:
 - **Persistent job queue** (survives machine restarts)
 - **Rate limiting** (30 req/min per key)
 - **Global API semaphore** (10 concurrent Anthropic calls)
-- **CSV export** in T3C-compatible format
+- **CSV export** in [Talk to the City](https://talktothe.city) compatible format
 - **Sub-group deliberation** for decentralized topology
 
 ## Benchmarks
@@ -142,22 +142,22 @@ See [THREAT_MODEL.md](THREAT_MODEL.md) for the full epistemic poisoning threat m
 
 ```
 gemot/
-├── main.go                          # CLI: serve (stdio) | http (SSE)
+├── main.go                          # CLI: serve (stdio) | http (streamable HTTP)
 ├── internal/
 │   ├── mcp/
 │   │   ├── server.go                # 19 MCP tools
-│   │   └── http.go                  # SSE transport, auth, billing, pages
+│   │   └── http.go                  # HTTP transport, auth, billing, pages
 │   ├── deliberation/
 │   │   ├── service.go               # Business logic, async analysis, drift detection
 │   │   ├── models.go                # Deliberation, Position, Vote, Dispute
 │   │   └── analysis.go              # Crux, Cluster, Consensus, Bridging, Trust types
 │   ├── analysis/
-│   │   ├── text.go                  # T3C pipeline + compromise generation
+│   │   ├── text.go                  # Analysis pipeline + compromise generation
 │   │   ├── votes.go                 # PCA, K-means++, repness, consensus
 │   │   ├── synthesizer.go           # Cross-references text + vote analysis
 │   │   ├── trust.go                 # Integrity-derived trust weights
 │   │   ├── integrity.go             # Coverage, crux, Sybil, model diversity checks
-│   │   └── prompts.go              # T3C-adapted prompt templates
+│   │   └── prompts.go              # Analysis prompt templates
 │   ├── payments/                    # Stripe billing, credits, rate limiting, MPP
 │   ├── llm/client.go               # Anthropic SDK + global API semaphore
 │   ├── store/                       # SQLite + LLM cache + job queue

@@ -330,7 +330,7 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
 <div class="snippet"><div class="snippet-label">Claude Code .mcp.json</div><pre>{
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "streamable-http",
       "url": "https://gemot.dev/mcp",
       "headers": {
         "Authorization": "Bearer %s"

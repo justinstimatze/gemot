@@ -57,7 +57,7 @@ Add to your repo root (no API key — the join code is the credential):
 {
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "streamable-http",
       "url": "https://gemot.dev/mcp"
     }
   }

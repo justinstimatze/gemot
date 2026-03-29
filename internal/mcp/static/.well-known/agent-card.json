@@ -5,10 +5,10 @@
   "supportedInterfaces": [
     {
       "url": "https://gemot.dev/mcp",
-      "protocolBinding": "HTTP+SSE"
+      "protocolBinding": "streamable-http"
     }
   ],
-  "version": "0.4.0",
+  "version": "0.5.0",
   "provider": {
     "organization": "Schorl Dynamics LLC",
     "url": "https://gemot.dev"
@@ -46,7 +46,7 @@
     {
       "id": "analyze",
       "name": "Analyze Deliberation",
-      "description": "Run full T3C analysis: taxonomy, claims, crux detection, clustering, consensus, bridging. Async — returns immediately.",
+      "description": "Run full analysis: taxonomy, claims, crux detection, clustering, consensus, bridging. Async — returns immediately.",
       "tags": ["analysis", "crux", "consensus", "clustering"]
     },
     {
