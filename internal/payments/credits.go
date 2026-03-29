@@ -195,8 +195,8 @@ const (
 	PackStandard = 4500  // $20 = 4500 credits (10% bonus)
 	PackPro      = 12000 // $50 = 12000 credits (20% bonus)
 
-	CostSonnet = 50  // credits per Sonnet analyze
-	CostOpus   = 200 // credits per Opus analyze
+	CostSonnet = 60  // credits per Sonnet analyze
+	CostOpus   = 300 // credits per Opus analyze
 	CostHaiku  = 20  // credits per Haiku analyze
 )
 

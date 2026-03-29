@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -129,47 +130,82 @@ func main() {
 	os.MkdirAll(*outputDir, 0755) //nolint:errcheck
 	ctx := context.Background()
 
-	// Process each power with a fresh connection (SSE connections can timeout during long analyses)
-	for _, power := range powers {
+	// Process powers in parallel with staggered starts to avoid rate limiting.
+	// Each power gets its own SSE connection. Stagger by 3s to spread the
+	// initial burst of create+submit+vote calls across the rate limit window.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	succeeded := 0
+	failed := 0
+
+	for i, power := range powers {
 		msgs := powerMessages[power]
 		if len(msgs) == 0 {
 			fmt.Fprintf(os.Stderr, "  %s: no messages for year %d, skipping\n", power, *year)
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "  %s: %d messages — connecting...\n", power, len(msgs))
+		wg.Add(1)
+		stagger := time.Duration(i) * 3 * time.Second
+		go func(power string, msgs []Message, delay time.Duration) {
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			defer wg.Done()
+			fmt.Fprintf(os.Stderr, "  %s: %d messages — connecting...\n", power, len(msgs))
 
-		var briefing string
-		for attempt := 1; attempt <= 3; attempt++ {
-			if attempt > 1 {
-				fmt.Fprintf(os.Stderr, "    Retry %d/3...\n", attempt)
-				time.Sleep(10 * time.Second)
+			var briefing string
+			var lastErr error
+			for attempt := 1; attempt <= 3; attempt++ {
+				if attempt > 1 {
+					fmt.Fprintf(os.Stderr, "  %s: retry %d/3...\n", power, attempt)
+					time.Sleep(10 * time.Second)
+				}
+
+				session, err := connect(ctx, url, secret)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  %s: ERROR connecting: %v\n", power, err)
+					lastErr = err
+					continue
+				}
+
+				briefing, err = analyzePower(ctx, session, url, secret, power, msgs, *year)
+				session.Close() //nolint:errcheck
+				if err == nil {
+					lastErr = nil
+					break
+				}
+				fmt.Fprintf(os.Stderr, "  %s: ERROR: %v\n", power, err)
+				lastErr = err
+			}
+			if lastErr != nil {
+				fmt.Fprintf(os.Stderr, "  %s: FAILED after 3 attempts: %v\n", power, lastErr)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
 			}
 
-			session, err := connect(ctx, url, secret)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "    ERROR connecting: %v\n", err)
-				continue
+			outFile := filepath.Join(*outputDir, fmt.Sprintf("%s_briefing.txt", strings.ToLower(power)))
+			if err := os.WriteFile(outFile, []byte(briefing), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: ERROR writing briefing: %v\n", power, err)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
 			}
-
-			briefing, err = analyzePower(ctx, session, url, secret, power, msgs, *year)
-			session.Close() //nolint:errcheck
-			if err == nil {
-				break
-			}
-			fmt.Fprintf(os.Stderr, "    ERROR: %v\n", err)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "    FAILED after 3 attempts: %v\n", err)
-			continue
-		}
-
-		outFile := filepath.Join(*outputDir, fmt.Sprintf("%s_briefing.txt", strings.ToLower(power)))
-		fatal(os.WriteFile(outFile, []byte(briefing), 0644), "writing briefing")
-		fmt.Fprintf(os.Stderr, "    Wrote %s\n", outFile)
+			fmt.Fprintf(os.Stderr, "  %s: wrote %s\n", power, outFile)
+			mu.Lock()
+			succeeded++
+			mu.Unlock()
+		}(power, msgs, stagger)
 	}
 
-	fmt.Fprintf(os.Stderr, "Done. Briefings written to %s\n", *outputDir)
+	wg.Wait()
+	fmt.Fprintf(os.Stderr, "Done. %d/%d briefings written to %s\n", succeeded, succeeded+failed, *outputDir)
+	if failed > 0 {
+		os.Exit(1)
+	}
 }
 
 func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secret, power string, msgs []Message, year int) (string, error) {
@@ -265,7 +301,8 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 	}
 
 	// 4. Run analysis
-	fmt.Fprintf(os.Stderr, "    Analyzing %s...\n", power)
+	prefix := fmt.Sprintf("  %s:", power)
+	fmt.Fprintf(os.Stderr, "%s analyzing...\n", prefix)
 	callTool(ctx, session, "analyze", map[string]any{
 		"deliberation_id": deliberationID,
 	})
@@ -289,7 +326,7 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 			var reconnErr error
 			session, reconnErr = connect(ctx, url, secret)
 			if reconnErr != nil {
-				fmt.Fprintf(os.Stderr, "    reconnect failed: %v\n", reconnErr)
+				fmt.Fprintf(os.Stderr, "%s reconnect failed: %v\n", prefix, reconnErr)
 			}
 			// Log progress from get_deliberation
 			if session != nil {
@@ -297,16 +334,19 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 					"deliberation_id": deliberationID,
 				})
 				if statusJSON != "" {
-					var s struct { Status string `json:"status"`; SubStatus string `json:"sub_status"` }
+					var s struct {
+						Status    string `json:"status"`
+						SubStatus string `json:"sub_status"`
+					}
 					json.Unmarshal([]byte(strings.SplitN(statusJSON, "\n\n---\n", 2)[0]), &s)
-					fmt.Fprintf(os.Stderr, "    %s/%s\n", s.Status, s.SubStatus)
+					fmt.Fprintf(os.Stderr, "%s %s/%s\n", prefix, s.Status, s.SubStatus)
 				}
 			}
 			continue
 		}
 
 		contextJSON = result
-		fmt.Fprintf(os.Stderr, "    Analysis complete\n")
+		fmt.Fprintf(os.Stderr, "%s analysis complete\n", prefix)
 		break
 	}
 	if contextJSON == "" {

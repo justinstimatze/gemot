@@ -169,6 +169,120 @@ func TestTextAnalyzerFullPipeline(t *testing.T) {
 	if crux.ControversyScore <= 0 {
 		t.Fatalf("expected positive controversy score, got %f", crux.ControversyScore)
 	}
+
+	// Source position IDs should be populated
+	if len(crux.SourcePositionIDs) == 0 {
+		t.Fatal("expected source_position_ids to be populated")
+	}
+
+	// Source quotes should be populated (quote grounding)
+	if len(crux.SourceQuotes) == 0 {
+		t.Fatal("expected source_quotes to be populated for quote grounding")
+	}
+
+	// Verify source quotes have the right structure
+	for _, sq := range crux.SourceQuotes {
+		if sq.PositionID == "" {
+			t.Fatal("source quote missing position_id")
+		}
+		if sq.AgentID == "" {
+			t.Fatal("source quote missing agent_id")
+		}
+		if sq.Quote == "" {
+			t.Fatal("source quote missing quote text")
+		}
+		if sq.ClaimText == "" {
+			t.Fatal("source quote missing claim_text")
+		}
+	}
+
+	// Verify the quotes trace back to actual positions
+	posIDs := map[string]bool{"p1": true, "p2": true, "p3": true}
+	for _, sq := range crux.SourceQuotes {
+		if !posIDs[sq.PositionID] {
+			t.Fatalf("source quote references unknown position %q", sq.PositionID)
+		}
+	}
+}
+
+// TestQuoteGroundingMultiAgentDedup verifies that when dedup consolidates
+// claims from multiple agents into one group, all source quotes survive.
+func TestQuoteGroundingMultiAgentDedup(t *testing.T) {
+	// Custom mock where dedup merges claims 0 and 1 into one group
+	mockFn := func(_ context.Context, system, prompt string, schema map[string]any, target any) error {
+		switch {
+		case strings.Contains(prompt, "break down the information"):
+			return json.Unmarshal([]byte(`{
+				"topics": [{"topic_name": "Policy", "topic_description": "Policy approaches",
+					"subtopics": [{"subtopic_name": "Enforcement", "subtopic_description": "How to enforce"}]}]
+			}`), target)
+		case strings.Contains(prompt, "extract the most important concise claims"):
+			if strings.Contains(prompt, "Participant 0") {
+				return json.Unmarshal([]byte(`{"claims": [{"claim": "Strict penalties are needed", "quote": "we must impose heavy fines", "topic_name": "Policy", "subtopic_name": "Enforcement"}]}`), target)
+			}
+			if strings.Contains(prompt, "Participant 1") {
+				return json.Unmarshal([]byte(`{"claims": [{"claim": "Punitive measures are essential", "quote": "without punishment there is no deterrence", "topic_name": "Policy", "subtopic_name": "Enforcement"}]}`), target)
+			}
+			if strings.Contains(prompt, "Participant 2") {
+				return json.Unmarshal([]byte(`{"claims": [{"claim": "Education is better than punishment", "quote": "rewards work better than threats", "topic_name": "Policy", "subtopic_name": "Enforcement"}]}`), target)
+			}
+			return json.Unmarshal([]byte(`{"claims": []}`), target)
+		case strings.Contains(prompt, "grouping claims"):
+			// Merge claims 0 and 1 (both pro-punishment) into one group
+			return json.Unmarshal([]byte(`{"groups": [
+				{"claim_text": "Punitive enforcement is necessary", "original_claim_ids": [0, 1]},
+				{"claim_text": "Educational approaches are more effective", "original_claim_ids": [2]}
+			]}`), target)
+		case strings.Contains(prompt, "maximally controversial statement"):
+			return json.Unmarshal([]byte(`{
+				"crux_claim": "Punishment is more effective than education for enforcement",
+				"agree": ["0", "1"], "disagree": ["2"], "no_clear_position": [],
+				"explanation": "Two participants advocate for punitive measures while one favors education."
+			}`), target)
+		case strings.Contains(prompt, "Generate a detailed summary"):
+			return json.Unmarshal([]byte(`{"summary": "Debate over enforcement approaches."}`), target)
+		default:
+			return fmt.Errorf("unexpected prompt: %s", prompt[:min(100, len(prompt))])
+		}
+	}
+
+	analyzer := analysis.NewTextAnalyzerWithFunc(mockFn)
+	positions := []deliberation.Position{
+		{ID: "p1", DeliberationID: "test", AgentID: "alice", Content: "we must impose heavy fines on violators", Round: 1},
+		{ID: "p2", DeliberationID: "test", AgentID: "bob", Content: "without punishment there is no deterrence", Round: 1},
+		{ID: "p3", DeliberationID: "test", AgentID: "carol", Content: "rewards work better than threats, education first", Round: 1},
+	}
+
+	result, err := analyzer.Analyze(context.Background(), positions, nil, []string{"alice", "bob", "carol"})
+	if err != nil {
+		t.Fatalf("analysis failed: %v", err)
+	}
+	if len(result.Cruxes) == 0 {
+		t.Fatal("expected at least one crux")
+	}
+
+	crux := result.Cruxes[0]
+
+	// Should have quotes from both alice AND bob (merged group)
+	if len(crux.SourceQuotes) < 2 {
+		t.Fatalf("expected at least 2 source quotes (from merged group), got %d", len(crux.SourceQuotes))
+	}
+
+	// Verify both positions are represented
+	positionsSeen := map[string]bool{}
+	for _, sq := range crux.SourceQuotes {
+		positionsSeen[sq.PositionID] = true
+	}
+	if !positionsSeen["p1"] || !positionsSeen["p2"] {
+		t.Fatalf("expected quotes from p1 and p2, got positions: %v", positionsSeen)
+	}
+
+	// Verify quotes are actual content, not empty
+	for _, sq := range crux.SourceQuotes {
+		if sq.Quote == "" {
+			t.Fatalf("source quote for %s has empty quote text", sq.PositionID)
+		}
+	}
 }
 
 func TestTextAnalyzerEmptyPositions(t *testing.T) {
