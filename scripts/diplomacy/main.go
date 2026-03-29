@@ -126,23 +126,10 @@ func main() {
 		}
 	}
 
-	// Connect to gemot
-	fmt.Fprintf(os.Stderr, "Connecting to %s...\n", url)
-	ctx := context.Background()
-	transport := &sdkmcp.SSEClientTransport{
-		Endpoint: url,
-		HTTPClient: &http.Client{
-			Transport: &authTransport{base: http.DefaultTransport, token: secret},
-		},
-	}
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "diplomacy", Version: "1.0"}, nil)
-	session, err := client.Connect(ctx, transport, nil)
-	fatal(err, "connecting to gemot")
-	defer session.Close() //nolint:errcheck
-
 	os.MkdirAll(*outputDir, 0755) //nolint:errcheck
+	ctx := context.Background()
 
-	// Process each power
+	// Process each power with a fresh connection (SSE connections can timeout during long analyses)
 	for _, power := range powers {
 		msgs := powerMessages[power]
 		if len(msgs) == 0 {
@@ -150,9 +137,16 @@ func main() {
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "  %s: %d messages\n", power, len(msgs))
+		fmt.Fprintf(os.Stderr, "  %s: %d messages — connecting...\n", power, len(msgs))
+
+		session, err := connect(ctx, url, secret)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "    ERROR connecting: %v\n", err)
+			continue
+		}
 
 		briefing, err := analyzePower(ctx, session, power, msgs, *year)
+		session.Close() //nolint:errcheck
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "    ERROR: %v\n", err)
 			continue
@@ -206,15 +200,13 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 		"deliberation_id": deliberationID,
 	})
 
-	var positions struct {
-		Positions []struct {
-			ID      string `json:"id"`
-			AgentID string `json:"agent_id"`
-		} `json:"positions"`
+	var positions []struct {
+		ID      string `json:"position_id"`
+		AgentID string `json:"agent_id"`
 	}
 	mustParse(posJSON, &positions)
 
-	for _, pos := range positions.Positions {
+	for _, pos := range positions {
 		for _, voterPower := range powers {
 			voterAgent := strings.ToLower(voterPower) + "-agent"
 			if voterAgent == pos.AgentID {
@@ -241,8 +233,12 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 		"deliberation_id": deliberationID,
 	})
 
-	// 5. Poll for completion
-	for i := 0; i < 60; i++ {
+	// 5. Poll for completion (up to 5 minutes)
+	// Wait a beat for the async analysis to start before polling
+	time.Sleep(2 * time.Second)
+	lastStatus := ""
+	sawAnalyzing := false
+	for i := 0; i < 100; i++ {
 		time.Sleep(3 * time.Second)
 		statusJSON := callTool(ctx, session, "get_deliberation", map[string]any{
 			"deliberation_id": deliberationID,
@@ -252,13 +248,32 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 			SubStatus string `json:"sub_status"`
 		}
 		mustParse(statusJSON, &status)
-		if status.Status == "open" && status.SubStatus == "" {
+
+		if status.Status == "analyzing" {
+			sawAnalyzing = true
+		}
+		// Only consider "open" as complete if we saw it transition to analyzing first
+		if sawAnalyzing && status.Status == "open" && status.SubStatus == "" {
+			fmt.Fprintf(os.Stderr, "    Analysis complete\n")
 			break
 		}
-		fmt.Fprintf(os.Stderr, "    Status: %s/%s\n", status.Status, status.SubStatus)
+		cur := status.Status + "/" + status.SubStatus
+		if cur != lastStatus {
+			fmt.Fprintf(os.Stderr, "    %s\n", cur)
+			lastStatus = cur
+		}
+		if i == 99 {
+			return "", fmt.Errorf("analysis timed out after 5 minutes")
+		}
 	}
 
-	// 6. Get context for this power
+	// 6. Check deliberation for results
+	delibJSON := callTool(ctx, session, "get_deliberation", map[string]any{
+		"deliberation_id": deliberationID,
+	})
+	fmt.Fprintf(os.Stderr, "    Deliberation: %s\n", delibJSON[:min(300, len(delibJSON))])
+
+	// 7. Get context for this power
 	contextJSON := callTool(ctx, session, "get_context", map[string]any{
 		"deliberation_id": deliberationID,
 		"agent_id":        strings.ToLower(power) + "-agent",
@@ -268,40 +283,77 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 	return formatBriefing(power, year, contextJSON), nil
 }
 
+type crux struct {
+	Claim          string   `json:"claim"`
+	Topic          string   `json:"topic"`
+	Controversy    float64  `json:"controversy_score"`
+	AgreeAgents    []string `json:"agree_agents"`
+	DisagreeAgents []string `json:"disagree_agents"`
+	CruxType       string   `json:"crux_type"`
+}
+
 func formatBriefing(power string, year int, contextJSON string) string {
 	var ac struct {
-		ClusterSummary      string `json:"cluster_summary"`
-		CruxesInvolvingYou  string `json:"cruxes_involving_you"`
-		Allies              string `json:"allies"`
-		BiggestDisagreements string `json:"biggest_disagreements"`
-		Consensus           string `json:"consensus"`
-		Bridging            string `json:"bridging"`
-		DiversityNudge      string `json:"diversity_nudge"`
+		AgentID              string   `json:"agent_id"`
+		ClusterID            *int     `json:"cluster_id"`
+		NearestAllies        []string `json:"nearest_allies"`
+		BiggestDisagreements []string `json:"biggest_disagreements_with"`
+		RelevantCruxes       []crux   `json:"relevant_cruxes"`
+		DiversityNudge       string   `json:"diversity_nudge"`
+		IntegrityWarnings    []string `json:"integrity_warnings"`
 	}
 	mustParse(contextJSON, &ac)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "=== DIPLOMATIC INTELLIGENCE BRIEFING: %s — Year %d ===\n\n", power, 1900+year)
 
-	sections := []struct {
-		title, content string
-	}{
-		{"YOUR DIPLOMATIC POSITION", ac.ClusterSummary},
-		{"KEY POINTS OF DISAGREEMENT (CRUXES)", ac.CruxesInvolvingYou},
-		{"ALLIANCE ALIGNMENT", ac.Allies},
-		{"BIGGEST DISAGREEMENTS", ac.BiggestDisagreements},
-		{"AREAS OF CONSENSUS", ac.Consensus},
-		{"BRIDGING OPPORTUNITIES", ac.Bridging},
-		{"STRATEGIC CONSIDERATIONS", ac.DiversityNudge},
+	if len(ac.NearestAllies) > 0 {
+		fmt.Fprintf(&b, "ALLIANCE ALIGNMENT:\nYour closest allies based on voting patterns: %s\n\n",
+			strings.Join(ac.NearestAllies, ", "))
 	}
-	for _, s := range sections {
-		if s.content != "" {
-			fmt.Fprintf(&b, "%s:\n%s\n\n", s.title, s.content)
+
+	if len(ac.BiggestDisagreements) > 0 {
+		fmt.Fprintf(&b, "BIGGEST DISAGREEMENTS WITH:\n%s\n\n",
+			strings.Join(ac.BiggestDisagreements, ", "))
+	}
+
+	if len(ac.RelevantCruxes) > 0 {
+		fmt.Fprintf(&b, "KEY POINTS OF DISAGREEMENT (CRUXES):\n")
+		for i, c := range ac.RelevantCruxes {
+			fmt.Fprintf(&b, "\n%d. %s\n", i+1, c.Claim)
+			if c.Topic != "" {
+				fmt.Fprintf(&b, "   Topic: %s\n", c.Topic)
+			}
+			if c.Controversy > 0 {
+				fmt.Fprintf(&b, "   Controversy: %.0f%%\n", c.Controversy*100)
+			}
+			if len(c.AgreeAgents) > 0 {
+				fmt.Fprintf(&b, "   AGREE: %s\n", strings.Join(c.AgreeAgents, ", "))
+			}
+			if len(c.DisagreeAgents) > 0 {
+				fmt.Fprintf(&b, "   DISAGREE: %s\n", strings.Join(c.DisagreeAgents, ", "))
+			}
 		}
+		fmt.Fprintln(&b)
+	}
+
+	if ac.DiversityNudge != "" {
+		fmt.Fprintf(&b, "STRATEGIC CONSIDERATIONS:\n%s\n\n", ac.DiversityNudge)
 	}
 
 	fmt.Fprintf(&b, "=== END BRIEFING ===\n")
 	return b.String()
+}
+
+func connect(ctx context.Context, url, secret string) (*sdkmcp.ClientSession, error) {
+	transport := &sdkmcp.SSEClientTransport{
+		Endpoint: url,
+		HTTPClient: &http.Client{
+			Transport: &authTransport{base: http.DefaultTransport, token: secret},
+		},
+	}
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "diplomacy", Version: "1.0"}, nil)
+	return client.Connect(ctx, transport, nil)
 }
 
 func callTool(ctx context.Context, s *sdkmcp.ClientSession, name string, args map[string]any) string {
