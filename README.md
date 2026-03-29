@@ -70,7 +70,7 @@ Tools available via the [Model Context Protocol](https://modelcontextprotocol.io
 {
   "mcpServers": {
     "gemot": {
-      "type": "streamable-http",
+      "type": "sse",
       "url": "https://gemot.dev/mcp",
       "headers": {
         "Authorization": "Bearer gmt_your_key_here"
@@ -142,11 +142,11 @@ See [THREAT_MODEL.md](THREAT_MODEL.md) for the full epistemic poisoning threat m
 
 ```
 gemot/
-├── main.go                          # CLI: serve (stdio) | http (streamable HTTP)
+├── main.go                          # CLI: serve (stdio) | http (SSE)
 ├── internal/
 │   ├── mcp/
 │   │   ├── server.go                # 19 MCP tools
-│   │   └── http.go                  # HTTP transport, auth, billing, pages
+│   │   └── http.go                  # SSE transport, auth, billing, pages
 │   ├── deliberation/
 │   │   ├── service.go               # Business logic, async analysis, drift detection
 │   │   ├── models.go                # Deliberation, Position, Vote, Dispute
