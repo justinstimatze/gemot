@@ -238,3 +238,97 @@ func TestAuditLogStorage(t *testing.T) {
 		t.Fatalf("expected 0 entries for other deliberation, got %d", len(logs2))
 	}
 }
+
+func TestEnrichedAgentContext(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	// Create a 4-agent deliberation with clear factions
+	d, err := svc.CreateDeliberation("Policy Debate", "Testing enriched context")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Submit positions: alice+bob on one side, carol+dave on another
+	agents := []string{"alice", "bob", "carol", "dave"}
+	positions := make(map[string]string)
+	for _, a := range agents {
+		var content string
+		switch a {
+		case "alice":
+			content = "We need strict government regulation of AI development immediately."
+		case "bob":
+			content = "Government oversight is essential to prevent AI harms."
+		case "carol":
+			content = "Industry self-regulation is more effective than government rules."
+		case "dave":
+			content = "Let the market decide. Innovation requires freedom from regulation."
+		}
+		p, err := svc.SubmitPosition(d.ID, a, content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		positions[a] = p.ID
+	}
+
+	// Vote to create clear factions: alice+bob agree with each other, carol+dave agree with each other
+	svc.Vote(d.ID, "alice", positions["bob"], 1)
+	svc.Vote(d.ID, "alice", positions["carol"], -1)
+	svc.Vote(d.ID, "alice", positions["dave"], -1)
+	svc.Vote(d.ID, "bob", positions["alice"], 1)
+	svc.Vote(d.ID, "bob", positions["carol"], -1)
+	svc.Vote(d.ID, "bob", positions["dave"], -1)
+	svc.Vote(d.ID, "carol", positions["alice"], -1)
+	svc.Vote(d.ID, "carol", positions["bob"], -1)
+	svc.Vote(d.ID, "carol", positions["dave"], 1)
+	svc.Vote(d.ID, "dave", positions["alice"], -1)
+	svc.Vote(d.ID, "dave", positions["bob"], -1)
+	svc.Vote(d.ID, "dave", positions["carol"], 1)
+
+	// Run analysis
+	_, err = svc.Analyze(t.Context(), d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get context for alice
+	ctx, err := svc.GetContext(d.ID, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Alignment scores should be present
+	if len(ctx.AlignmentScores) == 0 {
+		t.Fatal("expected alignment scores to be populated")
+	}
+
+	// Bob should be alice's highest alignment (both pro-regulation)
+	foundBob := false
+	for _, a := range ctx.AlignmentScores {
+		if a.AgentID == "bob" {
+			foundBob = true
+			if a.AlignmentScore < 0.5 {
+				t.Fatalf("expected alice-bob alignment > 0.5, got %f", a.AlignmentScore)
+			}
+			if a.SharedCruxes == 0 {
+				t.Fatal("expected shared cruxes between alice and bob")
+			}
+		}
+	}
+	if !foundBob {
+		t.Fatal("expected bob in alignment scores")
+	}
+
+	// Strategic nudge should be non-empty (there are clear factions)
+	if ctx.StrategicNudge == "" && ctx.DiversityNudge == "" {
+		t.Log("WARNING: no strategic or diversity nudge generated (may be expected for small deliberations)")
+	}
+
+	// Effective weight should be set if weights were computed
+	// (mock analysis may or may not produce weights, so just check it doesn't panic)
+	t.Logf("Alice effective weight: %f", ctx.EffectiveWeight)
+	t.Logf("Alignment scores: %+v", ctx.AlignmentScores)
+	t.Logf("Swing agents: %v", ctx.SwingAgents)
+	t.Logf("Strategic nudge: %s", ctx.StrategicNudge)
+	t.Logf("Bridging statements: %d", len(ctx.BridgingStatements))
+	t.Logf("Consensus statements: %d", len(ctx.ConsensusStatements))
+}

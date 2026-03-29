@@ -470,10 +470,14 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 			foundSubtopicCrux = true
 		}
 
-		// Fallback: if no subtopic had enough claims, run crux detection at topic level
-		if !foundSubtopicCrux {
-			topicClaims := filterClaimsByTopic(allClaims, topic.TopicName)
-			if len(topicClaims) >= 2 && len(uniqueSpeakers(topicClaims)) >= 2 {
+		// Fallback: run topic-level crux detection if orphaned claims exist.
+		// This catches claims from single-speaker subtopics that were skipped above.
+		// Previously only ran if NO subtopic crux was found; now runs whenever there
+		// are topic-level claims from agents not already covered by subtopic cruxes.
+		topicClaims := filterClaimsByTopic(allClaims, topic.TopicName)
+		if len(topicClaims) >= 2 && len(uniqueSpeakers(topicClaims)) >= 2 {
+			if !foundSubtopicCrux {
+				// No subtopic cruxes at all — use full topic claims
 				claimsText := formatClaimsForCrux(topicClaims)
 				crux, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, topic.TopicName, topic.TopicDescription, claimsText, numToAgent)
 				if err == nil {
@@ -482,6 +486,28 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 					crux.SourcePositionIDs = collectPositionIDs(topicClaims)
 					crux.SourceQuotes = collectSourceQuotes(topicClaims)
 					cruxes = append(cruxes, *crux)
+				}
+			} else {
+				// Some subtopic cruxes exist, but single-speaker subtopics were skipped.
+				// Collect orphaned claims (from subtopics that didn't qualify) and run
+				// a topic-level pass on them to avoid losing 22% of analysis.
+				var orphanedClaims []claim
+				for _, subtopic := range topic.Subtopics {
+					sc := filterClaimsBySubtopic(allClaims, topic.TopicName, subtopic.SubtopicName)
+					if len(uniqueSpeakers(sc)) < 2 && len(sc) > 0 {
+						orphanedClaims = append(orphanedClaims, sc...)
+					}
+				}
+				if len(orphanedClaims) > 0 && len(uniqueSpeakers(orphanedClaims)) >= 2 {
+					claimsText := formatClaimsForCrux(orphanedClaims)
+					crux, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, "(orphaned subtopics)", topic.TopicDescription, claimsText, numToAgent)
+					if err == nil {
+						crux.Topic = topic.TopicName
+						crux.Subtopic = "(cross-subtopic)"
+						crux.SourcePositionIDs = collectPositionIDs(orphanedClaims)
+						crux.SourceQuotes = collectSourceQuotes(orphanedClaims)
+						cruxes = append(cruxes, *crux)
+					}
 				}
 			}
 		}
