@@ -139,16 +139,28 @@ func main() {
 
 		fmt.Fprintf(os.Stderr, "  %s: %d messages — connecting...\n", power, len(msgs))
 
-		session, err := connect(ctx, url, secret)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "    ERROR connecting: %v\n", err)
-			continue
-		}
+		var briefing string
+		for attempt := 1; attempt <= 3; attempt++ {
+			if attempt > 1 {
+				fmt.Fprintf(os.Stderr, "    Retry %d/3...\n", attempt)
+				time.Sleep(10 * time.Second)
+			}
 
-		briefing, err := analyzePower(ctx, session, power, msgs, *year)
-		session.Close() //nolint:errcheck
-		if err != nil {
+			session, err := connect(ctx, url, secret)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "    ERROR connecting: %v\n", err)
+				continue
+			}
+
+			briefing, err = analyzePower(ctx, session, power, msgs, *year)
+			session.Close() //nolint:errcheck
+			if err == nil {
+				break
+			}
 			fmt.Fprintf(os.Stderr, "    ERROR: %v\n", err)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "    FAILED after 3 attempts: %v\n", err)
 			continue
 		}
 
@@ -267,17 +279,14 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 		}
 	}
 
-	// 6. Check deliberation for results
-	delibJSON := callTool(ctx, session, "get_deliberation", map[string]any{
-		"deliberation_id": deliberationID,
-	})
-	fmt.Fprintf(os.Stderr, "    Deliberation: %s\n", delibJSON[:min(300, len(delibJSON))])
-
-	// 7. Get context for this power
-	contextJSON := callTool(ctx, session, "get_context", map[string]any{
+	// 6. Get context for this power
+	contextJSON := callToolSoft(ctx, session, "get_context", map[string]any{
 		"deliberation_id": deliberationID,
 		"agent_id":        strings.ToLower(power) + "-agent",
 	})
+	if contextJSON == "" {
+		return "", fmt.Errorf("no analysis results available — analysis may have failed")
+	}
 
 	// 7. Format as briefing
 	return formatBriefing(power, year, contextJSON), nil
