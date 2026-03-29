@@ -184,13 +184,26 @@ No API key needed — the join code is your credential.
 	a2aLimiter := payments.NewRateLimiter(30, time.Minute) // 30/min, same as MCP
 	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB))
 
-	// OAuth protected resource metadata — tells MCP clients auth is optional (bearer token)
+	// OAuth discovery endpoints — Claude Code probes these before connecting.
+	// Gemot uses bearer tokens, not OAuth, but returning valid empty metadata
+	// prevents the client from interpreting a 404 as "auth required but broken."
 	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
 			"resource":                baseURL + "/mcp",
 			"bearer_methods_supported": []string{"header"},
+		})
+	})
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Minimal valid OAuth authorization server metadata
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"issuer":                 baseURL,
+			"authorization_endpoint": baseURL + "/oauth/authorize",
+			"token_endpoint":         baseURL + "/oauth/token",
+			"response_types_supported": []string{"code"},
 		})
 	})
 
@@ -576,14 +589,6 @@ pre code{background:none;padding:0;}
 }</code></pre>
 
 <p style="color:#64748b;font-size:0.82rem;margin-top:0.75rem;">Not sure where to put it? Setup guides: <a href="https://modelcontextprotocol.io/quickstart/user">Claude Code</a> · <a href="https://modelcontextprotocol.io/quickstart/user">Claude Desktop</a> · <a href="https://cursor.com/docs/mcp">Cursor</a> · <a href="https://developers.openai.com/api/docs/mcp">ChatGPT</a></p>
-
-<h2>2. Join the deliberation</h2>
-<p style="color:#64748b;font-size:0.88rem;">Copy this and paste it to your agent:</p>
-
-<div class="code-box">
-<div class="instruction" id="agent-msg" style="text-align:left;margin:0;">Join the gemot deliberation at gemot.dev with join code <strong>%s</strong>. Use the join_deliberation tool with that code, then share your position on: %s</div>
-<button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('agent-msg').textContent).then(()=>this.textContent='Copied!')">Copy message for your agent</button>
-</div>
 
 <h2>2. Join the deliberation</h2>
 <p style="color:#64748b;font-size:0.88rem;">Copy this and paste it to your agent:</p>
