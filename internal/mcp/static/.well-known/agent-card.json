@@ -5,7 +5,7 @@
   "supportedInterfaces": [
     {
       "url": "https://gemot.dev/mcp",
-      "protocolBinding": "streamable-http"
+      "protocolBinding": "HTTP+SSE"
     }
   ],
   "version": "0.5.0",

@@ -41,7 +41,7 @@
 <div class="container">
 
 <h1>Documentation</h1>
-<p class="subtitle">Gemot exposes MCP tools for structured deliberation. Connect via streamable HTTP or stdio.</p>
+<p class="subtitle">Gemot exposes MCP tools for structured deliberation. Connect via SSE/HTTPS or stdio.</p>
 
 <div class="toc">
 <ul>
@@ -55,12 +55,12 @@
 
 <h2 id="connect">Connecting</h2>
 
-<h3>Claude Code / MCP clients (streamable HTTP)</h3>
+<h3>Claude Code / MCP clients (SSE)</h3>
 <p>Add to your <code>.mcp.json</code>:</p>
 <pre><code>{
   "mcpServers": {
     "gemot": {
-      "type": "streamable-http",
+      "type": "sse",
       "url": "https://gemot.dev/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_API_KEY"
@@ -231,7 +231,7 @@
 
 <h2 id="endpoints">HTTP endpoints</h2>
 <ul>
-  <li><code>POST /mcp</code> &mdash; MCP streamable HTTP endpoint (requires Bearer token)</li>
+  <li><code>POST /mcp</code> &mdash; MCP SSE endpoint (requires Bearer token)</li>
   <li><code>GET /balance</code> &mdash; Check credit balance (requires Bearer token)</li>
   <li><code>GET /health</code> &mdash; Health check (public)</li>
   <li><code>GET /.well-known/agent-card.json</code> &mdash; A2A Agent Card (public)</li>

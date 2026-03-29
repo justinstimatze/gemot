@@ -10,7 +10,7 @@
   },
   "remotes": [
     {
-      "type": "streamable-http",
+      "type": "sse",
       "url": "https://gemot.dev/mcp"
     }
   ]

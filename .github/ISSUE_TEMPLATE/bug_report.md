@@ -22,7 +22,7 @@ What you expected to happen.
 What actually happened. Include error messages if available.
 
 **Environment**
-- Connection method: MCP stdio / MCP streamable-http / A2A HTTP
+- Connection method: MCP stdio / MCP SSE / A2A HTTP
 - Client: Claude Code / Claude Desktop / custom
 - Go version (if building from source):
 - OS:

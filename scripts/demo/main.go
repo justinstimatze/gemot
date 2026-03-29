@@ -89,7 +89,7 @@ func main() {
 
 	// Connect
 	fmt.Fprintf(os.Stderr, "Connecting to %s...\n", url)
-	transport := &sdkmcp.StreamableClientTransport{
+	transport := &sdkmcp.SSEClientTransport{
 		Endpoint: url,
 		HTTPClient: &http.Client{
 			Transport: &authTransport{base: http.DefaultTransport, token: secret},
