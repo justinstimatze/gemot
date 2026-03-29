@@ -271,11 +271,12 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 	})
 
 	// 5. Poll for completion (up to 10 minutes)
-	// Check round_number — it advances from 1 to 2 when analysis saves results.
-	// This is more reliable than checking status because status can briefly
-	// return to "open" during error recovery.
-	time.Sleep(2 * time.Second)
+	// Wait for round_number to advance from 1→2, which only happens after
+	// analysis results are saved. Ignore status transitions — "open" can
+	// appear both on success (round advanced) and failure (resetStatus).
+	time.Sleep(5 * time.Second) // wait for goroutine to call TrySetAnalyzing
 	lastStatus := ""
+	sawAnalyzing := false
 	for i := 0; i < 200; i++ {
 		time.Sleep(3 * time.Second)
 
@@ -283,7 +284,6 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 			"deliberation_id": deliberationID,
 		})
 
-		// If session died, reconnect once
 		if statusJSON == "" {
 			session.Close() //nolint:errcheck
 			var reconnErr error
@@ -301,10 +301,21 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 		}
 		mustParse(statusJSON, &status)
 
+		if status.Status == "analyzing" {
+			sawAnalyzing = true
+		}
+
 		if status.Round >= 2 {
 			fmt.Fprintf(os.Stderr, "    Analysis complete (round %d)\n", status.Round)
 			break
 		}
+
+		// If we saw analyzing and now it's back to open with round still 1,
+		// the analysis failed — don't wait, return error to trigger retry
+		if sawAnalyzing && status.Status == "open" && status.Round < 2 {
+			return "", fmt.Errorf("analysis failed (status returned to open without advancing round)")
+		}
+
 		cur := status.Status + "/" + status.SubStatus
 		if cur != lastStatus {
 			fmt.Fprintf(os.Stderr, "    %s\n", cur)
