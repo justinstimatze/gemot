@@ -38,10 +38,43 @@ func TestJoinCodeLifecycle(t *testing.T) {
 		t.Fatalf("expected role contributor, got %q", role)
 	}
 
-	// Can't reuse the code
+	// Single-use code (maxUses=1) — can't reuse
 	_, _, err = svc.JoinDeliberation(jc.Code, "another-agent")
 	if err == nil {
-		t.Fatal("expected error on code reuse")
+		t.Fatal("expected error on single-use code reuse")
+	}
+}
+
+func TestMultiUseJoinCode(t *testing.T) {
+	db := tempDB(t)
+	svc := deliberation.NewService(db, &mockAnalyzer{})
+
+	d, _ := svc.CreateDeliberation("Multi-use test", "")
+
+	// Generate a multi-use code (max 3 uses)
+	jc, err := svc.GenerateJoinCode(d.ID, "participant", time.Hour, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jc.MaxUses != 3 {
+		t.Fatalf("expected MaxUses=3, got %d", jc.MaxUses)
+	}
+
+	// Three agents can join with the same code
+	for i, agent := range []string{"agent-1", "agent-2", "agent-3"} {
+		_, role, err := svc.JoinDeliberation(jc.Code, agent)
+		if err != nil {
+			t.Fatalf("agent %d (%s) should be able to join: %v", i+1, agent, err)
+		}
+		if role != "participant" {
+			t.Fatalf("expected role participant, got %q", role)
+		}
+	}
+
+	// Fourth agent is rejected
+	_, _, err = svc.JoinDeliberation(jc.Code, "agent-4")
+	if err == nil {
+		t.Fatal("expected error when max uses exceeded")
 	}
 }
 
