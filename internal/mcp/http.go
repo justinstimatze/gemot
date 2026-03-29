@@ -291,20 +291,22 @@ h1{font-size:2rem;font-weight:700;letter-spacing:-0.02em;margin-bottom:0.5rem;}
 <p class="subtitle">Pay-per-analyze. Buy credits, use them when you need them. No subscription.</p>
 <div class="packs">
 <div class="pack">
-  <div class="pack-info"><h3>Starter</h3><p>1,000 credits · ~20 Sonnet analyses</p></div>
+  <div class="pack-info"><h3>Starter</h3><p>1,000 credits · ~16 Sonnet analyses</p></div>
   <div class="pack-right"><div class="price">$5</div><a href="/checkout?pack=Starter" class="pack-btn">Buy</a></div>
 </div>
 <div class="pack">
-  <div class="pack-info"><h3>Standard</h3><p>4,500 credits · ~90 Sonnet analyses · 10%% bonus</p></div>
+  <div class="pack-info"><h3>Standard</h3><p>4,500 credits · ~75 Sonnet analyses · 10%% bonus</p></div>
   <div class="pack-right"><div class="price">$20</div><a href="/checkout?pack=Standard" class="pack-btn">Buy</a></div>
 </div>
 <div class="pack">
-  <div class="pack-info"><h3>Pro</h3><p>12,000 credits · ~240 Sonnet analyses · 20%% bonus</p></div>
+  <div class="pack-info"><h3>Pro</h3><p>12,000 credits · ~200 Sonnet analyses · 20%% bonus</p></div>
   <div class="pack-right"><div class="price">$50</div><a href="/checkout?pack=Pro" class="pack-btn">Buy</a></div>
 </div>
 </div>
-<p class="fine-print">Credits per analysis: Sonnet = 50, Opus = 200, Haiku = 20.<br>
+<p class="fine-print">Credits per analysis: Haiku = 20, Sonnet = 60, Opus = 300.<br>
 Credits never expire. Unused credits are refundable within 30 days.</p>
+<h3 style="margin-top:2rem;font-size:0.95rem;font-weight:600;">Why these prices?</h3>
+<p class="fine-print" style="margin-top:0.5rem;">Each analysis runs 15–20 LLM calls (taxonomy extraction, per-position claim extraction, deduplication, crux generation with 3 candidates per subtopic, summarization, and classification). A typical Sonnet analysis costs us ~$0.24 in API fees. At 60 credits ($0.30), margins cover infrastructure (hosting, storage, bandwidth) without markup for profit. We price to sustain the service, not to maximize revenue.</p>
 <p class="back"><a href="/">&larr; Back to gemot.dev</a></p>
 <p style="color:#94a3b8;font-size:0.75rem;margin-top:2rem;"><a href="/privacy" style="color:#94a3b8;">Privacy</a> &middot; <a href="/terms" style="color:#94a3b8;">Terms</a> &middot; <a href="/content-policy" style="color:#94a3b8;">Content Policy</a></p>
 </div>

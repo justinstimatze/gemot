@@ -105,17 +105,17 @@ func TestCreditStoreBasics(t *testing.T) {
 }
 
 func TestCreditCost(t *testing.T) {
-	if payments.CreditCost("claude-sonnet-4-6") != 50 {
-		t.Fatal("expected 50 for sonnet")
+	if payments.CreditCost("claude-sonnet-4-6") != 60 {
+		t.Fatal("expected 60 for sonnet")
 	}
-	if payments.CreditCost("claude-opus-4-6") != 200 {
-		t.Fatal("expected 200 for opus")
+	if payments.CreditCost("claude-opus-4-6") != 300 {
+		t.Fatal("expected 300 for opus")
 	}
 	if payments.CreditCost("claude-haiku-4-5") != 20 {
 		t.Fatal("expected 20 for haiku")
 	}
-	if payments.CreditCost("") != 50 {
-		t.Fatal("expected 50 for default")
+	if payments.CreditCost("") != 60 {
+		t.Fatal("expected 60 for default")
 	}
 }
 

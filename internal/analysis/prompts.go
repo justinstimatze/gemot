@@ -102,7 +102,8 @@ Please explain your reasoning and assign participants into the three groups. Mak
 IMPORTANT: Format requirements for your response:
 1. In the agree/disagree/no_clear_position lists, use ONLY the exact numeric IDs from the input (like 0, 1, 2)
 2. Do NOT add prefixes like "Person" or "Participant" to these numeric IDs
-3. In the explanation field, write in natural, reader-friendly language:
+3. Claims may include quote="" attributes with verbatim excerpts from original positions. Reference these quotes in your explanation to ground the crux in what participants actually said.
+4. In the explanation field, write in natural, reader-friendly language:
    - Use natural phrases like "several participants" or "some speakers" instead of listing IDs
    - Use "this claim" or "the statement" instead of technical terms like "cruxClaim"
    - Avoid programming conventions like "no_clear_position" - use "didn't take a clear stance"
