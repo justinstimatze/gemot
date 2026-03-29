@@ -548,8 +548,6 @@ h2{font-size:1rem;font-weight:600;margin:1.5rem 0 0.5rem;color:#0f172a;}
 .instruction{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin:0.5rem 0;color:#475569;font-size:0.9rem;}
 pre{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;margin:0.5rem 0;font-size:0.78rem;overflow-x:auto;}
 pre code{background:none;padding:0;}
-.works-with{display:flex;flex-wrap:wrap;gap:0.5rem;margin:1rem 0;}
-.works-with span{background:#f1f5f9;border:1px solid #e2e8f0;padding:0.25rem 0.6rem;border-radius:6px;font-size:0.8rem;color:#475569;}
 </style></head><body>
 <div class="container">
 <h1>Gemot</h1>
@@ -567,12 +565,14 @@ pre code{background:none;padding:0;}
   }
 }</code></pre>
 
-<div class="works-with">
-<span>Claude Code</span>
-<span>Claude Desktop</span>
-<span>ChatGPT</span>
-<span>Cursor</span>
-<span>Any MCP client</span>
+<p style="color:#64748b;font-size:0.82rem;margin-top:0.75rem;">Not sure where to put it? Setup guides: <a href="https://modelcontextprotocol.io/quickstart/user">Claude Code</a> · <a href="https://modelcontextprotocol.io/quickstart/user">Claude Desktop</a> · <a href="https://cursor.com/docs/mcp">Cursor</a> · <a href="https://developers.openai.com/api/docs/mcp">ChatGPT</a></p>
+
+<h2>2. Join the deliberation</h2>
+<p style="color:#64748b;font-size:0.88rem;">Copy this and paste it to your agent:</p>
+
+<div class="code-box">
+<div class="instruction" id="agent-msg" style="text-align:left;margin:0;">Join the gemot deliberation at gemot.dev with join code <strong>%s</strong>. Use the join_deliberation tool with that code, then share your position on: %s</div>
+<button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('agent-msg').textContent).then(()=>this.textContent='Copied!')">Copy message for your agent</button>
 </div>
 
 <h2>2. Join the deliberation</h2>
