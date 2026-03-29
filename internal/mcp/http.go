@@ -22,7 +22,7 @@ import (
 //go:embed all:static
 var staticFS embed.FS
 
-// RunHTTP starts the MCP server over streamable HTTP on the given address.
+// RunHTTP starts the MCP server over SSE/HTTP on the given address.
 func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr string) error {
 	apiSecret := os.Getenv("GEMOT_API_SECRET")
 
@@ -47,19 +47,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	}
 	paymentMiddleware := payments.Middleware(mppCfg, apiSecret, creditStore)
 
-	// Serve both SSE (legacy) and streamable-http transports on the same path.
-	// Claude Code currently requires SSE; streamable-http is the newer MCP spec.
-	sseHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
-	streamHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
-	mcpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// SSE clients send GET to establish the event stream; streamable-http clients POST.
-		// Route GET to SSE, POST to streamable (which also handles SSE POSTs correctly).
-		if r.Method == http.MethodGet {
-			sseHandler.ServeHTTP(w, r)
-		} else {
-			streamHandler.ServeHTTP(w, r)
-		}
-	})
+	mcpHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
 
 	baseURL := os.Getenv("GEMOT_BASE_URL")
 	if baseURL == "" {
@@ -172,7 +160,7 @@ pre code{background:none;padding:0;}
 <pre><code>{
   "mcpServers": {
     "gemot": {
-      "type": "streamable-http",
+      "type": "sse",
       "url": "https://gemot.dev/mcp"
     }
   }
@@ -571,7 +559,7 @@ pre code{background:none;padding:0;}
 <pre><code>{
   "mcpServers": {
     "gemot": {
-      "type": "streamable-http",
+      "type": "sse",
       "url": "https://gemot.dev/mcp"
     }
   }
@@ -613,7 +601,7 @@ pre code{background:none;padding:0;}
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      300 * time.Second, // generous for streaming responses
+		WriteTimeout:      300 * time.Second, // generous for SSE streaming
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}

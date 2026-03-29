@@ -8,7 +8,7 @@ Structured deliberation MCP server for AI agent coordination.
 go build -o gemot .     # Build
 go test ./...           # Test
 ./gemot serve           # Start MCP server (stdio)
-./gemot http            # Start HTTP server (streamable-http)
+./gemot http            # Start HTTP/SSE server
 ```
 
 ## Architecture
