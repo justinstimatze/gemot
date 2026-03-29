@@ -279,16 +279,13 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 
 			// Vote based on diplomatic relationship:
 			// - Agree with messages addressed to you (they engaged with you)
-			// - Agree with your own messages (via other positions)
-			// - Disagree with messages between rivals that exclude you
-			// - Pass on global broadcasts
+			// - Pass on everything else (don't penalize for being excluded)
+			// NOTE: Previously excluded powers voted -1 (disagree), which created
+			// false polarization — 5 powers "disagreeing" with a private message
+			// doesn't mean they disagree with its content. T3C has no voting at all.
 			vote := 0
 			if info.recipient == voter || info.sender == voter {
 				vote = 1 // you're party to this conversation
-			} else if info.recipient == "global" {
-				vote = 0 // pass on broadcasts
-			} else {
-				vote = -1 // private message you're excluded from
 			}
 
 			callToolSoft(ctx, session, "vote", map[string]any{
@@ -360,29 +357,78 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 type crux struct {
 	Claim          string   `json:"crux_claim"`
 	Topic          string   `json:"topic"`
-	Explanation    string   `json:"explanation"`
-	Controversy    float64  `json:"controversy_score"`
-	AgreeAgents    []string `json:"agree_agents"`
-	DisagreeAgents []string `json:"disagree_agents"`
-	CruxType       string   `json:"crux_type"`
+	Explanation     string   `json:"explanation"`
+	Controversy     float64  `json:"controversy_score"`
+	AgreeAgents     []string `json:"agree_agents"`
+	DisagreeAgents  []string `json:"disagree_agents"`
+	NoClearPosition []string `json:"no_clear_position"`
+	CruxType        string   `json:"crux_type"`
+}
+
+type topicSummary struct {
+	Topic   string `json:"topic"`
+	Summary string `json:"summary"`
+}
+
+type alignment struct {
+	AgentID        string  `json:"agent_id"`
+	AlignmentScore float64 `json:"alignment_score"`
+	SharedCruxes   int     `json:"shared_cruxes"`
+	AgreeCruxes    int     `json:"agree_cruxes"`
+}
+
+type bridging struct {
+	AgentID       string  `json:"agent_id"`
+	Content       string  `json:"content"`
+	BridgingScore float64 `json:"bridging_score"`
 }
 
 func formatBriefing(power string, year int, contextJSON string) string {
 	var ac struct {
-		AgentID              string   `json:"agent_id"`
-		ClusterID            *int     `json:"cluster_id"`
-		NearestAllies        []string `json:"nearest_allies"`
-		BiggestDisagreements []string `json:"biggest_disagreements_with"`
-		RelevantCruxes       []crux   `json:"relevant_cruxes"`
-		DiversityNudge       string   `json:"diversity_nudge"`
-		IntegrityWarnings    []string `json:"integrity_warnings"`
+		AgentID              string         `json:"agent_id"`
+		ClusterID            *int           `json:"cluster_id"`
+		NearestAllies        []string       `json:"nearest_allies"`
+		BiggestDisagreements []string       `json:"biggest_disagreements_with"`
+		RelevantCruxes       []crux         `json:"relevant_cruxes"`
+		TopicSummaries       []topicSummary `json:"topic_summaries"`
+		AlignmentScores      []alignment    `json:"alignment_scores"`
+		SwingAgents          []string       `json:"swing_agents"`
+		BridgingStatements   []bridging     `json:"bridging_statements"`
+		StrategicNudge       string         `json:"strategic_nudge"`
+		DiversityNudge       string         `json:"diversity_nudge"`
+		IntegrityWarnings    []string       `json:"integrity_warnings"`
 	}
 	mustParse(contextJSON, &ac)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "=== DIPLOMATIC INTELLIGENCE BRIEFING: %s — Year %d ===\n\n", power, 1900+year)
 
-	if len(ac.NearestAllies) > 0 {
+	// Key discussion themes (landscape overview)
+	if len(ac.TopicSummaries) > 0 {
+		fmt.Fprintf(&b, "KEY DISCUSSION THEMES:\n")
+		for i, ts := range ac.TopicSummaries {
+			fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, ts.Topic, ts.Summary)
+		}
+		fmt.Fprintln(&b)
+	}
+
+	// Pairwise alignment matrix (T3C-style)
+	if len(ac.AlignmentScores) > 0 {
+		fmt.Fprintf(&b, "ALIGNMENT MATRIX:\n")
+		for _, a := range ac.AlignmentScores {
+			label := "OPPOSED"
+			if a.AlignmentScore >= 0.67 {
+				label = "STRONG ALLY"
+			} else if a.AlignmentScore >= 0.4 {
+				label = "PARTIAL ALLY"
+			} else if a.AlignmentScore > 0 {
+				label = "WEAK ALIGNMENT"
+			}
+			fmt.Fprintf(&b, "  %s: %.0f%% aligned (%d/%d cruxes) — %s\n",
+				a.AgentID, a.AlignmentScore*100, a.AgreeCruxes, a.SharedCruxes, label)
+		}
+		fmt.Fprintln(&b)
+	} else if len(ac.NearestAllies) > 0 {
 		fmt.Fprintf(&b, "ALLIANCE ALIGNMENT:\nYour closest allies based on voting patterns: %s\n\n",
 			strings.Join(ac.NearestAllies, ", "))
 	}
@@ -390,6 +436,12 @@ func formatBriefing(power string, year int, contextJSON string) string {
 	if len(ac.BiggestDisagreements) > 0 {
 		fmt.Fprintf(&b, "BIGGEST DISAGREEMENTS WITH:\n%s\n\n",
 			strings.Join(ac.BiggestDisagreements, ", "))
+	}
+
+	// Swing agents (persuadable)
+	if len(ac.SwingAgents) > 0 {
+		fmt.Fprintf(&b, "PERSUADABLE POWERS (undecided on many cruxes):\n%s\n\n",
+			strings.Join(ac.SwingAgents, ", "))
 	}
 
 	if len(ac.RelevantCruxes) > 0 {
@@ -408,6 +460,9 @@ func formatBriefing(power string, year int, contextJSON string) string {
 			if len(c.DisagreeAgents) > 0 {
 				fmt.Fprintf(&b, "   DISAGREE: %s\n", strings.Join(c.DisagreeAgents, ", "))
 			}
+			if len(c.NoClearPosition) > 0 {
+				fmt.Fprintf(&b, "   NO CLEAR POSITION: %s\n", strings.Join(c.NoClearPosition, ", "))
+			}
 			if c.Explanation != "" {
 				fmt.Fprintf(&b, "   %s\n", c.Explanation)
 			}
@@ -415,8 +470,26 @@ func formatBriefing(power string, year int, contextJSON string) string {
 		fmt.Fprintln(&b)
 	}
 
+	// Bridging positions (cross-cluster agreement)
+	if len(ac.BridgingStatements) > 0 {
+		fmt.Fprintf(&b, "BRIDGING POSITIONS (cross-faction support):\n")
+		for _, bs := range ac.BridgingStatements {
+			content := bs.Content
+			if len(content) > 150 {
+				content = content[:150] + "..."
+			}
+			fmt.Fprintf(&b, "  %s (%.0f%% cross-cluster support): %s\n",
+				bs.AgentID, bs.BridgingScore*100, content)
+		}
+		fmt.Fprintln(&b)
+	}
+
+	// Strategic guidance
+	if ac.StrategicNudge != "" {
+		fmt.Fprintf(&b, "STRATEGIC RECOMMENDATIONS:\n%s\n\n", ac.StrategicNudge)
+	}
 	if ac.DiversityNudge != "" {
-		fmt.Fprintf(&b, "STRATEGIC CONSIDERATIONS:\n%s\n\n", ac.DiversityNudge)
+		fmt.Fprintf(&b, "POSITION ASSESSMENT:\n%s\n\n", ac.DiversityNudge)
 	}
 
 	fmt.Fprintf(&b, "=== END BRIEFING ===\n")

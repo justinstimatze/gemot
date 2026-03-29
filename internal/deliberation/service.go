@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/sanitize"
@@ -747,8 +748,32 @@ func (s *Service) GetContext(deliberationID, agentID string) (*AgentContext, err
 		}
 	}
 
+	// Surface topic summaries (discussion landscape overview)
+	if len(result.TopicSummaries) > 0 {
+		ctx.TopicSummaries = result.TopicSummaries
+	}
+
+	// Compute pairwise alignment scores from crux positions
+	ctx.AlignmentScores, ctx.SwingAgents = computeAlignments(agentID, result.Cruxes)
+
+	// Surface bridging and consensus statements
+	if len(result.BridgingStatements) > 0 {
+		ctx.BridgingStatements = result.BridgingStatements
+	}
+	if len(result.ConsensusStatements) > 0 {
+		ctx.ConsensusStatements = result.ConsensusStatements
+	}
+
+	// Surface this agent's effective weight
+	if w, ok := result.EffectiveWeights[agentID]; ok {
+		ctx.EffectiveWeight = w
+	}
+
 	// Anti-sycophancy: generate a diversity nudge based on the agent's unique position
 	ctx.DiversityNudge = buildDiversityNudge(ctx, result)
+
+	// Strategic nudge: actionable guidance based on alignment, bridging, and swing agents
+	ctx.StrategicNudge = buildStrategicNudge(ctx, result)
 
 	// Surface pending invitations for this agent
 	if invitations, err := s.store.GetInvitations(deliberationID); err == nil {
@@ -803,6 +828,159 @@ func buildDiversityNudge(ctx *AgentContext, result *AnalysisResult) string {
 	}
 
 	return ""
+}
+
+// computeAlignments calculates pairwise alignment scores between this agent and
+// all other agents based on crux positions, and identifies swing agents who are
+// undecided on many cruxes (and thus persuadable).
+func computeAlignments(agentID string, cruxes []Crux) ([]AgentAlignment, []string) {
+	// Build a map of agent -> crux positions: +1 = agree, -1 = disagree, 0 = no position
+	type position int8
+	const agree position = 1
+	const disagree position = -1
+
+	agentPositions := map[string]map[int]position{} // agent -> crux_index -> position
+	allAgents := map[string]bool{}
+	noClearCounts := map[string]int{} // how many cruxes each agent has no_clear_position on
+
+	for i, crux := range cruxes {
+		for _, a := range crux.AgreeAgents {
+			allAgents[a] = true
+			if agentPositions[a] == nil {
+				agentPositions[a] = map[int]position{}
+			}
+			agentPositions[a][i] = agree
+		}
+		for _, a := range crux.DisagreeAgents {
+			allAgents[a] = true
+			if agentPositions[a] == nil {
+				agentPositions[a] = map[int]position{}
+			}
+			agentPositions[a][i] = disagree
+		}
+		for _, a := range crux.NoClearPosition {
+			allAgents[a] = true
+			noClearCounts[a]++
+		}
+	}
+
+	if len(cruxes) == 0 {
+		return nil, nil
+	}
+
+	// Compute alignment with each other agent
+	myPositions := agentPositions[agentID]
+	var alignments []AgentAlignment
+	for other := range allAgents {
+		if other == agentID {
+			continue
+		}
+		otherPos := agentPositions[other]
+		shared := 0
+		aligned := 0
+		for i := range cruxes {
+			myP, myOk := myPositions[i]
+			otherP, otherOk := otherPos[i]
+			if myOk && otherOk {
+				shared++
+				if myP == otherP {
+					aligned++
+				}
+			}
+		}
+		if shared > 0 {
+			alignments = append(alignments, AgentAlignment{
+				AgentID:        other,
+				AlignmentScore: float64(aligned) / float64(shared),
+				SharedCruxes:   shared,
+				AgreeCruxes:    aligned,
+			})
+		}
+	}
+
+	// Sort by alignment score descending, tiebreak by agent name for determinism
+	sort.Slice(alignments, func(i, j int) bool {
+		if alignments[i].AlignmentScore != alignments[j].AlignmentScore {
+			return alignments[i].AlignmentScore > alignments[j].AlignmentScore
+		}
+		return alignments[i].AgentID < alignments[j].AgentID
+	})
+
+	// Identify swing agents: no_clear_position on >= 40% of cruxes
+	threshold := float64(len(cruxes)) * 0.4
+	var swingAgents []string
+	for agent, count := range noClearCounts {
+		if agent != agentID && float64(count) >= threshold {
+			swingAgents = append(swingAgents, agent)
+		}
+	}
+	sort.Strings(swingAgents)
+
+	return alignments, swingAgents
+}
+
+// buildStrategicNudge generates actionable guidance based on the agent's position
+// in the deliberation landscape — which bridging statements to build on, which
+// agents are persuadable, and where there's opportunity for coalition building.
+func buildStrategicNudge(ctx *AgentContext, result *AnalysisResult) string {
+	var parts []string
+
+	// 1. Highlight bridging opportunities
+	if len(ctx.BridgingStatements) > 0 {
+		// Find bridging statements from agents outside this agent's cluster
+		for _, bs := range ctx.BridgingStatements {
+			if bs.AgentID != ctx.AgentID && bs.BridgingScore >= 0.5 {
+				parts = append(parts, fmt.Sprintf(
+					"Position by %s has cross-cluster support (%.0f%% bridging score). Consider building on it to find common ground.",
+					bs.AgentID, bs.BridgingScore*100,
+				))
+				break // one is enough
+			}
+		}
+	}
+
+	// 2. Identify persuadable agents on specific cruxes
+	if len(ctx.SwingAgents) > 0 {
+		// Find which cruxes the swing agents are undecided on
+		for _, swing := range ctx.SwingAgents {
+			var undecidedCruxes []string
+			for _, crux := range ctx.RelevantCruxes {
+				for _, a := range crux.NoClearPosition {
+					if a == swing {
+						undecidedCruxes = append(undecidedCruxes, crux.Claim)
+						break
+					}
+				}
+			}
+			if len(undecidedCruxes) > 0 {
+				cruxDesc := undecidedCruxes[0]
+				if len(cruxDesc) > 80 {
+					cruxDesc = cruxDesc[:80] + "..."
+				}
+				parts = append(parts, fmt.Sprintf(
+					"%s is undecided on %d crux(es), including: \"%s\". They may be open to persuasion.",
+					swing, len(undecidedCruxes), cruxDesc,
+				))
+				break // one swing agent recommendation is enough
+			}
+		}
+	}
+
+	// 3. Note strongest alignment for coalition building
+	if len(ctx.AlignmentScores) > 0 {
+		top := ctx.AlignmentScores[0] // already sorted descending
+		if top.AlignmentScore >= 0.67 && top.SharedCruxes >= 2 {
+			parts = append(parts, fmt.Sprintf(
+				"You and %s agree on %d of %d cruxes (%.0f%% aligned). A coalition could strengthen both positions.",
+				top.AgentID, top.AgreeCruxes, top.SharedCruxes, top.AlignmentScore*100,
+			))
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " ")
 }
 
 func (s *Service) ReframePosition(ctx context.Context, deliberationID, positionID string) (string, error) {
