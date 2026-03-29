@@ -152,7 +152,7 @@ func main() {
 				continue
 			}
 
-			briefing, err = analyzePower(ctx, session, power, msgs, *year)
+			briefing, err = analyzePower(ctx, session, url, secret, power, msgs, *year)
 			session.Close() //nolint:errcheck
 			if err == nil {
 				break
@@ -172,7 +172,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Done. Briefings written to %s\n", *outputDir)
 }
 
-func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power string, msgs []Message, year int) (string, error) {
+func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secret, power string, msgs []Message, year int) (string, error) {
 	// 1. Create deliberation
 	topic := fmt.Sprintf("%s diplomatic intelligence — Year %d", power, 1900+year)
 	desc := fmt.Sprintf("Analysis of diplomatic messages involving %s during Year %d. "+
@@ -252,9 +252,22 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 	sawAnalyzing := false
 	for i := 0; i < 100; i++ {
 		time.Sleep(3 * time.Second)
-		statusJSON := callTool(ctx, session, "get_deliberation", map[string]any{
+
+		// Poll with a fresh connection — SSE streams can timeout during long analyses
+		pollSession, err := connect(ctx, url, secret)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "    poll reconnect failed: %v\n", err)
+			continue
+		}
+		statusJSON := callToolSoft(ctx, pollSession, "get_deliberation", map[string]any{
 			"deliberation_id": deliberationID,
 		})
+		pollSession.Close() //nolint:errcheck
+
+		if statusJSON == "" {
+			continue // connection failed, retry
+		}
+
 		var status struct {
 			Status    string `json:"status"`
 			SubStatus string `json:"sub_status"`
@@ -264,7 +277,6 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 		if status.Status == "analyzing" {
 			sawAnalyzing = true
 		}
-		// Only consider "open" as complete if we saw it transition to analyzing first
 		if sawAnalyzing && status.Status == "open" && status.SubStatus == "" {
 			fmt.Fprintf(os.Stderr, "    Analysis complete\n")
 			break
@@ -279,8 +291,14 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 		}
 	}
 
-	// 6. Get context for this power
-	contextJSON := callToolSoft(ctx, session, "get_context", map[string]any{
+	// 6. Get context for this power (fresh connection — original may have timed out)
+	ctxSession, err := connect(ctx, url, secret)
+	if err != nil {
+		return "", fmt.Errorf("reconnect for get_context: %w", err)
+	}
+	defer ctxSession.Close() //nolint:errcheck
+
+	contextJSON := callToolSoft(ctx, ctxSession, "get_context", map[string]any{
 		"deliberation_id": deliberationID,
 		"agent_id":        strings.ToLower(power) + "-agent",
 	})
