@@ -307,7 +307,7 @@ func (s *DB) GetLatestAnalysisResult(deliberationID string) (*deliberation.Analy
 // back to "open" if their created_at is older than maxAge.
 // Returns the count of recovered deliberations.
 func (s *DB) RecoverStuckAnalyzing(maxAge time.Duration) (int, error) {
-	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339)
+	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
 	res, err := s.db.Exec(
 		`UPDATE deliberations SET status = 'open', sub_status = '', status_changed_at = datetime('now')
 		 WHERE status = 'analyzing' AND COALESCE(status_changed_at, created_at) < ?`,
@@ -625,7 +625,7 @@ func (s *DB) GetPendingJobs() (int, error) {
 }
 
 func (s *DB) RecoverStuckJobs(maxAge time.Duration) (int, error) {
-	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339)
+	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
 	res, err := s.db.Exec(
 		`UPDATE jobs SET status = 'pending' WHERE status = 'running' AND created_at < ?`,
 		cutoff,
