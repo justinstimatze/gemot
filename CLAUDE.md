@@ -8,14 +8,14 @@ Structured deliberation MCP server for AI agent coordination.
 go build -o gemot .     # Build
 go test ./...           # Test
 ./gemot serve           # Start MCP server (stdio)
-./gemot http            # Start HTTP/SSE server
+./gemot http            # Start HTTP server (streamable-http)
 ```
 
 ## Architecture
 
 - `internal/mcp/` — MCP server + HTTP transport
 - `internal/deliberation/` — Business logic, models, service layer
-- `internal/analysis/` — T3C pipeline (text) + Polis vote math + synthesizer
+- `internal/analysis/` — Analysis pipeline (T3C-inspired) + Polis vote math + synthesizer
 - `internal/store/` — SQLite persistence
 - `internal/payments/` — Stripe billing, credits, rate limiting, MPP
 - `internal/llm/` — Anthropic SDK wrapper with structured output

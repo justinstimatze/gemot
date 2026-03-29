@@ -73,7 +73,7 @@ func main() {
 
 	// Connect to gemot
 	ctx := context.Background()
-	transport := &sdkmcp.SSEClientTransport{
+	transport := &sdkmcp.StreamableClientTransport{
 		Endpoint: url,
 		HTTPClient: &http.Client{
 			Transport: &authTransport{base: http.DefaultTransport, token: secret},

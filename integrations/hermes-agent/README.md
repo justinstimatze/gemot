@@ -18,7 +18,7 @@ Hermes agents already coordinate on tasks. Gemot adds a structured way to resolv
 | Agent output | Compromise proposals that bridge clusters |
 | Task completion | Commitment protocol with conditional agreements |
 
-The key difference from a simple voting system: gemot doesn't just count votes. It runs the positions through a T3C-derived analysis pipeline that extracts claims, detects cruxes, clusters agents by agreement pattern, and generates bridging statements.
+The key difference from a simple voting system: gemot doesn't just count votes. It runs positions through an analysis pipeline (inspired by [Talk to the City](https://talktothe.city)) that extracts claims, detects cruxes, clusters agents by agreement pattern, and generates bridging statements.
 
 ## How it would work
 
