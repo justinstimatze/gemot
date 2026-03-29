@@ -218,18 +218,43 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 	}
 	mustParse(posJSON, &positions)
 
+	// Build a map of position ID to message metadata for voting decisions
+	type posInfo struct {
+		sender, recipient string
+	}
+	posMap := make(map[string]posInfo)
+	for i, pos := range positions {
+		if i < len(msgs) {
+			posMap[pos.ID] = posInfo{
+				sender:    strings.ToLower(msgs[i].Sender),
+				recipient: strings.ToLower(msgs[i].Recipient),
+			}
+		}
+	}
+
 	for _, pos := range positions {
+		info := posMap[pos.ID]
 		for _, voterPower := range powers {
 			voterAgent := strings.ToLower(voterPower) + "-agent"
+			voter := strings.ToLower(voterPower)
 			if voterAgent == pos.AgentID {
 				continue
 			}
-			// Powers agree with their own messages, pass on others
+
+			// Vote based on diplomatic relationship:
+			// - Agree with messages addressed to you (they engaged with you)
+			// - Agree with your own messages (via other positions)
+			// - Disagree with messages between rivals that exclude you
+			// - Pass on global broadcasts
 			vote := 0
-			senderPower := strings.TrimSuffix(pos.AgentID, "-agent")
-			if strings.EqualFold(senderPower, voterPower) {
-				vote = 1
+			if info.recipient == voter || info.sender == voter {
+				vote = 1 // you're party to this conversation
+			} else if info.recipient == "global" {
+				vote = 0 // pass on broadcasts
+			} else {
+				vote = -1 // private message you're excluded from
 			}
+
 			callToolSoft(ctx, session, "vote", map[string]any{
 				"deliberation_id": deliberationID,
 				"agent_id":        voterAgent,
@@ -245,13 +270,13 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 		"deliberation_id": deliberationID,
 	})
 
-	// 5. Poll for completion (up to 5 minutes)
+	// 5. Poll for completion (up to 10 minutes)
 	// Check round_number — it advances from 1 to 2 when analysis saves results.
 	// This is more reliable than checking status because status can briefly
 	// return to "open" during error recovery.
 	time.Sleep(2 * time.Second)
 	lastStatus := ""
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 200; i++ {
 		time.Sleep(3 * time.Second)
 
 		statusJSON := callToolSoft(ctx, session, "get_deliberation", map[string]any{
@@ -285,8 +310,8 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 			fmt.Fprintf(os.Stderr, "    %s\n", cur)
 			lastStatus = cur
 		}
-		if i == 99 {
-			return "", fmt.Errorf("analysis timed out after 5 minutes")
+		if i == 199 {
+			return "", fmt.Errorf("analysis timed out after 10 minutes")
 		}
 	}
 
