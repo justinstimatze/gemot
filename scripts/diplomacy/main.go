@@ -284,8 +284,9 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, power stri
 }
 
 type crux struct {
-	Claim          string   `json:"claim"`
+	Claim          string   `json:"crux_claim"`
 	Topic          string   `json:"topic"`
+	Explanation    string   `json:"explanation"`
 	Controversy    float64  `json:"controversy_score"`
 	AgreeAgents    []string `json:"agree_agents"`
 	DisagreeAgents []string `json:"disagree_agents"`
@@ -332,6 +333,9 @@ func formatBriefing(power string, year int, contextJSON string) string {
 			}
 			if len(c.DisagreeAgents) > 0 {
 				fmt.Fprintf(&b, "   DISAGREE: %s\n", strings.Join(c.DisagreeAgents, ", "))
+			}
+			if c.Explanation != "" {
+				fmt.Fprintf(&b, "   %s\n", c.Explanation)
 			}
 		}
 		fmt.Fprintln(&b)
