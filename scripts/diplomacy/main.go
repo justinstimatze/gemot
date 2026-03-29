@@ -270,85 +270,50 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 		"deliberation_id": deliberationID,
 	})
 
-	// 5. Poll for completion (up to 10 minutes)
-	// Wait for round_number to advance from 1→2, which only happens after
-	// analysis results are saved. Ignore status transitions — "open" can
-	// appear both on success (round advanced) and failure (resetStatus).
-	time.Sleep(5 * time.Second) // wait for goroutine to call TrySetAnalyzing
-	lastStatus := ""
-	sawAnalyzing := false
+	// 5. Poll for completion by trying get_context directly.
+	// This is the most reliable signal — if get_context returns data,
+	// analysis is done. No need to interpret status transitions.
+	time.Sleep(5 * time.Second)
+	var contextJSON string
 	for i := 0; i < 200; i++ {
 		time.Sleep(3 * time.Second)
 
-		statusJSON := callToolSoft(ctx, session, "get_deliberation", map[string]any{
+		result := callToolSoft(ctx, session, "get_context", map[string]any{
 			"deliberation_id": deliberationID,
+			"agent_id":        strings.ToLower(power) + "-agent",
 		})
 
-		if statusJSON == "" {
+		if result == "" {
+			// Session may have died — reconnect
 			session.Close() //nolint:errcheck
 			var reconnErr error
 			session, reconnErr = connect(ctx, url, secret)
 			if reconnErr != nil {
 				fmt.Fprintf(os.Stderr, "    reconnect failed: %v\n", reconnErr)
 			}
+			// Log progress from get_deliberation
+			if session != nil {
+				statusJSON := callToolSoft(ctx, session, "get_deliberation", map[string]any{
+					"deliberation_id": deliberationID,
+				})
+				if statusJSON != "" {
+					var s struct { Status string `json:"status"`; SubStatus string `json:"sub_status"` }
+					json.Unmarshal([]byte(strings.SplitN(statusJSON, "\n\n---\n", 2)[0]), &s)
+					fmt.Fprintf(os.Stderr, "    %s/%s\n", s.Status, s.SubStatus)
+				}
+			}
 			continue
 		}
 
-		var status struct {
-			Status    string `json:"status"`
-			SubStatus string `json:"sub_status"`
-			Round     int    `json:"round_number"`
-		}
-		mustParse(statusJSON, &status)
-
-		if status.Status == "analyzing" {
-			sawAnalyzing = true
-		}
-
-		if status.Round >= 2 {
-			fmt.Fprintf(os.Stderr, "    Analysis complete (round %d)\n", status.Round)
-			break
-		}
-
-		// If we saw analyzing and now it's back to open with round still 1,
-		// the analysis failed — don't wait, return error to trigger retry
-		if sawAnalyzing && status.Status == "open" && status.Round < 2 {
-			return "", fmt.Errorf("analysis failed (status returned to open without advancing round)")
-		}
-
-		cur := status.Status + "/" + status.SubStatus
-		if cur != lastStatus {
-			fmt.Fprintf(os.Stderr, "    %s\n", cur)
-			lastStatus = cur
-		}
-		if i == 199 {
-			return "", fmt.Errorf("analysis timed out after 10 minutes")
-		}
-	}
-
-	// 6. Get context for this power
-	contextJSON := callToolSoft(ctx, session, "get_context", map[string]any{
-		"deliberation_id": deliberationID,
-		"agent_id":        strings.ToLower(power) + "-agent",
-	})
-	if contextJSON == "" {
-		// Session may have died — reconnect and retry once
-		session.Close() //nolint:errcheck
-		var reconnErr error
-		session, reconnErr = connect(ctx, url, secret)
-		if reconnErr != nil {
-			return "", fmt.Errorf("reconnect for get_context: %w", reconnErr)
-		}
-		contextJSON = callToolSoft(ctx, session, "get_context", map[string]any{
-			"deliberation_id": deliberationID,
-			"agent_id":        strings.ToLower(power) + "-agent",
-		})
+		contextJSON = result
+		fmt.Fprintf(os.Stderr, "    Analysis complete\n")
+		break
 	}
 	if contextJSON == "" {
-		return "", fmt.Errorf("no analysis results available")
+		return "", fmt.Errorf("analysis did not produce results after 10 minutes")
 	}
 
-	// 7. Format as briefing
+	// 6. Format as briefing
 	return formatBriefing(power, year, contextJSON), nil
 }
 

@@ -1115,7 +1115,7 @@ func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction str
 // RecoverStuck resets deliberations stuck in "analyzing" status back to "open"
 // if they have been in that state for more than 10 minutes.
 func (s *Service) RecoverStuck() (int, error) {
-	return s.store.RecoverStuckAnalyzing(10 * time.Minute)
+	return s.store.RecoverStuckAnalyzing(30 * time.Minute)
 }
 
 func (s *Service) GetAnalysisResult(deliberationID string, round int) (*AnalysisResult, error) {
