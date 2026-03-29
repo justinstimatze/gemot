@@ -184,6 +184,16 @@ No API key needed — the join code is your credential.
 	a2aLimiter := payments.NewRateLimiter(30, time.Minute) // 30/min, same as MCP
 	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB))
 
+	// OAuth protected resource metadata — tells MCP clients auth is optional (bearer token)
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+			"resource":                baseURL + "/mcp",
+			"bearer_methods_supported": []string{"header"},
+		})
+	})
+
 	// Stripe Checkout — purchase credit packs (public)
 	mux.HandleFunc("/checkout", payments.CheckoutHandler(creditStore, baseURL))
 	mux.HandleFunc("/checkout/success", payments.SuccessHandler(creditStore))
