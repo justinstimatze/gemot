@@ -60,15 +60,31 @@ type TopicSummary struct {
 	Summary string `json:"summary"`
 }
 
+// AgentAlignment shows how closely aligned two agents are based on crux positions.
+type AgentAlignment struct {
+	AgentID        string  `json:"agent_id"`
+	AlignmentScore float64 `json:"alignment_score"` // 0-1, fraction of cruxes where both agree or both disagree
+	SharedCruxes   int     `json:"shared_cruxes"`   // cruxes where both took a position
+	AgreeCruxes    int     `json:"agree_cruxes"`    // cruxes where both are on the same side
+}
+
 type AgentContext struct {
 	AgentID              string   `json:"agent_id"`
 	ClusterID            *int     `json:"cluster_id"`
 	NearestAllies        []string `json:"nearest_allies"`
 	BiggestDisagreements []string `json:"biggest_disagreements_with"`
 	RelevantCruxes       []Crux   `json:"relevant_cruxes"`
-	DiversityNudge       string       `json:"diversity_nudge,omitempty"` // anti-sycophancy: encourages maintaining genuine disagreement
-	PendingInvitations   []Invitation `json:"pending_invitations,omitempty"`
-	IntegrityWarnings    []string     `json:"integrity_warnings,omitempty"`
+	// Enriched context from analysis
+	TopicSummaries       []TopicSummary       `json:"topic_summaries,omitempty"`        // what's being discussed (landscape overview)
+	AlignmentScores      []AgentAlignment     `json:"alignment_scores,omitempty"`       // pairwise alignment with all other agents
+	SwingAgents          []string             `json:"swing_agents,omitempty"`           // agents with no_clear_position on many cruxes (persuadable)
+	BridgingStatements   []BridgingStatement  `json:"bridging_statements,omitempty"`    // positions with cross-cluster agreement
+	ConsensusStatements  []ConsensusStatement `json:"consensus_statements,omitempty"`   // positions with 67%+ weighted agreement
+	EffectiveWeight      float64              `json:"effective_weight,omitempty"`        // this agent's weight in consensus (trust × correlation × conviction)
+	StrategicNudge       string               `json:"strategic_nudge,omitempty"`         // actionable guidance based on position
+	DiversityNudge       string               `json:"diversity_nudge,omitempty"`         // anti-sycophancy: encourages maintaining genuine disagreement
+	PendingInvitations   []Invitation         `json:"pending_invitations,omitempty"`
+	IntegrityWarnings    []string             `json:"integrity_warnings,omitempty"`
 }
 
 // AuditEntry records a pipeline decision for transparency and debugging.

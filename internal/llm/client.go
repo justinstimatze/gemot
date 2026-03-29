@@ -4,9 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+)
+
+const (
+	maxRetries     = 10
+	baseRetryDelay = 2 * time.Second
 )
 
 // StructuredOutputFunc is the signature for structured LLM calls.
@@ -44,8 +52,31 @@ func NewClient(apiKey, model string) *Client {
 // Prevents rate limit hits when multiple deliberations analyze simultaneously.
 var apiSemaphore = make(chan struct{}, 10)
 
+// isRetryable returns true for errors that should be retried with backoff.
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "429") ||
+		strings.Contains(s, "529") ||
+		strings.Contains(s, "rate") ||
+		strings.Contains(s, "overloaded") ||
+		strings.Contains(s, "capacity")
+}
+
+// retryDelay returns the delay before the nth retry (exponential backoff, capped at 30s).
+func retryDelay(attempt int) time.Duration {
+	delay := baseRetryDelay * time.Duration(math.Pow(2, float64(attempt)))
+	// Cap at 30 seconds
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	return delay
+}
+
 // StructuredOutput sends a prompt and parses the response into the target type
-// using the tool_use pattern for structured output.
+// using the tool_use pattern for structured output. Retries on rate limit errors.
 func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, schema map[string]any, target any) error {
 	// Acquire API slot (blocks if 10 concurrent calls are in flight)
 	select {
@@ -70,7 +101,7 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 		model = override
 	}
 
-	resp, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
+	params := anthropic.MessageNewParams{
 		Model:     model,
 		MaxTokens: 4096,
 		System: []anthropic.TextBlockParam{
@@ -89,9 +120,31 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 			},
 		},
 		ToolChoice: anthropic.ToolChoiceParamOfTool("output"),
-	})
-	if err != nil {
-		return fmt.Errorf("API call failed: %w", err)
+	}
+
+	var resp *anthropic.Message
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryDelay(attempt - 1)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+
+		resp, lastErr = c.client.Messages.New(ctx, params)
+		if lastErr == nil {
+			break
+		}
+		if !isRetryable(lastErr) {
+			return fmt.Errorf("API call failed: %w", lastErr)
+		}
+		// Retryable error — loop continues
+	}
+	if lastErr != nil {
+		return fmt.Errorf("API call failed after %d retries: %w", maxRetries, lastErr)
 	}
 
 	// Report token usage if callback is set
@@ -112,7 +165,7 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 }
 
 // Classify sends a short prompt and returns the text response.
-// Uses Haiku for speed and cost (~$0.001 per call).
+// Uses Haiku for speed and cost (~$0.001 per call). Retries on rate limit errors.
 func (c *Client) Classify(ctx context.Context, system, prompt string) (string, error) {
 	select {
 	case apiSemaphore <- struct{}{}:
@@ -121,7 +174,7 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 		return "", ctx.Err()
 	}
 
-	resp, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
+	params := anthropic.MessageNewParams{
 		Model:     "claude-haiku-4-5",
 		MaxTokens: 100,
 		System: []anthropic.TextBlockParam{
@@ -130,9 +183,30 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("classify API call failed: %w", err)
+	}
+
+	var resp *anthropic.Message
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := retryDelay(attempt - 1)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+
+		resp, lastErr = c.client.Messages.New(ctx, params)
+		if lastErr == nil {
+			break
+		}
+		if !isRetryable(lastErr) {
+			return "", fmt.Errorf("classify API call failed: %w", lastErr)
+		}
+	}
+	if lastErr != nil {
+		return "", fmt.Errorf("classify API call failed after %d retries: %w", maxRetries, lastErr)
 	}
 
 	if c.OnUsage != nil {
