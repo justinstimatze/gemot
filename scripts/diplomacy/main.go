@@ -246,39 +246,38 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 	})
 
 	// 5. Poll for completion (up to 5 minutes)
-	// Wait a beat for the async analysis to start before polling
+	// Check round_number — it advances from 1 to 2 when analysis saves results.
+	// This is more reliable than checking status because status can briefly
+	// return to "open" during error recovery.
 	time.Sleep(2 * time.Second)
 	lastStatus := ""
-	sawAnalyzing := false
 	for i := 0; i < 100; i++ {
 		time.Sleep(3 * time.Second)
 
-		// Poll with a fresh connection — SSE streams can timeout during long analyses
-		pollSession, err := connect(ctx, url, secret)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "    poll reconnect failed: %v\n", err)
-			continue
-		}
-		statusJSON := callToolSoft(ctx, pollSession, "get_deliberation", map[string]any{
+		statusJSON := callToolSoft(ctx, session, "get_deliberation", map[string]any{
 			"deliberation_id": deliberationID,
 		})
-		pollSession.Close() //nolint:errcheck
 
+		// If session died, reconnect once
 		if statusJSON == "" {
-			continue // connection failed, retry
+			session.Close() //nolint:errcheck
+			var reconnErr error
+			session, reconnErr = connect(ctx, url, secret)
+			if reconnErr != nil {
+				fmt.Fprintf(os.Stderr, "    reconnect failed: %v\n", reconnErr)
+			}
+			continue
 		}
 
 		var status struct {
 			Status    string `json:"status"`
 			SubStatus string `json:"sub_status"`
+			Round     int    `json:"round_number"`
 		}
 		mustParse(statusJSON, &status)
 
-		if status.Status == "analyzing" {
-			sawAnalyzing = true
-		}
-		if sawAnalyzing && status.Status == "open" && status.SubStatus == "" {
-			fmt.Fprintf(os.Stderr, "    Analysis complete\n")
+		if status.Round >= 2 {
+			fmt.Fprintf(os.Stderr, "    Analysis complete (round %d)\n", status.Round)
 			break
 		}
 		cur := status.Status + "/" + status.SubStatus
@@ -291,19 +290,26 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 		}
 	}
 
-	// 6. Get context for this power (fresh connection — original may have timed out)
-	ctxSession, err := connect(ctx, url, secret)
-	if err != nil {
-		return "", fmt.Errorf("reconnect for get_context: %w", err)
-	}
-	defer ctxSession.Close() //nolint:errcheck
-
-	contextJSON := callToolSoft(ctx, ctxSession, "get_context", map[string]any{
+	// 6. Get context for this power
+	contextJSON := callToolSoft(ctx, session, "get_context", map[string]any{
 		"deliberation_id": deliberationID,
 		"agent_id":        strings.ToLower(power) + "-agent",
 	})
 	if contextJSON == "" {
-		return "", fmt.Errorf("no analysis results available — analysis may have failed")
+		// Session may have died — reconnect and retry once
+		session.Close() //nolint:errcheck
+		var reconnErr error
+		session, reconnErr = connect(ctx, url, secret)
+		if reconnErr != nil {
+			return "", fmt.Errorf("reconnect for get_context: %w", reconnErr)
+		}
+		contextJSON = callToolSoft(ctx, session, "get_context", map[string]any{
+			"deliberation_id": deliberationID,
+			"agent_id":        strings.ToLower(power) + "-agent",
+		})
+	}
+	if contextJSON == "" {
+		return "", fmt.Errorf("no analysis results available")
 	}
 
 	// 7. Format as briefing
