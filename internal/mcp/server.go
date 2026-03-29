@@ -485,11 +485,14 @@ func (s *server) handleAnalyze(ctx context.Context, _ *sdkmcp.CallToolRequest, a
 		analyzeCtx = context.WithValue(analyzeCtx, llm.ContextKeyModel{}, args.Model)
 	}
 
-	// Sandbox users can't analyze (requires credits)
+	// Sandbox users get 1 free analysis per deliberation
 	if sandbox, _ := ctx.Value(payments.ContextKeySandbox{}).(bool); sandbox {
 		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
 		if apiKey == "" {
-			return errResult(fmt.Errorf("analysis requires an API key — get one at https://gemot.dev/pricing"))
+			existing, _ := s.svc.GetLatestAnalysisResult(args.DeliberationID)
+			if existing != nil {
+				return errResult(fmt.Errorf("sandbox deliberations get 1 free analysis — get an API key at https://gemot.dev/pricing for more"))
+			}
 		}
 	}
 
