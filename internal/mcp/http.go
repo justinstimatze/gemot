@@ -47,7 +47,19 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	}
 	paymentMiddleware := payments.Middleware(mppCfg, apiSecret, creditStore)
 
-	mcpHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
+	// Serve both SSE (legacy) and streamable-http transports on the same path.
+	// Claude Code currently requires SSE; streamable-http is the newer MCP spec.
+	sseHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
+	streamHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
+	mcpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// SSE clients send GET to establish the event stream; streamable-http clients POST.
+		// Route GET to SSE, POST to streamable (which also handles SSE POSTs correctly).
+		if r.Method == http.MethodGet {
+			sseHandler.ServeHTTP(w, r)
+		} else {
+			streamHandler.ServeHTTP(w, r)
+		}
+	})
 
 	baseURL := os.Getenv("GEMOT_BASE_URL")
 	if baseURL == "" {
@@ -183,29 +195,6 @@ No API key needed — the join code is your credential.
 	// A2A endpoint — JSON-RPC for all gemot tools (authenticated, rate-limited)
 	a2aLimiter := payments.NewRateLimiter(30, time.Minute) // 30/min, same as MCP
 	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB))
-
-	// OAuth discovery endpoints — Claude Code probes these before connecting.
-	// Gemot uses bearer tokens, not OAuth, but returning valid empty metadata
-	// prevents the client from interpreting a 404 as "auth required but broken."
-	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-			"resource":                baseURL + "/mcp",
-			"bearer_methods_supported": []string{"header"},
-		})
-	})
-	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		// Minimal valid OAuth authorization server metadata
-		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-			"issuer":                 baseURL,
-			"authorization_endpoint": baseURL + "/oauth/authorize",
-			"token_endpoint":         baseURL + "/oauth/token",
-			"response_types_supported": []string{"code"},
-		})
-	})
 
 	// Stripe Checkout — purchase credit packs (public)
 	mux.HandleFunc("/checkout", payments.CheckoutHandler(creditStore, baseURL))
