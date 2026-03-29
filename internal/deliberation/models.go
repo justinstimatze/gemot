@@ -35,14 +35,17 @@ type Position struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// JoinCode is a short-lived, single-use code for joining a deliberation without an API key.
+// JoinCode is a short-lived code for joining a deliberation without an API key.
+// Sandbox codes are multi-use (up to MaxUses); private codes default to single-use.
 type JoinCode struct {
 	Code           string    `json:"code"`
 	DeliberationID string    `json:"deliberation_id"`
 	Role           string    `json:"role,omitempty"`   // suggested role: "contributor", "reviewer", etc.
 	ExpiresAt      time.Time `json:"expires_at"`
-	Used           bool      `json:"used"`
-	UsedBy         string    `json:"used_by,omitempty"` // agent_id that claimed it
+	Used           bool      `json:"used"`             // true when use_count >= max_uses
+	UsedBy         string    `json:"used_by,omitempty"` // last agent_id that claimed it
+	UseCount       int       `json:"use_count"`
+	MaxUses        int       `json:"max_uses"` // how many agents can use this code (1 = single-use)
 	CreatedAt      time.Time `json:"created_at"`
 }
 

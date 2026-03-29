@@ -15,5 +15,5 @@ Gemot is an MCP server written in Go that exposes structured deliberation as too
 go build -o gemot .     # Build
 go test ./...           # Test
 ./gemot serve           # Start MCP server (stdio)
-./gemot http            # Start HTTP/SSE server
+./gemot http            # Start HTTP server (streamable-http)
 ```

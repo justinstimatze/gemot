@@ -39,7 +39,7 @@ func TestLiveDeliberation(t *testing.T) {
 	ctx := context.Background()
 
 	// Connect as MCP client with auth
-	transport := &sdkmcp.SSEClientTransport{
+	transport := &sdkmcp.StreamableClientTransport{
 		Endpoint: liveURL,
 		HTTPClient: &http.Client{
 			Transport: &authTransport{
@@ -190,7 +190,7 @@ func TestLiveDeliberation(t *testing.T) {
 func newLiveSession(t *testing.T, liveURL, apiSecret string) *sdkmcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
-	transport := &sdkmcp.SSEClientTransport{
+	transport := &sdkmcp.StreamableClientTransport{
 		Endpoint: liveURL,
 		HTTPClient: &http.Client{
 			Transport: &authTransport{

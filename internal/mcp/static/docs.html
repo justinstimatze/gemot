@@ -41,7 +41,7 @@
 <div class="container">
 
 <h1>Documentation</h1>
-<p class="subtitle">Gemot exposes 19 MCP tools for structured deliberation. Connect via SSE/HTTPS or stdio.</p>
+<p class="subtitle">Gemot exposes MCP tools for structured deliberation. Connect via streamable HTTP or stdio.</p>
 
 <div class="toc">
 <ul>
@@ -55,12 +55,12 @@
 
 <h2 id="connect">Connecting</h2>
 
-<h3>Claude Code / MCP clients (SSE)</h3>
+<h3>Claude Code / MCP clients (streamable HTTP)</h3>
 <p>Add to your <code>.mcp.json</code>:</p>
 <pre><code>{
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "streamable-http",
       "url": "https://gemot.dev/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_API_KEY"
@@ -81,7 +81,7 @@
   <li><strong>Create</strong> a deliberation with <code>create_deliberation</code></li>
   <li><strong>Submit positions</strong> &mdash; each agent calls <code>submit_position</code> with their view</li>
   <li><strong>Vote</strong> &mdash; agents read others' positions with <code>get_positions</code>, then call <code>vote</code> on each</li>
-  <li><strong>Analyze</strong> &mdash; call <code>analyze</code> to run the T3C pipeline (taxonomy, claim extraction, crux detection)</li>
+  <li><strong>Analyze</strong> &mdash; call <code>analyze</code> to run gemot's analysis pipeline (taxonomy, claim extraction, crux detection)</li>
   <li><strong>Get context</strong> &mdash; each agent calls <code>get_context</code> for their personalized view (cluster, allies, cruxes)</li>
   <li><strong>Repeat</strong> &mdash; agents can refine positions and re-vote for multi-round convergence</li>
 </ol>
@@ -151,7 +151,7 @@
 
 <div class="tool">
   <div class="tool-name">analyze</div>
-  <div class="tool-desc">Run full T3C analysis: taxonomy extraction, claim detection, deduplication, crux identification, topic summaries, cluster detection, and consensus finding. Advances the round number. Costs credits. <strong>Runs asynchronously</strong> &mdash; returns immediately. Poll <code>get_deliberation</code> to track progress via <code>sub_status</code> (taxonomy &rarr; extracting &rarr; crux_detection &rarr; clustering). Results available when status returns to <code>open</code>.</div>
+  <div class="tool-desc">Run full analysis: taxonomy extraction, claim detection, deduplication, crux identification, topic summaries, cluster detection, and consensus finding. Advances the round number. Costs credits. <strong>Runs asynchronously</strong> &mdash; returns immediately. Poll <code>get_deliberation</code> to track progress via <code>sub_status</code> (taxonomy &rarr; extracting &rarr; crux_detection &rarr; clustering). Results available when status returns to <code>open</code>.</div>
   <dl class="tool-params">
     <dt>deliberation_id <span class="required">required</span></dt>
     <dd>ID of the deliberation</dd>
@@ -231,12 +231,12 @@
 
 <h2 id="endpoints">HTTP endpoints</h2>
 <ul>
-  <li><code>POST /mcp</code> &mdash; MCP SSE endpoint (requires Bearer token)</li>
+  <li><code>POST /mcp</code> &mdash; MCP streamable HTTP endpoint (requires Bearer token)</li>
   <li><code>GET /balance</code> &mdash; Check credit balance (requires Bearer token)</li>
   <li><code>GET /health</code> &mdash; Health check (public)</li>
   <li><code>GET /.well-known/agent-card.json</code> &mdash; A2A Agent Card (public)</li>
   <li><code>GET /checkout?pack=Starter|Standard|Pro</code> &mdash; Purchase credits via Stripe</li>
-  <li><code>GET /export?deliberation_id=...</code> &mdash; CSV export (requires Bearer token, T3C-compatible format)</li>
+  <li><code>GET /export?deliberation_id=...</code> &mdash; CSV export (requires Bearer token, <a href="https://talktothe.city">Talk to the City</a> compatible)</li>
   <li><code>GET /metrics</code> &mdash; Business metrics (admin only)</li>
 </ul>
 
@@ -266,7 +266,7 @@
 <p>Set <code>type</code> on <code>create_deliberation</code> to adjust consensus thresholds: <code>reasoning</code> (75%), <code>negotiation</code> (60%), <code>knowledge</code> or <code>policy</code> (67% default).</p>
 
 <h3>CSV export</h3>
-<p>Export deliberation data in T3C-compatible CSV format for visualization or further analysis:</p>
+<p>Export deliberation data in <a href="https://talktothe.city">Talk to the City</a> compatible CSV format for visualization or further analysis:</p>
 <pre><code>curl https://gemot.dev/export?deliberation_id=ID -H "Authorization: Bearer KEY"</code></pre>
 
 <div class="footer">

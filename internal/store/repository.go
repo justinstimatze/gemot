@@ -433,8 +433,8 @@ func (s *DB) UpdateCommitmentStatus(id, status string) error {
 
 func (s *DB) CreateJoinCode(jc *deliberation.JoinCode) error {
 	_, err := s.db.Exec(
-		`INSERT INTO join_codes (code, deliberation_id, role, expires_at, created_at) VALUES (?, ?, ?, ?, ?)`,
-		jc.Code, jc.DeliberationID, jc.Role, jc.ExpiresAt.Format(time.RFC3339), jc.CreatedAt.Format(time.RFC3339),
+		`INSERT INTO join_codes (code, deliberation_id, role, expires_at, created_at, max_uses, use_count) VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		jc.Code, jc.DeliberationID, jc.Role, jc.ExpiresAt.Format(time.RFC3339), jc.CreatedAt.Format(time.RFC3339), jc.MaxUses,
 	)
 	return err
 }
@@ -442,32 +442,35 @@ func (s *DB) CreateJoinCode(jc *deliberation.JoinCode) error {
 func (s *DB) ClaimJoinCode(code, agentID string) (*deliberation.JoinCode, error) {
 	jc := &deliberation.JoinCode{}
 	var expiresAt, createdAt string
-	var used int
 	err := s.db.QueryRow(
-		`SELECT code, deliberation_id, role, expires_at, used, used_by, created_at FROM join_codes WHERE code = ?`, code,
-	).Scan(&jc.Code, &jc.DeliberationID, &jc.Role, &expiresAt, &used, &jc.UsedBy, &createdAt)
+		`SELECT code, deliberation_id, role, expires_at, COALESCE(used_by, ''), created_at, max_uses, use_count FROM join_codes WHERE code = ?`, code,
+	).Scan(&jc.Code, &jc.DeliberationID, &jc.Role, &expiresAt, &jc.UsedBy, &createdAt, &jc.MaxUses, &jc.UseCount)
 	if err != nil {
 		return nil, fmt.Errorf("invalid join code")
 	}
 	jc.ExpiresAt = parseTime(expiresAt)
 	jc.CreatedAt = parseTime(createdAt)
-	jc.Used = used == 1
 
-	if jc.Used {
-		return nil, fmt.Errorf("join code already used")
-	}
 	if time.Now().After(jc.ExpiresAt) {
 		return nil, fmt.Errorf("join code expired")
 	}
+	if jc.UseCount >= jc.MaxUses {
+		return nil, fmt.Errorf("join code has reached maximum uses (%d)", jc.MaxUses)
+	}
 
-	_, err = s.db.Exec(
-		`UPDATE join_codes SET used = 1, used_by = ? WHERE code = ? AND used = 0`,
+	res, err := s.db.Exec(
+		`UPDATE join_codes SET use_count = use_count + 1, used_by = ? WHERE code = ? AND use_count < max_uses`,
 		agentID, code,
 	)
 	if err != nil {
 		return nil, err
 	}
-	jc.Used = true
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fmt.Errorf("join code has reached maximum uses")
+	}
+
+	jc.UseCount++
+	jc.Used = jc.UseCount >= jc.MaxUses
 	jc.UsedBy = agentID
 	return jc, nil
 }
@@ -475,16 +478,15 @@ func (s *DB) ClaimJoinCode(code, agentID string) (*deliberation.JoinCode, error)
 func (s *DB) LookupJoinCode(code string) (*deliberation.JoinCode, error) {
 	jc := &deliberation.JoinCode{}
 	var expiresAt, createdAt string
-	var used int
 	err := s.db.QueryRow(
-		`SELECT code, deliberation_id, role, expires_at, used, COALESCE(used_by, ''), created_at FROM join_codes WHERE code = ?`, code,
-	).Scan(&jc.Code, &jc.DeliberationID, &jc.Role, &expiresAt, &used, &jc.UsedBy, &createdAt)
+		`SELECT code, deliberation_id, role, expires_at, COALESCE(used_by, ''), created_at, max_uses, use_count FROM join_codes WHERE code = ?`, code,
+	).Scan(&jc.Code, &jc.DeliberationID, &jc.Role, &expiresAt, &jc.UsedBy, &createdAt, &jc.MaxUses, &jc.UseCount)
 	if err != nil {
 		return nil, fmt.Errorf("join code not found")
 	}
 	jc.ExpiresAt = parseTime(expiresAt)
 	jc.CreatedAt = parseTime(createdAt)
-	jc.Used = used == 1
+	jc.Used = jc.UseCount >= jc.MaxUses
 	return jc, nil
 }
 

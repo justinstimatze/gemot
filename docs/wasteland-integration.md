@@ -80,7 +80,7 @@ Each rig already speaks MCP. Add gemot as an MCP server in the rig's tool config
 {
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "streamable-http",
       "url": "https://gemot.dev/mcp",
       "headers": { "Authorization": "Bearer <api_key>" }
     }

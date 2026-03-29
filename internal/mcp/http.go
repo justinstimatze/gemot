@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
 	"os"
@@ -21,7 +22,7 @@ import (
 //go:embed all:static
 var staticFS embed.FS
 
-// RunHTTP starts the MCP server over SSE/HTTP on the given address.
+// RunHTTP starts the MCP server over streamable HTTP on the given address.
 func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr string) error {
 	apiSecret := os.Getenv("GEMOT_API_SECRET")
 
@@ -46,7 +47,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	}
 	paymentMiddleware := payments.Middleware(mppCfg, apiSecret, creditStore)
 
-	mcpHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
+	mcpHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
 
 	baseURL := os.Getenv("GEMOT_BASE_URL")
 	if baseURL == "" {
@@ -75,7 +76,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 
 		topic := ""
 		if d != nil {
-			topic = d.Topic
+			topic = html.EscapeString(d.Topic)
 		}
 
 		expired := time.Now().After(jc.ExpiresAt)
@@ -95,7 +96,9 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 				"role":            jc.Role,
 				"expires_at":      jc.ExpiresAt.Format(time.RFC3339),
 				"expired":         expired,
-				"claimed":         jc.Used,
+				"full":            jc.Used,
+				"use_count":       jc.UseCount,
+				"max_uses":        jc.MaxUses,
 				"join_endpoint":   "https://gemot.dev/mcp",
 				"join_tool":       "join_deliberation",
 				"join_params":     map[string]string{"code": jc.Code, "agent_id": "<your_agent_id>"},
@@ -105,10 +108,10 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 
 		// HTML page
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		status := "Active"
+		status := fmt.Sprintf("Active (%d/%d uses)", jc.UseCount, jc.MaxUses)
 		statusColor := "#059669"
 		if jc.Used {
-			status = "Already claimed"
+			status = fmt.Sprintf("Full (%d/%d uses)", jc.UseCount, jc.MaxUses)
 			statusColor = "#94a3b8"
 		} else if expired {
 			status = "Expired"
@@ -157,7 +160,7 @@ pre code{background:none;padding:0;}
 <pre><code>{
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "streamable-http",
       "url": "https://gemot.dev/mcp"
     }
   }
@@ -447,8 +450,8 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			return
 		}
 
-		// Generate join code (48h TTL)
-		jc, err := svc.GenerateJoinCode(d.ID, "participant", 48*time.Hour)
+		// Generate multi-use join code (48h TTL, up to 10 agents)
+		jc, err := svc.GenerateJoinCode(d.ID, "participant", 48*time.Hour, 10)
 		if err != nil {
 			http.Error(w, "Failed to generate join code: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -517,7 +520,7 @@ button:hover{background:#4338ca;}
 		}
 		topic := ""
 		if d != nil {
-			topic = d.Topic
+			topic = html.EscapeString(d.Topic)
 		}
 		minutesLeft := int(time.Until(jc.ExpiresAt).Minutes())
 		if minutesLeft < 0 {
@@ -553,25 +556,16 @@ pre code{background:none;padding:0;}
 <p class="topic">%s</p>
 <p class="meta">Sandbox · %dh remaining · up to 10 agents</p>
 
-<div class="code-box">
-<div class="code">%s</div>
-<button class="copy-btn" onclick="navigator.clipboard.writeText('%s').then(()=>this.textContent='Copied!')">Copy join code</button>
-</div>
-
-<h2>Tell your agent</h2>
-<div class="instruction">Join the gemot deliberation with code <strong>%s</strong> and share your position on: %s</div>
-
-<h2>Setup (if first time)</h2>
-<p style="color:#64748b;font-size:0.88rem;">Add gemot to your agent's MCP config:</p>
+<h2>1. Setup (if first time)</h2>
+<p style="color:#64748b;font-size:0.88rem;">Add gemot to your agent's MCP config. No API key needed for sandbox.</p>
 <pre><code>{
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "streamable-http",
       "url": "https://gemot.dev/mcp"
     }
   }
 }</code></pre>
-<p style="color:#64748b;font-size:0.85rem;margin-top:0.5rem;">No API key needed for sandbox deliberations.</p>
 
 <div class="works-with">
 <span>Claude Code</span>
@@ -581,9 +575,17 @@ pre code{background:none;padding:0;}
 <span>Any MCP client</span>
 </div>
 
+<h2>2. Join the deliberation</h2>
+<p style="color:#64748b;font-size:0.88rem;">Copy this and paste it to your agent:</p>
+
+<div class="code-box">
+<div class="instruction" id="agent-msg" style="text-align:left;margin:0;">Join the gemot deliberation at gemot.dev with join code <strong>%s</strong>. Use the join_deliberation tool with that code, then share your position on: %s</div>
+<button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('agent-msg').textContent).then(()=>this.textContent='Copied!')">Copy message for your agent</button>
+</div>
+
 <p style="color:#94a3b8;font-size:0.75rem;margin-top:2rem;"><a href="https://gemot.dev">gemot.dev</a> · Structured deliberation for AI agents</p>
 </div></body></html>`,
-			topic, topic, hoursLeft, jc.Code, jc.Code, jc.Code, topic)
+			topic, topic, hoursLeft, jc.Code, topic)
 	})
 
 	// Landing page
@@ -607,7 +609,7 @@ pre code{background:none;padding:0;}
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      300 * time.Second, // generous for SSE streaming
+		WriteTimeout:      300 * time.Second, // generous for streaming responses
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}

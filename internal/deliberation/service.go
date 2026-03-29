@@ -975,13 +975,17 @@ func (s *Service) GetCommitments(deliberationID string) ([]Commitment, error) {
 	return s.store.GetCommitments(deliberationID)
 }
 
-// GenerateJoinCode creates a short-lived join code for a deliberation.
-// The code allows an unauthenticated agent to join a single deliberation
-// with a temporary identity. Used for PR review workflows where the
-// contributor doesn't need a gemot account.
-func (s *Service) GenerateJoinCode(deliberationID, role string, ttl time.Duration) (*JoinCode, error) {
+// GenerateJoinCode creates a join code for a deliberation.
+// Optional maxUses controls how many agents can use the same code (default 1 = single-use).
+// Sandbox codes should use maxUses > 1 so every visitor to the /try page can join.
+func (s *Service) GenerateJoinCode(deliberationID, role string, ttl time.Duration, maxUses ...int) (*JoinCode, error) {
 	if _, err := s.store.GetDeliberation(deliberationID); err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+
+	mu := 1
+	if len(maxUses) > 0 && maxUses[0] > 0 {
+		mu = maxUses[0]
 	}
 
 	// Generate a memorable, human-readable code like "bold-cedar-7291"
@@ -992,6 +996,7 @@ func (s *Service) GenerateJoinCode(deliberationID, role string, ttl time.Duratio
 		DeliberationID: deliberationID,
 		Role:           role,
 		ExpiresAt:      time.Now().Add(ttl),
+		MaxUses:        mu,
 		CreatedAt:      time.Now(),
 	}
 	if err := s.store.CreateJoinCode(jc); err != nil {
