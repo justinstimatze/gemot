@@ -47,8 +47,8 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 		t.Fatalf("expected 'not open' error, got: %v", err)
 	}
 
-	// 5. Ensure status_changed_at is clearly recent (same clock as recovery check)
-	recentTime := time.Now().Format(time.RFC3339)
+	// 5. Ensure status_changed_at is clearly recent (same clock as recovery check — UTC)
+	recentTime := time.Now().UTC().Format(time.RFC3339)
 	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = ? WHERE id = ?`, recentTime, d.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// 6. Manually set status_changed_at to 15 minutes ago (simulates stuck-for-15-min)
-	oldTime := time.Now().Add(-15 * time.Minute).Format(time.RFC3339)
+	oldTime := time.Now().UTC().Add(-15 * time.Minute).Format(time.RFC3339)
 	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = ? WHERE id = ?`, oldTime, d.ID); err != nil {
 		t.Fatal(err)
 	}
