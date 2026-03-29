@@ -253,6 +253,78 @@
 
 <details class="demo-card" open>
 <summary>
+  <div class="demo-card-title">OSS Governance &mdash; merge, reject, or negotiate a FAANG PR?</div>
+  <div class="demo-card-desc">Your open-source project (10K stars, 3 maintainers) gets a PR from a FAANG company. 40% of users want the feature &mdash; but it doubles the API surface and depends on their proprietary SDK. Three agents deliberate: negotiate, reject, and a mediator invited mid-debate.</div>
+</summary>
+<div class="demo-card-body">
+
+<div class="agent agent-blue">
+  <div class="agent-name">Negotiate Agent</div>
+  <div class="agent-position">Kill the proprietary SDK dependency &mdash; non-negotiable. Cut the API surface in half. Require a named maintenance contact for 12 months. Stage it behind a feature flag. Rejecting outright risks a fork or user exodus.</div>
+</div>
+
+<div class="agent agent-red">
+  <div class="agent-name">Reject Agent</div>
+  <div class="agent-position">&ldquo;Negotiate from strength&rdquo; sounds pragmatic, but you can't enforce maintenance commitments on a FAANG company. People get re-orged. The adapter pattern becomes a fig leaf shaped exactly to their SDK. Publish a plugin API &mdash; let them ship it as a separate package.</div>
+</div>
+
+<div class="agent agent-purple">
+  <div class="agent-name">Mediator (invited mid-debate)</div>
+  <div class="agent-position">Strip away the rhetoric and both sides converge on three points: the SDK dependency is unacceptable, 3 maintainers can't absorb the burden, and the company's commitment is unreliable. The real disagreement is narrower: what do you do if the company <em>won't</em> go the plugin route? Position 1 underestimates scope creep. Position 2 romanticizes rejection &mdash; a FAANG-backed fork that captures 30% of the ecosystem fragments the community even if it dies.</div>
+</div>
+
+<h3>Cruxes detected</h3>
+<div class="crux">
+  <div class="crux-meta">
+    <span class="crux-topic">Governance</span>
+    <span class="crux-controversy">High</span>
+  </div>
+  <div class="crux-claim">&ldquo;A 3-maintainer project can enforce contractual maintenance commitments on a FAANG contributor.&rdquo;</div>
+  <div class="crux-sides">
+    <div class="crux-side crux-agree">
+      <div class="crux-side-label">Agree</div>
+      <span class="pill pill-agree">Negotiate</span>
+    </div>
+    <div class="crux-side crux-disagree">
+      <div class="crux-side-label">Disagree</div>
+      <span class="pill pill-disagree">Reject</span> <span class="pill pill-disagree">Mediator</span>
+    </div>
+  </div>
+  <div class="crux-explanation">The mediator noted it depends on <em>who</em> is driving the PR &mdash; a passionate IC (enforceable) vs a product team checking a box (not). Neither original position asked this.</div>
+</div>
+
+<div class="crux">
+  <div class="crux-meta">
+    <span class="crux-topic">User Demand</span>
+    <span class="crux-controversy">Moderate</span>
+  </div>
+  <div class="crux-claim">&ldquo;The 40% user demand for this feature is organic, not astroturfed by the company's own users.&rdquo;</div>
+  <div class="crux-sides">
+    <div class="crux-side crux-agree">
+      <div class="crux-side-label">Takes at face value</div>
+      <span class="pill pill-agree">Negotiate</span>
+    </div>
+    <div class="crux-side crux-disagree">
+      <div class="crux-side-label">Wants investigation</div>
+      <span class="pill pill-disagree">Reject</span> <span class="pill pill-disagree">Mediator</span>
+    </div>
+  </div>
+  <div class="crux-explanation">The mediator proposed concrete steps neither side considered: segment requestors by account age, check prior engagement, look for coordinated activity.</div>
+</div>
+
+<h3>Synthesis</h3>
+<div class="topic-summary">
+  <div class="topic-name">Hybrid: reject's destination + negotiate's method</div>
+  Respond to the PR with a counter-proposal: &ldquo;Here's a draft plugin interface. Would your team ship this as an external package?&rdquo; If they agree, both sides win. If they push back, you've learned whether this is a contribution or a capture attempt &mdash; and decide accordingly.
+</div>
+
+<p style="color:#64748b;font-size:0.85rem;margin-top:1rem;font-style:italic;">Three agents &mdash; one invited mid-debate as mediator. The analysis found 80% shared ground, isolated 3 cruxes, and proposed a strategy none started with.</p>
+
+</div>
+</details>
+
+<details class="demo-card">
+<summary>
   <div class="demo-card-title">Calendar Scheduling &mdash; 5 agents find a meeting time</div>
   <div class="demo-card-desc">Five team members' agents negotiate a 1-hour meeting without sharing calendars. Morning people vs afternoon people. Hard constraints (school pickup, offsite, timezone). Gemot finds the one slot that works.</div>
 </summary>
@@ -414,16 +486,6 @@
 
 <p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">Generated March 26, 2026 &middot; real LLM analysis &middot; 2m14s</p>
 
-</div>
-</details>
-
-<details class="demo-card">
-<summary>
-  <div class="demo-card-title">PR Review &mdash; 3 agents review a codebase</div>
-  <div class="demo-card-desc">Contributor, reviewer, and architect deliberate on gemot's own commits. Identifies architectural cruxes like when to add abstraction layers. Coming soon.</div>
-</summary>
-<div class="demo-card-body">
-  <p style="color:#64748b; padding:2rem 0; text-align:center;">Demo coming soon. Run it yourself with <code>go run ./scripts/pr-review</code></p>
 </div>
 </details>
 
