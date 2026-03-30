@@ -72,11 +72,12 @@ type Message struct {
 
 // scope describes a deliberation at a particular scope level.
 type scope struct {
-	name     string   // e.g., "global", "ENGLAND-FRANCE", "ENGLAND-FRANCE-RUSSIA"
-	scopeTag string   // "global", "bilateral", "alliance"
-	template string   // gemot template: "assembly", "negotiation", "consensus"
-	powers   []string // which powers participate
-	messages []Message
+	name      string   // e.g., "global", "ENGLAND-FRANCE", "ENGLAND-FRANCE-RUSSIA"
+	scopeTag  string   // "global", "bilateral", "alliance"
+	template  string   // gemot template: "assembly", "negotiation", "consensus"
+	delibType string   // gemot type: "reasoning", "knowledge", "negotiation", "policy"
+	powers    []string // which powers participate
+	messages  []Message
 }
 
 // scopeResult holds the analysis context for each power in a deliberation.
@@ -206,30 +207,32 @@ func buildScopes(messages []Message, alliances [][]string, year int) []scope {
 
 	var scopes []scope
 
-	// Global scope → assembly (broad multi-party discourse)
+	// Global scope → policy type + assembly template
 	if len(globalMsgs) > 0 {
 		scopes = append(scopes, scope{
 			name:     "global",
 			scopeTag: "global",
 			template: "assembly",
+			delibType: "policy",
 			powers:   powers,
 			messages: globalMsgs,
 		})
 	}
 
-	// Bilateral scopes → negotiation (two-party, ZOPA/BATNA analysis)
+	// Bilateral scopes → negotiation type + negotiation template
 	for key, msgs := range bilateral {
 		parts := strings.SplitN(key, "-", 2)
 		scopes = append(scopes, scope{
 			name:     key,
 			scopeTag: "bilateral",
 			template: "negotiation",
+			delibType: "negotiation",
 			powers:   parts,
 			messages: msgs,
 		})
 	}
 
-	// Alliance scopes → consensus (coalition coordination, all members must engage)
+	// Alliance scopes → negotiation type + consensus template
 	for _, alliance := range alliances {
 		var msgs []Message
 		for i := 0; i < len(alliance); i++ {
@@ -243,6 +246,7 @@ func buildScopes(messages []Message, alliances [][]string, year int) []scope {
 				name:     strings.Join(alliance, "+"),
 				scopeTag: "alliance",
 				template: "consensus",
+				delibType: "negotiation",
 				powers:   alliance,
 				messages: msgs,
 			})
@@ -512,11 +516,11 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 		desc = fmt.Sprintf("Multi-party diplomatic messages within the %s alliance during Year %d.", sc.name, gameYear)
 	}
 
-	// 1. Create deliberation with scope-appropriate template
+	// 1. Create deliberation with scope-appropriate type, then set template
 	createJSON := callTool(ctx, session, "create_deliberation", map[string]any{
 		"topic":       topic,
 		"description": desc,
-		"type":        sc.template,
+		"type":        sc.delibType,
 	})
 
 	var createResp struct {
@@ -524,6 +528,14 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 	}
 	mustParse(createJSON, &createResp)
 	deliberationID := createResp.DeliberationID
+
+	// Set template for scope-appropriate rules and analysis framing
+	if sc.template != "" {
+		callToolSoft(ctx, session, "set_template", map[string]any{
+			"deliberation_id": deliberationID,
+			"template":        sc.template,
+		})
+	}
 
 	// 2. Submit each message as a position
 	for _, msg := range sc.messages {
