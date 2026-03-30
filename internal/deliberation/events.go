@@ -67,13 +67,6 @@ func (eb *EventBus) Emit(e Event) {
 	}
 }
 
-// HasSubscribers returns true if anyone is listening.
-func (eb *EventBus) HasSubscribers() bool {
-	eb.mu.RLock()
-	defer eb.mu.RUnlock()
-	return len(eb.clients) > 0
-}
-
 // MarshalEvent serializes an event to JSON.
 func MarshalEvent(e Event) ([]byte, error) {
 	return json.Marshal(e)
