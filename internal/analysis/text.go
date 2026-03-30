@@ -422,7 +422,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	}
 
 	// Step 3: Group claims by subtopic, deduplicate, then detect cruxes
-	reportProgress(ctx, "crux_detection")
+	reportProgress(ctx, "deduplicating")
 	var cruxes []deliberation.Crux
 	var summaries []deliberation.TopicSummary
 
@@ -440,6 +440,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 			})
 		}
 
+		reportProgress(ctx, "crux_detection")
 		foundSubtopicCrux := false
 		for _, subtopic := range topic.Subtopics {
 			// Filter claims for this subtopic
@@ -569,6 +570,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	clusters := buildClusters(cruxes, agents)
 
 	// Step 5: Compute effective weights, then find consensus and bridging
+	reportProgress(ctx, "synthesizing")
 	// Trust weights from integrity signals
 	// Determine current round from positions for trust decay
 	currentRound := 1
@@ -615,6 +617,9 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	var bridging []deliberation.BridgingStatement
 	if refused {
 		warnings = append(warnings, "ANALYSIS_REFUSED: integrity too compromised to produce reliable consensus/bridging. Cruxes and warnings are still available. Fix the underlying issues and re-analyze.")
+	} else if len(votes) == 0 {
+		// No votes (e.g. bilateral negotiations): use LLM to find agreement directly from positions
+		consensus, bridging = a.findAgreementsLLM(ctx, deliberationTopic, positions, cruxes)
 	} else {
 		consensus = findConsensus(ctx, positions, votes, clusters, effectiveWeights)
 		bridging = findBridging(positions, votes, clusters, effectiveWeights)
@@ -1795,4 +1800,100 @@ func (a *TextAnalyzer) analyzeParetoSurface(ctx context.Context, topic string, c
 		return nil, nil // soft fail
 	}
 	return result.ParetoEfficient, result.Dominated
+}
+
+// findAgreementsLLM uses the LLM to identify shared ground and compromises
+// when there are no votes (e.g. bilateral negotiations between 2 agents).
+// Returns consensus statements (from shared ground) and bridging statements (from compromises).
+func (a *TextAnalyzer) findAgreementsLLM(ctx context.Context, topic string, positions []deliberation.Position, cruxes []deliberation.Crux) ([]deliberation.ConsensusStatement, []deliberation.BridgingStatement) {
+	if len(positions) == 0 {
+		return nil, nil
+	}
+
+	// Format positions
+	var posText string
+	for _, p := range positions {
+		posText += fmt.Sprintf("[%s]: %s\n\n", p.AgentID, p.Content)
+	}
+
+	// Format cruxes
+	var cruxText string
+	if len(cruxes) > 0 {
+		for i, c := range cruxes {
+			cruxText += fmt.Sprintf("%d. %s\n", i+1, c.Claim)
+		}
+	} else {
+		cruxText = "(no cruxes detected)"
+	}
+
+	prompt := fmt.Sprintf(agreementPrompt, topic, posText, cruxText)
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"shared_ground": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"content":      map[string]any{"type": "string"},
+						"participants": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					},
+					"required": []string{"content", "participants"},
+				},
+			},
+			"compromises": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"crux":      map[string]any{"type": "string"},
+						"proposal":  map[string]any{"type": "string"},
+						"rationale": map[string]any{"type": "string"},
+					},
+					"required": []string{"crux", "proposal", "rationale"},
+				},
+			},
+		},
+		"required": []string{"shared_ground", "compromises"},
+	}
+
+	var result struct {
+		SharedGround []struct {
+			Content      string   `json:"content"`
+			Participants []string `json:"participants"`
+		} `json:"shared_ground"`
+		Compromises []struct {
+			Crux      string `json:"crux"`
+			Proposal  string `json:"proposal"`
+			Rationale string `json:"rationale"`
+		} `json:"compromises"`
+	}
+
+	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
+		log.Printf("[gemot] LLM agreement detection failed: %v", err)
+		return nil, nil
+	}
+
+	// Convert shared ground to consensus statements
+	var consensus []deliberation.ConsensusStatement
+	for _, sg := range result.SharedGround {
+		consensus = append(consensus, deliberation.ConsensusStatement{
+			Content:              sg.Content,
+			OverallAgreeRatio:    0.7, // LLM-inferred, not vote-verified
+			MinClusterAgreeRatio: 0.7,
+		})
+	}
+
+	// Convert compromises to bridging statements
+	var bridging []deliberation.BridgingStatement
+	for _, c := range result.Compromises {
+		bridging = append(bridging, deliberation.BridgingStatement{
+			Content:       c.Proposal,
+			BridgingScore: 0.6, // proposed compromise, not yet endorsed
+			AgentID:       "mediator",
+		})
+	}
+
+	return consensus, bridging
 }

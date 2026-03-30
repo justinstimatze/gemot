@@ -820,7 +820,7 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 			// Lead with compromise/ZOPA (what's possible)
 			if bc.ctx.CompromiseProposal != "" {
 				proposal := bc.ctx.CompromiseProposal
-				proposal = truncateRunes(proposal, 300)
+				proposal = truncateRunes(proposal, 1000)
 				fmt.Fprintf(&b, "  AVAILABLE COMPROMISE: %s\n", proposal)
 			}
 
@@ -828,7 +828,7 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 			if len(bc.ctx.BridgingStatements) > 0 {
 				for _, bs := range bc.ctx.BridgingStatements {
 					content := bs.Content
-					content = truncateRunes(content, 150)
+					content = truncateRunes(content, 500)
 					fmt.Fprintf(&b, "  SHARED GROUND: %s (%.0f%% support)\n", content, bs.BridgingScore*100)
 				}
 			}
@@ -848,7 +848,7 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 					fmt.Fprintf(&b, "    • %s\n", c.Claim)
 					if c.Explanation != "" {
 						expl := c.Explanation
-						expl = truncateRunes(expl, 200)
+						expl = truncateRunes(expl, 500)
 						fmt.Fprintf(&b, "      %s\n", expl)
 					}
 				}
