@@ -81,6 +81,12 @@ type AgentContext struct {
 	BridgingStatements   []BridgingStatement  `json:"bridging_statements,omitempty"`    // positions with cross-cluster agreement
 	ConsensusStatements  []ConsensusStatement `json:"consensus_statements,omitempty"`   // positions with 67%+ weighted agreement
 	EffectiveWeight      float64              `json:"effective_weight,omitempty"`        // this agent's weight in consensus (trust × correlation × conviction)
+	// Cooperation framing
+	CompromiseProposal   string               `json:"compromise_proposal,omitempty"`    // specific proposal both sides could accept
+	FailureScenarios     []string             `json:"failure_scenarios,omitempty"`      // what happens if deliberation fails (BATNA)
+	ConstitutionalRules  []string             `json:"constitutional_rules,omitempty"`   // settled principles from prior rounds (80%+ consensus)
+	EmergentNorms        []string             `json:"emergent_norms,omitempty"`         // cooperative patterns that worked
+	RuleViolations       []string             `json:"rule_violations,omitempty"`        // positions contradicting prior agreements
 	StrategicNudge       string               `json:"strategic_nudge,omitempty"`         // actionable guidance based on position
 	DiversityNudge       string               `json:"diversity_nudge,omitempty"`         // anti-sycophancy: encourages maintaining genuine disagreement
 	PendingInvitations   []Invitation         `json:"pending_invitations,omitempty"`
