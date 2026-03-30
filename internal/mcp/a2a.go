@@ -181,6 +181,9 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					dopts = append(dopts, deliberation.WithRules(rulesMap))
 				}
 			}
+			if g := str("group_id"); g != "" {
+				dopts = append(dopts, deliberation.WithGroupID(g))
+			}
 			if keyID != "" {
 				dopts = append(dopts, deliberation.WithCreatorKey(keyID))
 			}
@@ -556,9 +559,35 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				"threshold":       tmpl.SuggestedThreshold,
 			})
 
+		case "gemot/list_by_group":
+			groupID := str("group_id")
+			if groupID == "" {
+				writeA2AError(w, req.ID, -32000, "group_id is required")
+				return
+			}
+			delibs, err := svc.ListByGroup(groupID)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			writeA2AResult(w, req.ID, delibs)
+
+		case "gemot/list_by_agent":
+			agentID := str("agent_id")
+			if agentID == "" {
+				writeA2AError(w, req.ID, -32000, "agent_id is required")
+				return
+			}
+			delibs, err := svc.ListByAgent(agentID)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			writeA2AResult(w, req.ID, delibs)
+
 		default:
 			writeA2AError(w, req.ID, -32601,
-				fmt.Sprintf("Method not found: %s. Available methods: agent/info, gemot/create_deliberation, gemot/submit_position, gemot/vote, gemot/analyze, gemot/get_deliberation, gemot/get_positions, gemot/get_context, gemot/list_deliberations, gemot/propose_compromise, gemot/dispute_crux, gemot/commit, gemot/invite_agent, gemot/delegate, gemot/generate_join_code, gemot/join_deliberation, gemot/list_templates, gemot/set_template, gemot/delete_deliberation, gemot/report_abuse, gemot/get_audit_log, gemot/get_analysis_result, gemot/get_votes", req.Method))
+				fmt.Sprintf("Method not found: %s. Available methods: agent/info, gemot/create_deliberation, gemot/submit_position, gemot/vote, gemot/analyze, gemot/get_deliberation, gemot/get_positions, gemot/get_context, gemot/list_deliberations, gemot/list_by_group, gemot/list_by_agent, gemot/propose_compromise, gemot/dispute_crux, gemot/commit, gemot/invite_agent, gemot/delegate, gemot/generate_join_code, gemot/join_deliberation, gemot/list_templates, gemot/set_template, gemot/delete_deliberation, gemot/report_abuse, gemot/get_audit_log, gemot/get_analysis_result, gemot/get_votes", req.Method))
 		}
 	}
 }

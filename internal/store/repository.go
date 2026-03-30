@@ -13,8 +13,8 @@ func (s *DB) CreateDeliberation(d *deliberation.Deliberation) error {
 	d.ID = uuid.New().String()
 	d.CreatedAt = time.Now().UTC()
 	_, err := s.db.Exec(
-		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, template, rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.Template, marshalRules(d.Rules), d.CreatedAt.Format(time.RFC3339),
+		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, template, rules, group_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.Template, marshalRules(d.Rules), d.GroupID, d.CreatedAt.Format(time.RFC3339),
 	)
 	return err
 }
@@ -23,8 +23,8 @@ func (s *DB) GetDeliberation(id string) (*deliberation.Deliberation, error) {
 	d := &deliberation.Deliberation{}
 	var createdAt, rulesJSON string
 	err := s.db.QueryRow(
-		`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), created_at FROM deliberations WHERE id = ?`, id,
-	).Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &createdAt)
+		`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), created_at FROM deliberations WHERE id = ?`, id,
+	).Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +34,7 @@ func (s *DB) GetDeliberation(id string) (*deliberation.Deliberation, error) {
 }
 
 func (s *DB) ListDeliberations() ([]deliberation.Deliberation, error) {
-	rows, err := s.db.Query(`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), created_at FROM deliberations WHERE status != 'deleted' ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), created_at FROM deliberations WHERE status != 'deleted' ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,49 @@ func (s *DB) ListDeliberations() ([]deliberation.Deliberation, error) {
 		var d deliberation.Deliberation
 		var createdAt string
 		var rulesJSON string
-		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &createdAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt); err != nil {
+			return nil, err
+		}
+		d.CreatedAt = parseTime(createdAt)
+		d.Rules = unmarshalRules(rulesJSON)
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
+
+// ListByGroup returns all deliberations in a group, ordered by creation time.
+func (s *DB) ListByGroup(groupID string) ([]deliberation.Deliberation, error) {
+	rows, err := s.db.Query(`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), created_at FROM deliberations WHERE group_id = ? AND status != 'deleted' ORDER BY created_at`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []deliberation.Deliberation
+	for rows.Next() {
+		var d deliberation.Deliberation
+		var createdAt, rulesJSON string
+		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt); err != nil {
+			return nil, err
+		}
+		d.CreatedAt = parseTime(createdAt)
+		d.Rules = unmarshalRules(rulesJSON)
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
+
+// ListByAgent returns all deliberations where an agent has submitted positions.
+func (s *DB) ListByAgent(agentID string) ([]deliberation.Deliberation, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT d.id, d.topic, d.description, d.round_number, d.status, COALESCE(d.sub_status, ''), COALESCE(d.type, ''), COALESCE(d.visibility, 'open'), COALESCE(d.creator_key, ''), COALESCE(d.max_participants, 0), COALESCE(d.template, ''), COALESCE(d.rules, '{}'), COALESCE(d.group_id, ''), d.created_at FROM deliberations d JOIN positions p ON d.id = p.deliberation_id WHERE p.agent_id = ? AND d.status != 'deleted' ORDER BY d.created_at DESC`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []deliberation.Deliberation
+	for rows.Next() {
+		var d deliberation.Deliberation
+		var createdAt, rulesJSON string
+		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt); err != nil {
 			return nil, err
 		}
 		d.CreatedAt = parseTime(createdAt)

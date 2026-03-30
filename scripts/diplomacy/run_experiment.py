@@ -89,7 +89,11 @@ def run_diplomacy_year(
 
 
 def generate_gemot_briefings(
-    game_json: Path, year: int, output_dir: Path, state_file: Path = None
+    game_json: Path,
+    year: int,
+    output_dir: Path,
+    state_file: Path = None,
+    experiment_name: str = None,
 ):
     """Run gemot analysis on game messages and output briefing files.
 
@@ -113,6 +117,8 @@ def generate_gemot_briefings(
 
     if state_file:
         cmd.extend(["--state", str(state_file)])
+    if experiment_name:
+        cmd.extend(["--experiment", experiment_name])
 
     # Pass through gemot env vars
     env = os.environ.copy()
@@ -251,7 +257,7 @@ def run_experiment(
         briefings_dir = experiment_dir / f"year{year_num}" / "briefings"
         try:
             briefings = generate_gemot_briefings(
-                game_json, year_num, briefings_dir, state_file
+                game_json, year_num, briefings_dir, state_file, name
             )
         except Exception as e:
             print(f"\n  WARNING: Briefing generation failed: {e}")

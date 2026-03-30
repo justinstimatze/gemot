@@ -186,6 +186,7 @@ type createDeliberationParams struct {
 	MaxParticipants int            `json:"max_participants,omitempty"` // optional: 0 = unlimited
 	Template        string         `json:"template,omitempty"`         // optional: governance template (assembly, jury, etc.)
 	Rules           map[string]any `json:"rules,omitempty"`           // optional: governance rules (min_participants, cooling_period_minutes, position_cost)
+	GroupID         string         `json:"group_id,omitempty"`        // optional: links related deliberations (experiment, workflow, session)
 }
 
 type proposeCompromiseParams struct {
@@ -336,6 +337,9 @@ func (s *server) handleCreateDeliberation(ctx context.Context, _ *sdkmcp.CallToo
 	}
 	if len(args.Rules) > 0 {
 		dopts = append(dopts, deliberation.WithRules(args.Rules))
+	}
+	if args.GroupID != "" {
+		dopts = append(dopts, deliberation.WithGroupID(args.GroupID))
 	}
 	// Set creator key for access control
 	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
