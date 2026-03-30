@@ -97,6 +97,11 @@ func (s *DB) ListByAgent(agentID string) ([]deliberation.Deliberation, error) {
 	return result, rows.Err()
 }
 
+func (s *DB) SetGroupID(deliberationID, groupID string) error {
+	_, err := s.db.Exec(`UPDATE deliberations SET group_id = ? WHERE id = ?`, groupID, deliberationID)
+	return err
+}
+
 func (s *DB) UpdateDeliberationTemplate(id, template string) error {
 	res, err := s.db.Exec(`UPDATE deliberations SET template = ? WHERE id = ?`, template, id)
 	if err != nil {

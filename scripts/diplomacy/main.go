@@ -766,9 +766,118 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 	})
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "=== DIPLOMATIC INTELLIGENCE BRIEFING: %s — Year %d ===\n\n", power, gameYear)
+	fmt.Fprintf(&b, "=== DIPLOMATIC INTELLIGENCE BRIEFING: %s — Year %d ===\n", power, gameYear)
+	fmt.Fprintf(&b, "This briefing identifies opportunities for diplomatic cooperation.\n")
+	fmt.Fprintf(&b, "Military conflict is costly — the analysis below highlights where\n")
+	fmt.Fprintf(&b, "mutual agreements serve your interests better than unilateral action.\n\n")
 
-	// Section 1: Public diplomatic landscape (from global)
+	// ========================================
+	// SECTION 1: WHAT YOU AGREE ON (cooperation baseline)
+	// ========================================
+
+	// Collect all consensus and constitutional rules across scopes
+	var agreements []string
+	var constitutionalRules []string
+	for _, bc := range bilateralCtxs {
+		for _, cs := range bc.ctx.ConsensusStatements {
+			agreements = append(agreements, fmt.Sprintf("[with %s] %s", bc.name, cs.Content))
+		}
+		constitutionalRules = append(constitutionalRules, bc.ctx.ConstitutionalRules...)
+	}
+	if globalCtx != nil {
+		for _, cs := range globalCtx.ConsensusStatements {
+			agreements = append(agreements, fmt.Sprintf("[public] %s", cs.Content))
+		}
+		constitutionalRules = append(constitutionalRules, globalCtx.ConstitutionalRules...)
+	}
+
+	if len(agreements) > 0 || len(constitutionalRules) > 0 {
+		fmt.Fprintf(&b, "ESTABLISHED AGREEMENTS:\n")
+		if len(constitutionalRules) > 0 {
+			fmt.Fprintf(&b, "Settled principles from prior rounds (breaking these damages trust):\n")
+			for _, r := range constitutionalRules {
+				fmt.Fprintf(&b, "  • %s\n", r)
+			}
+		}
+		if len(agreements) > 0 {
+			fmt.Fprintf(&b, "Positions with broad support:\n")
+			for _, a := range agreements {
+				fmt.Fprintf(&b, "  • %s\n", a)
+			}
+		}
+		fmt.Fprintln(&b)
+	}
+
+	// ========================================
+	// SECTION 2: BILATERAL RELATIONS (cooperation-first per counterpart)
+	// ========================================
+
+	if len(bilateralCtxs) > 0 {
+		fmt.Fprintf(&b, "BILATERAL RELATIONS:\n\n")
+		for _, bc := range bilateralCtxs {
+			fmt.Fprintf(&b, "  === With %s ===\n", bc.name)
+
+			// Lead with compromise/ZOPA (what's possible)
+			if bc.ctx.CompromiseProposal != "" {
+				proposal := bc.ctx.CompromiseProposal
+				if len(proposal) > 300 {
+					proposal = proposal[:300] + "..."
+				}
+				fmt.Fprintf(&b, "  AVAILABLE COMPROMISE: %s\n", proposal)
+			}
+
+			// Bridging positions (already have bilateral support)
+			if len(bc.ctx.BridgingStatements) > 0 {
+				for _, bs := range bc.ctx.BridgingStatements {
+					content := bs.Content
+					if len(content) > 150 {
+						content = content[:150] + "..."
+					}
+					fmt.Fprintf(&b, "  SHARED GROUND: %s (%.0f%% support)\n", content, bs.BridgingScore*100)
+				}
+			}
+
+			// Cost of non-cooperation
+			if len(bc.ctx.FailureScenarios) > 0 {
+				fmt.Fprintf(&b, "  IF COOPERATION FAILS:\n")
+				for _, f := range bc.ctx.FailureScenarios {
+					fmt.Fprintf(&b, "    - %s\n", f)
+				}
+			}
+
+			// Then remaining issues (framed as resolution opportunities)
+			if len(bc.ctx.RelevantCruxes) > 0 {
+				fmt.Fprintf(&b, "  ISSUES TO RESOLVE (resolving these creates mutual benefit):\n")
+				for _, c := range bc.ctx.RelevantCruxes {
+					fmt.Fprintf(&b, "    • %s\n", c.Claim)
+					if c.Explanation != "" {
+						expl := c.Explanation
+						if len(expl) > 200 {
+							expl = expl[:200] + "..."
+						}
+						fmt.Fprintf(&b, "      %s\n", expl)
+					}
+				}
+			} else {
+				fmt.Fprintf(&b, "  No unresolved issues — this relationship is in good standing.\n")
+			}
+
+			// Rule violations (trust damage)
+			if len(bc.ctx.RuleViolations) > 0 {
+				fmt.Fprintf(&b, "  WARNING — TRUST CONCERN: Prior agreements may have been violated:\n")
+				for _, v := range bc.ctx.RuleViolations {
+					fmt.Fprintf(&b, "    - %s\n", v)
+				}
+			}
+
+			fmt.Fprintln(&b)
+		}
+	}
+
+	// ========================================
+	// SECTION 3: PUBLIC LANDSCAPE (from global assembly)
+	// ========================================
+
 	if globalCtx != nil {
 		if len(globalCtx.TopicSummaries) > 0 {
 			fmt.Fprintf(&b, "PUBLIC DIPLOMATIC LANDSCAPE:\n")
@@ -779,7 +888,7 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 		}
 
 		if len(globalCtx.AlignmentScores) > 0 {
-			fmt.Fprintf(&b, "GLOBAL ALIGNMENT MATRIX:\n")
+			fmt.Fprintf(&b, "ALIGNMENT WITH OTHER POWERS:\n")
 			for _, a := range globalCtx.AlignmentScores {
 				label := "OPPOSED"
 				if a.AlignmentScore >= 0.67 {
@@ -789,65 +898,38 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 				} else if a.AlignmentScore > 0 {
 					label = "WEAK"
 				}
-				fmt.Fprintf(&b, "  %s: %.0f%% aligned (%d/%d cruxes) — %s\n",
+				fmt.Fprintf(&b, "  %s: %.0f%% aligned (%d/%d issues) — %s\n",
 					a.AgentID, a.AlignmentScore*100, a.AgreeCruxes, a.SharedCruxes, label)
 			}
 			fmt.Fprintln(&b)
 		}
 
-		if len(globalCtx.SwingAgents) > 0 {
-			fmt.Fprintf(&b, "PERSUADABLE POWERS (undecided on many public cruxes):\n  %s\n\n",
-				strings.Join(globalCtx.SwingAgents, ", "))
-		}
-
 		if len(globalCtx.RelevantCruxes) > 0 {
-			fmt.Fprintf(&b, "PUBLIC CRUXES:\n")
+			fmt.Fprintf(&b, "PUBLIC ISSUES UNDER DISCUSSION:\n")
 			writeCruxes(&b, globalCtx.RelevantCruxes)
 			fmt.Fprintln(&b)
 		}
 	}
 
-	// Section 2: Bilateral intelligence
-	if len(bilateralCtxs) > 0 {
-		fmt.Fprintf(&b, "BILATERAL INTELLIGENCE:\n\n")
-		for _, bc := range bilateralCtxs {
-			fmt.Fprintf(&b, "  === %s ↔ %s ===\n", power, bc.name)
-			if len(bc.ctx.RelevantCruxes) > 0 {
-				for _, c := range bc.ctx.RelevantCruxes {
-					fmt.Fprintf(&b, "  • %s\n", c.Claim)
-					if c.Controversy > 0 {
-						fmt.Fprintf(&b, "    Controversy: %.0f%%\n", c.Controversy*100)
-					}
-					if c.Explanation != "" {
-						// Truncate long explanations for bilateral section
-						expl := c.Explanation
-						if len(expl) > 200 {
-							expl = expl[:200] + "..."
-						}
-						fmt.Fprintf(&b, "    %s\n", expl)
-					}
-				}
-			} else {
-				fmt.Fprintf(&b, "  (No cruxes detected — possible agreement or insufficient data)\n")
-			}
-			fmt.Fprintln(&b)
-		}
-	}
+	// ========================================
+	// SECTION 4: ALLIANCE COORDINATION
+	// ========================================
 
-	// Section 3: Alliance dynamics
 	if len(allianceCtxs) > 0 {
-		fmt.Fprintf(&b, "ALLIANCE DYNAMICS:\n\n")
+		fmt.Fprintf(&b, "ALLIANCE COORDINATION:\n\n")
 		for _, ac := range allianceCtxs {
 			fmt.Fprintf(&b, "  === %s Alliance ===\n", ac.name)
+			if ac.ctx.CompromiseProposal != "" {
+				fmt.Fprintf(&b, "  Alliance proposal: %s\n", ac.ctx.CompromiseProposal)
+			}
 			if len(ac.ctx.AlignmentScores) > 0 {
 				fmt.Fprintf(&b, "  Internal alignment:\n")
 				for _, a := range ac.ctx.AlignmentScores {
-					fmt.Fprintf(&b, "    %s: %.0f%% aligned (%d/%d cruxes)\n",
-						a.AgentID, a.AlignmentScore*100, a.AgreeCruxes, a.SharedCruxes)
+					fmt.Fprintf(&b, "    %s: %.0f%% aligned\n", a.AgentID, a.AlignmentScore*100)
 				}
 			}
 			if len(ac.ctx.RelevantCruxes) > 0 {
-				fmt.Fprintf(&b, "  Internal disagreements:\n")
+				fmt.Fprintf(&b, "  Issues to align on:\n")
 				for _, c := range ac.ctx.RelevantCruxes {
 					fmt.Fprintf(&b, "    • %s\n", c.Claim)
 				}
@@ -856,7 +938,27 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 		}
 	}
 
-	// Section 4: Strategic recommendations (synthesized from all scopes)
+	// ========================================
+	// SECTION 5: COOPERATIVE PATTERNS AND GUIDANCE
+	// ========================================
+
+	// Emergent norms (cooperative behaviors that worked)
+	var norms []string
+	for _, bc := range bilateralCtxs {
+		norms = append(norms, bc.ctx.EmergentNorms...)
+	}
+	if globalCtx != nil {
+		norms = append(norms, globalCtx.EmergentNorms...)
+	}
+	if len(norms) > 0 {
+		fmt.Fprintf(&b, "EFFECTIVE DIPLOMATIC PATTERNS:\n")
+		for _, n := range norms {
+			fmt.Fprintf(&b, "  • %s\n", n)
+		}
+		fmt.Fprintln(&b)
+	}
+
+	// Strategic nudge
 	var stratParts []string
 	if globalCtx != nil && globalCtx.StrategicNudge != "" {
 		stratParts = append(stratParts, globalCtx.StrategicNudge)
@@ -867,16 +969,11 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 		}
 	}
 	if len(stratParts) > 0 {
-		fmt.Fprintf(&b, "STRATEGIC RECOMMENDATIONS:\n")
+		fmt.Fprintf(&b, "DIPLOMATIC OPPORTUNITIES:\n")
 		for _, s := range stratParts {
 			fmt.Fprintf(&b, "  %s\n", s)
 		}
 		fmt.Fprintln(&b)
-	}
-
-	// Diversity nudge
-	if globalCtx != nil && globalCtx.DiversityNudge != "" {
-		fmt.Fprintf(&b, "POSITION ASSESSMENT:\n%s\n\n", globalCtx.DiversityNudge)
 	}
 
 	fmt.Fprintf(&b, "=== END BRIEFING ===\n")
@@ -949,9 +1046,18 @@ type agentContext struct {
 	AlignmentScores      []alignment    `json:"alignment_scores"`
 	SwingAgents          []string       `json:"swing_agents"`
 	BridgingStatements   []bridging     `json:"bridging_statements"`
-	StrategicNudge       string         `json:"strategic_nudge"`
-	DiversityNudge       string         `json:"diversity_nudge"`
-	IntegrityWarnings    []string       `json:"integrity_warnings"`
+	ConsensusStatements  []struct {
+		Content          string  `json:"content"`
+		OverallAgreeRatio float64 `json:"overall_agree_ratio"`
+	} `json:"consensus_statements"`
+	CompromiseProposal  string   `json:"compromise_proposal"`
+	FailureScenarios    []string `json:"failure_scenarios"`
+	ConstitutionalRules []string `json:"constitutional_rules"`
+	EmergentNorms       []string `json:"emergent_norms"`
+	RuleViolations      []string `json:"rule_violations"`
+	StrategicNudge      string   `json:"strategic_nudge"`
+	DiversityNudge      string   `json:"diversity_nudge"`
+	IntegrityWarnings   []string `json:"integrity_warnings"`
 }
 
 type namedContext struct {
