@@ -30,6 +30,93 @@ GEMOT_DIR = Path.home() / "Documents" / "gemot"
 DEFAULT_BASE_PROMPTS = AI_DIPLOMACY_DIR / "ai_diplomacy" / "prompts_simple"
 POWERS = ["austria", "england", "france", "germany", "italy", "russia", "turkey"]
 
+# Personality archetypes for AI Diplomacy powers.
+# Each shapes how the LLM game agent negotiates, allies, and fights.
+PERSONALITIES = {
+    "diplomat": {
+        "name": "The Diplomat",
+        "prompt": (
+            "You are a deeply cooperative leader who believes lasting peace comes from "
+            "multilateral agreements. You actively seek alliances with all neighbors, "
+            "prefer negotiated solutions over military action, and honor your agreements "
+            "faithfully. You communicate extensively and transparently. You only attack "
+            "as a last resort when diplomacy has clearly failed."
+        ),
+    },
+    "balancer": {
+        "name": "The Balancer",
+        "prompt": (
+            "You are a pragmatic strategist who maintains the balance of power. You ally "
+            "with weaker powers against dominant ones, switch sides when the balance shifts, "
+            "and avoid letting any single power grow too strong. You keep your word but are "
+            "willing to renegotiate when circumstances change. You communicate selectively — "
+            "sharing just enough to build useful coalitions."
+        ),
+    },
+    "opportunist": {
+        "name": "The Opportunist",
+        "prompt": (
+            "You are an adaptable, ambitious leader who seizes opportunities as they arise. "
+            "You form alliances of convenience and aren't afraid to break them when a better "
+            "option appears. You expand aggressively when neighbors are distracted and "
+            "negotiate defensively when overextended. Trust must be earned through actions, "
+            "not words. You communicate directly and make bold proposals."
+        ),
+    },
+    "chancellor": {
+        "name": "The Iron Chancellor",
+        "prompt": (
+            "You are a methodical, strategic leader who builds strong bilateral alliances "
+            "and keeps them for the long term. You are fiercely loyal to your allies and "
+            "expect the same in return. Betrayal is punished severely. You plan several "
+            "years ahead and prefer steady, sustainable expansion over risky gambits. "
+            "You communicate formally and precisely — your word is your bond."
+        ),
+    },
+    "schemer": {
+        "name": "The Schemer",
+        "prompt": (
+            "You are a cunning operator who appears cooperative on the surface while "
+            "pursuing hidden agendas. You make promises to multiple powers simultaneously "
+            "and choose which to honor based on what benefits you most. You are patient — "
+            "building trust slowly before striking at the perfect moment. You communicate "
+            "warmly and seem eager to help, making it hard for others to suspect your motives."
+        ),
+    },
+    "bear": {
+        "name": "The Bear",
+        "prompt": (
+            "You are a defensive leader who builds strength before acting. In the early game, "
+            "you focus on securing your borders and avoiding unnecessary conflicts. But once "
+            "provoked or once you feel strong enough, you commit overwhelming force. You are "
+            "slow to ally but utterly reliable once committed. You communicate tersely — "
+            "few words, but you mean every one of them."
+        ),
+    },
+    "sultan": {
+        "name": "The Sultan",
+        "prompt": (
+            "You are a self-reliant isolationist who trusts no one fully. You build a fortress "
+            "position before engaging with the wider diplomatic landscape. You prefer bilateral "
+            "deals over multilateral agreements and keep your strategic intentions ambiguous. "
+            "You are suspicious of unsolicited alliance offers. You expand methodically into "
+            "weakly-defended territory rather than challenging strong neighbors directly."
+        ),
+    },
+}
+
+
+def assign_personalities(seed: int) -> dict:
+    """Randomly assign personalities to powers using the experiment seed.
+    Each power gets a different personality. The assignment is deterministic
+    for a given seed, so experiments are reproducible."""
+    import random
+
+    rng = random.Random(seed)
+    keys = list(PERSONALITIES.keys())
+    rng.shuffle(keys)
+    return {power: keys[i] for i, power in enumerate(POWERS)}
+
 
 def run_diplomacy_year(
     year: int,
@@ -160,9 +247,13 @@ def generate_gemot_briefings(
 
 
 def inject_briefings(
-    briefings: dict, base_prompts: Path, output_dir: Path, year: int
+    briefings: dict,
+    base_prompts: Path,
+    output_dir: Path,
+    year: int,
+    personality_assignments: dict = None,
 ) -> Path:
-    """Inject briefings into power-specific system prompts."""
+    """Inject personalities and briefings into power-specific system prompts."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Copy all base prompt files
@@ -177,13 +268,28 @@ def inject_briefings(
     original = base_system.read_text()
 
     for power in POWERS:
-        if power not in briefings:
-            print(f"    WARNING: no briefing for {power}, using base prompt")
-            continue
+        parts = [original]
 
-        briefing_content = briefings[power].read_text(errors="replace")
-        injected = f"""{original}
+        # Personality injection (persistent across all years)
+        if personality_assignments and power in personality_assignments:
+            p_key = personality_assignments[power]
+            p = PERSONALITIES.get(p_key, {})
+            if p:
+                parts.append(f"""
+=== YOUR DIPLOMATIC PERSONALITY ===
+You are {p["name"]}.
 
+{p["prompt"]}
+
+Stay in character throughout the game. Your personality should influence how you
+negotiate, whether you honor agreements, when you choose military action over
+diplomacy, and how you communicate with other powers.
+=== END PERSONALITY ===""")
+
+        # Briefing injection (per-year intelligence)
+        if power in briefings:
+            briefing_content = briefings[power].read_text(errors="replace")
+            parts.append(f"""
 === YOUR PRIVATE DIPLOMATIC INTELLIGENCE BRIEFING (Year {year}) ===
 The following analysis is based on YOUR diplomatic communications only.
 Other powers have their own intelligence based on their own communications.
@@ -197,10 +303,17 @@ insights from this briefing. For example:
 This helps track how diplomatic intelligence influences your strategy.
 
 {briefing_content}
-=== END BRIEFING ===
-"""
+=== END BRIEFING ===""")
+        elif year > 1:
+            print(f"    WARNING: no briefing for {power}, using base prompt")
+
+        injected = "\n".join(parts)
         (output_dir / f"{power}_system_prompt.txt").write_text(injected)
-        print(f"    Injected briefing for {power}")
+        if personality_assignments and power in personality_assignments:
+            p_key = personality_assignments[power]
+            print(f"    {power}: {PERSONALITIES[p_key]['name']} + briefing")
+        elif power in briefings:
+            print(f"    {power}: briefing only")
 
     return output_dir
 
@@ -212,6 +325,7 @@ def run_experiment(
     models: str = None,
     skip_analysis: bool = False,
     seed: int = 42,
+    use_personalities: bool = False,
 ):
     """Run the full iterative experiment."""
     experiment_dir = AI_DIPLOMACY_DIR / "results" / name
@@ -220,17 +334,31 @@ def run_experiment(
     if base_prompts is None:
         base_prompts = DEFAULT_BASE_PROMPTS
 
+    # Assign personalities (deterministic per seed)
+    personality_assignments = assign_personalities(seed) if use_personalities else None
+
     print(f"\n{'=' * 60}")
     print(f"Starting Gemot Diplomacy Experiment: {name}")
     print(f"Years: {num_years}, Seed: {seed}")
     print(f"Output: {experiment_dir}")
     print(f"Analysis: {'SKIP (control)' if skip_analysis else 'gemot'}")
+    if personality_assignments:
+        print("Personalities:")
+        for power, p_key in sorted(personality_assignments.items()):
+            print(f"  {power}: {PERSONALITIES[p_key]['name']}")
     print(f"{'=' * 60}")
 
     game_dir = experiment_dir / "game"
     current_prompts = None
     max_year = 1900 + num_years
     state_file = experiment_dir / "deliberation_state.json"
+
+    # For Year 1 with personalities: inject personality-only prompts (no briefings yet)
+    if personality_assignments:
+        prompts_dir = experiment_dir / "year0" / "prompts"
+        current_prompts = inject_briefings(
+            {}, base_prompts, prompts_dir, 0, personality_assignments
+        )
 
     for year_num in range(1, num_years + 1):
         game_year = 1900 + year_num
@@ -276,6 +404,7 @@ def run_experiment(
                 base_prompts,
                 prompts_dir,
                 year_num,
+                personality_assignments,
             )
 
         print(f"\n  Year {year_num} complete!")
@@ -338,6 +467,11 @@ def main():
     parser.add_argument(
         "--seed", type=int, default=2026, help="Random seed (default: 2026)"
     )
+    parser.add_argument(
+        "--personalities",
+        action="store_true",
+        help="Assign random diplomatic personalities to powers (Civ-style leader traits)",
+    )
 
     args = parser.parse_args()
     base_prompts = Path(args.prompts) if args.prompts else None
@@ -349,6 +483,7 @@ def main():
         models=args.models,
         skip_analysis=args.skip_analysis,
         seed=args.seed,
+        use_personalities=args.personalities,
     )
 
 
