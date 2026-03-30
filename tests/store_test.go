@@ -49,7 +49,7 @@ func TestDeliberationCRUD(t *testing.T) {
 		t.Fatalf("expected topic 'AI Safety', got %q", got.Topic)
 	}
 
-	list, err := db.ListDeliberations()
+	list, err := db.ListDeliberations(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

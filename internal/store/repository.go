@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -8,6 +9,39 @@ import (
 	"github.com/google/uuid"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 )
+
+// deliberationColumns is the canonical SELECT column list for deliberation queries.
+const deliberationColumns = `id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), created_at`
+
+// scanner is satisfied by both *sql.Row and *sql.Rows.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+// scanDeliberation scans a row into a Deliberation using the deliberationColumns layout.
+func scanDeliberation(s scanner) (deliberation.Deliberation, error) {
+	var d deliberation.Deliberation
+	var createdAt, rulesJSON string
+	if err := s.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt); err != nil {
+		return d, err
+	}
+	d.CreatedAt = parseTime(createdAt)
+	d.Rules = unmarshalRules(rulesJSON)
+	return d, nil
+}
+
+// scanDeliberationRows scans all rows into a slice using scanDeliberation.
+func scanDeliberationRows(rows *sql.Rows) ([]deliberation.Deliberation, error) {
+	var result []deliberation.Deliberation
+	for rows.Next() {
+		d, err := scanDeliberation(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
 
 func (s *DB) CreateDeliberation(d *deliberation.Deliberation) error {
 	d.ID = uuid.New().String()
@@ -20,81 +54,60 @@ func (s *DB) CreateDeliberation(d *deliberation.Deliberation) error {
 }
 
 func (s *DB) GetDeliberation(id string) (*deliberation.Deliberation, error) {
-	d := &deliberation.Deliberation{}
-	var createdAt, rulesJSON string
-	err := s.db.QueryRow(
-		`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), created_at FROM deliberations WHERE id = ?`, id,
-	).Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt)
+	row := s.db.QueryRow(`SELECT `+deliberationColumns+` FROM deliberations WHERE id = ?`, id)
+	d, err := scanDeliberation(row)
 	if err != nil {
 		return nil, err
 	}
-	d.CreatedAt = parseTime(createdAt)
-	d.Rules = unmarshalRules(rulesJSON)
-	return d, nil
+	return &d, nil
 }
 
-func (s *DB) ListDeliberations() ([]deliberation.Deliberation, error) {
-	rows, err := s.db.Query(`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), created_at FROM deliberations WHERE status != 'deleted' ORDER BY created_at DESC`)
+// normalizePagination clamps limit to [1, 500] (default 100) and ensures offset >= 0.
+func normalizePagination(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+func (s *DB) ListDeliberations(limit, offset int) ([]deliberation.Deliberation, error) {
+	limit, offset = normalizePagination(limit, offset)
+	rows, err := s.db.Query(`SELECT `+deliberationColumns+` FROM deliberations WHERE status != 'deleted' ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close() //nolint:errcheck
-
-	var result []deliberation.Deliberation
-	for rows.Next() {
-		var d deliberation.Deliberation
-		var createdAt string
-		var rulesJSON string
-		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt); err != nil {
-			return nil, err
-		}
-		d.CreatedAt = parseTime(createdAt)
-		d.Rules = unmarshalRules(rulesJSON)
-		result = append(result, d)
-	}
-	return result, rows.Err()
+	return scanDeliberationRows(rows)
 }
 
-// ListByGroup returns all deliberations in a group, ordered by creation time.
-func (s *DB) ListByGroup(groupID string) ([]deliberation.Deliberation, error) {
-	rows, err := s.db.Query(`SELECT id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), created_at FROM deliberations WHERE group_id = ? AND status != 'deleted' ORDER BY created_at`, groupID)
+// ListByGroup returns deliberations in a group, ordered by creation time.
+func (s *DB) ListByGroup(groupID string, limit, offset int) ([]deliberation.Deliberation, error) {
+	limit, offset = normalizePagination(limit, offset)
+	rows, err := s.db.Query(`SELECT `+deliberationColumns+` FROM deliberations WHERE group_id = ? AND status != 'deleted' ORDER BY created_at LIMIT ? OFFSET ?`, groupID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []deliberation.Deliberation
-	for rows.Next() {
-		var d deliberation.Deliberation
-		var createdAt, rulesJSON string
-		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt); err != nil {
-			return nil, err
-		}
-		d.CreatedAt = parseTime(createdAt)
-		d.Rules = unmarshalRules(rulesJSON)
-		result = append(result, d)
-	}
-	return result, rows.Err()
+	return scanDeliberationRows(rows)
 }
 
-// ListByAgent returns all deliberations where an agent has submitted positions.
-func (s *DB) ListByAgent(agentID string) ([]deliberation.Deliberation, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT d.id, d.topic, d.description, d.round_number, d.status, COALESCE(d.sub_status, ''), COALESCE(d.type, ''), COALESCE(d.visibility, 'open'), COALESCE(d.creator_key, ''), COALESCE(d.max_participants, 0), COALESCE(d.template, ''), COALESCE(d.rules, '{}'), COALESCE(d.group_id, ''), d.created_at FROM deliberations d JOIN positions p ON d.id = p.deliberation_id WHERE p.agent_id = ? AND d.status != 'deleted' ORDER BY d.created_at DESC`, agentID)
+// ListByAgent returns deliberations where an agent has submitted positions.
+func (s *DB) ListByAgent(agentID string, limit, offset int) ([]deliberation.Deliberation, error) {
+	limit, offset = normalizePagination(limit, offset)
+	// deliberationColumns uses unqualified names; prefix with "d." for the JOIN query.
+	const cols = `d.id, d.topic, d.description, d.round_number, d.status, COALESCE(d.sub_status, ''), COALESCE(d.type, ''), COALESCE(d.visibility, 'open'), COALESCE(d.creator_key, ''), COALESCE(d.max_participants, 0), COALESCE(d.template, ''), COALESCE(d.rules, '{}'), COALESCE(d.group_id, ''), d.created_at`
+	rows, err := s.db.Query(`SELECT DISTINCT `+cols+` FROM deliberations d JOIN positions p ON d.id = p.deliberation_id WHERE p.agent_id = ? AND d.status != 'deleted' ORDER BY d.created_at DESC LIMIT ? OFFSET ?`, agentID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var result []deliberation.Deliberation
-	for rows.Next() {
-		var d deliberation.Deliberation
-		var createdAt, rulesJSON string
-		if err := rows.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt); err != nil {
-			return nil, err
-		}
-		d.CreatedAt = parseTime(createdAt)
-		d.Rules = unmarshalRules(rulesJSON)
-		result = append(result, d)
-	}
-	return result, rows.Err()
+	return scanDeliberationRows(rows)
 }
 
 func (s *DB) SetGroupID(deliberationID, groupID string) error {
@@ -835,6 +848,33 @@ func (s *DB) DeleteExpiredSandboxDeliberations(maxAge time.Duration) (int, error
 		s.hardDeleteDeliberation(id) //nolint:errcheck
 	}
 	return len(ids), nil
+}
+
+// CreateShareToken stores a share token for a group.
+func (s *DB) CreateShareToken(token, groupID string, expiresAt time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT INTO share_tokens (token, group_id, expires_at) VALUES (?, ?, ?)`,
+		token, groupID, expiresAt.Format(time.RFC3339),
+	)
+	return err
+}
+
+// LookupShareToken returns the group ID for a valid (non-expired) share token.
+func (s *DB) LookupShareToken(token string) (string, error) {
+	var groupID, expiresAt string
+	err := s.db.QueryRow(
+		`SELECT group_id, COALESCE(expires_at, '') FROM share_tokens WHERE token = ?`, token,
+	).Scan(&groupID, &expiresAt)
+	if err != nil {
+		return "", fmt.Errorf("share token not found")
+	}
+	if expiresAt != "" {
+		exp := parseTime(expiresAt)
+		if !exp.IsZero() && time.Now().After(exp) {
+			return "", fmt.Errorf("share token expired")
+		}
+	}
+	return groupID, nil
 }
 
 // hardDeleteDeliberation permanently removes a deliberation and all related data.
