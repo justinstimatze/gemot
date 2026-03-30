@@ -200,7 +200,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				"version":     Version,
 				"url":         "https://gemot.dev",
 				"docs":        "https://gemot.dev/docs",
-				"tools":       24,
+				"tools":       27,
 			})
 
 		case "gemot/create_deliberation":
