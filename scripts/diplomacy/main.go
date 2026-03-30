@@ -92,6 +92,7 @@ func main() {
 	outputDir := flag.String("output", "", "Output directory for briefing files")
 	gemotURL := flag.String("url", "", "Gemot MCP URL (default: GEMOT_LIVE_URL env)")
 	alliancesFlag := flag.String("alliances", "", "Explicit alliances: ENGLAND+FRANCE+RUSSIA,AUSTRIA+TURKEY (comma-separated groups)")
+	stateFile := flag.String("state", "", "State file for persistent deliberation IDs across years (JSON)")
 	flag.Parse()
 
 	if *gameFile == "" || *outputDir == "" {
@@ -160,11 +161,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  Alliance detected: %s\n", strings.Join(a, "+"))
 	}
 
+	// Load persistent deliberation state (reuse deliberations across years)
+	state := loadState(*stateFile)
+
 	os.MkdirAll(*outputDir, 0755) //nolint:errcheck
 	ctx := context.Background()
 
-	// Analyze all scopes in parallel
-	results := analyzeScopes(ctx, scopes, url, secret, *year)
+	// Analyze all scopes in parallel, reusing existing deliberations where possible
+	results := analyzeScopes(ctx, scopes, url, secret, *year, state)
+
+	// Save updated state
+	saveState(*stateFile, state)
 
 	// Synthesize per-power briefings from all relevant scopes
 	var wg sync.WaitGroup
@@ -438,8 +445,43 @@ func containsStr(slice []string, s string) bool {
 	return false
 }
 
+// persistentState tracks deliberation IDs across years for multi-round deliberations.
+type persistentState struct {
+	mu    sync.Mutex
+	IDs   map[string]string `json:"deliberation_ids"` // scope name -> deliberation ID
+}
+
+func loadState(path string) *persistentState {
+	state := &persistentState{IDs: make(map[string]string)}
+	if path == "" {
+		return state
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return state // file doesn't exist yet, that's fine
+	}
+	json.Unmarshal(data, state) //nolint:errcheck
+	if state.IDs == nil {
+		state.IDs = make(map[string]string)
+	}
+	return state
+}
+
+func saveState(path string, state *persistentState) {
+	if path == "" {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return
+	}
+	os.WriteFile(path, data, 0644) //nolint:errcheck
+}
+
 // analyzeScopes processes all scopes in parallel and returns results.
-func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year int) []scopeResult {
+func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year int, state *persistentState) []scopeResult {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var results []scopeResult
@@ -471,7 +513,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 					continue
 				}
 
-				result, err = analyzeScope(ctx, session, url, secret, sc, year)
+				result, err = analyzeScope(ctx, session, url, secret, sc, year, state)
 				session.Close() //nolint:errcheck
 				if err == nil {
 					lastErr = nil
@@ -497,44 +539,64 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 	return results
 }
 
-// analyzeScope creates a deliberation for one scope, submits messages, runs analysis,
-// and returns contexts for each participating power.
-func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secret string, sc scope, year int) (*scopeResult, error) {
-	gameYear := 1900 + year
+// analyzeScope creates or reuses a deliberation for one scope, submits messages,
+// runs analysis, and returns contexts for each participating power.
+// When state is provided, deliberations persist across years as multi-round deliberations.
+func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secret string, sc scope, year int, state *persistentState) (*scopeResult, error) {
+	// Check if we have a persistent deliberation for this scope
+	state.mu.Lock()
+	existingID := state.IDs[sc.name]
+	state.mu.Unlock()
 
-	// Build topic based on scope
-	var topic, desc string
-	switch sc.scopeTag {
-	case "global":
-		topic = fmt.Sprintf("Public diplomacy — Year %d", gameYear)
-		desc = fmt.Sprintf("Analysis of public broadcast messages between all powers during Year %d.", gameYear)
-	case "bilateral":
-		topic = fmt.Sprintf("%s bilateral negotiations — Year %d", sc.name, gameYear)
-		desc = fmt.Sprintf("Private diplomatic messages between %s during Year %d.", strings.Join(sc.powers, " and "), gameYear)
-	case "alliance":
-		topic = fmt.Sprintf("%s alliance coordination — Year %d", sc.name, gameYear)
-		desc = fmt.Sprintf("Multi-party diplomatic messages within the %s alliance during Year %d.", sc.name, gameYear)
-	}
+	var deliberationID string
 
-	// 1. Create deliberation with scope-appropriate type, then set template
-	createJSON := callTool(ctx, session, "create_deliberation", map[string]any{
-		"topic":       topic,
-		"description": desc,
-		"type":        sc.delibType,
-	})
+	if existingID != "" {
+		// Reuse existing deliberation — this year's messages become a new round
+		deliberationID = existingID
+		fmt.Fprintf(os.Stderr, "  [%s] %s: reusing deliberation %s (round %d)\n",
+			sc.scopeTag, sc.name, deliberationID[:8], year)
+	} else {
+		// Create new deliberation
+		var topic, desc string
+		switch sc.scopeTag {
+		case "global":
+			topic = "Public diplomacy"
+			desc = "Ongoing analysis of public broadcast messages between all powers. Each round represents one game year."
+		case "bilateral":
+			topic = fmt.Sprintf("%s bilateral negotiations", sc.name)
+			desc = fmt.Sprintf("Ongoing private diplomatic negotiations between %s. Each round represents one game year.", strings.Join(sc.powers, " and "))
+		case "alliance":
+			topic = fmt.Sprintf("%s alliance coordination", sc.name)
+			desc = fmt.Sprintf("Multi-party coordination within the %s alliance. Each round represents one game year.", sc.name)
+		}
 
-	var createResp struct {
-		DeliberationID string `json:"deliberation_id"`
-	}
-	mustParse(createJSON, &createResp)
-	deliberationID := createResp.DeliberationID
-
-	// Set template for scope-appropriate rules and analysis framing
-	if sc.template != "" {
-		callToolSoft(ctx, session, "set_template", map[string]any{
-			"deliberation_id": deliberationID,
-			"template":        sc.template,
+		createJSON := callTool(ctx, session, "create_deliberation", map[string]any{
+			"topic":       topic,
+			"description": desc,
+			"type":        sc.delibType,
 		})
+
+		var createResp struct {
+			DeliberationID string `json:"deliberation_id"`
+		}
+		mustParse(createJSON, &createResp)
+		deliberationID = createResp.DeliberationID
+
+		// Set template for scope-appropriate rules and analysis framing
+		if sc.template != "" {
+			callToolSoft(ctx, session, "set_template", map[string]any{
+				"deliberation_id": deliberationID,
+				"template":        sc.template,
+			})
+		}
+
+		// Save to persistent state
+		state.mu.Lock()
+		state.IDs[sc.name] = deliberationID
+		state.mu.Unlock()
+
+		fmt.Fprintf(os.Stderr, "  [%s] %s: created deliberation %s\n",
+			sc.scopeTag, sc.name, deliberationID[:8])
 	}
 
 	// 2. Submit each message as a position
