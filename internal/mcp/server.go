@@ -846,9 +846,13 @@ func (s *server) handleSetTemplate(ctx context.Context, _ *sdkmcp.CallToolReques
 	}, "Template updated. The next analysis will use this template's governance model and consensus threshold.")
 }
 
-func (s *server) handleGetAuditLog(_ context.Context, _ *sdkmcp.CallToolRequest, args getAuditLogParams) (*sdkmcp.CallToolResult, any, error) {
+func (s *server) handleGetAuditLog(ctx context.Context, _ *sdkmcp.CallToolRequest, args getAuditLogParams) (*sdkmcp.CallToolResult, any, error) {
 	if args.DeliberationID == "" {
 		return errResult(fmt.Errorf("deliberation_id is required"))
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		return errResult(err)
 	}
 	// Combine operation log + analysis decisions
 	opLog, err := s.db.GetAuditLog(args.DeliberationID, 50)
