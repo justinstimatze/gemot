@@ -67,6 +67,13 @@ func (eb *EventBus) Emit(e Event) {
 	}
 }
 
+// ClientCount returns the number of active subscribers.
+func (eb *EventBus) ClientCount() int {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	return len(eb.clients)
+}
+
 // MarshalEvent serializes an event to JSON.
 func MarshalEvent(e Event) ([]byte, error) {
 	return json.Marshal(e)

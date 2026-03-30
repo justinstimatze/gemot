@@ -582,10 +582,17 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AError(w, req.ID, -32000, "group_id is required")
 				return
 			}
-			delibs, err := svc.ListByGroup(groupID)
+			allDelibs, err := svc.ListByGroup(groupID)
 			if err != nil {
 				writeA2AError(w, req.ID, -32000, err.Error())
 				return
+			}
+			var delibs []deliberation.Deliberation
+			for _, d := range allDelibs {
+				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
+					continue
+				}
+				delibs = append(delibs, d)
 			}
 			writeA2AResult(w, req.ID, delibs)
 
@@ -595,10 +602,17 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AError(w, req.ID, -32000, "agent_id is required")
 				return
 			}
-			delibs, err := svc.ListByAgent(agentID)
+			allDelibs, err := svc.ListByAgent(agentID)
 			if err != nil {
 				writeA2AError(w, req.ID, -32000, err.Error())
 				return
+			}
+			var delibs []deliberation.Deliberation
+			for _, d := range allDelibs {
+				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
+					continue
+				}
+				delibs = append(delibs, d)
 			}
 			writeA2AResult(w, req.ID, delibs)
 
