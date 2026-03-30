@@ -44,6 +44,13 @@ type agent struct {
 }
 
 func main() {
+	interactive := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--interactive" || arg == "-i" {
+			interactive = true
+		}
+	}
+
 	url := envOr("GEMOT_LIVE_URL", "https://gemot.fly.dev/mcp")
 	secret := os.Getenv("GEMOT_API_SECRET")
 	if secret == "" {
@@ -184,8 +191,16 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 		},
 	}
 
-	fmt.Fprintf(os.Stderr, "\n📅 Calendar Scheduling Demo — %d people\n", len(agents))
-	fmt.Fprintf(os.Stderr, "   Week of %s\n\n", week)
+	// In interactive mode, remove Eve — the human plays her role
+	if interactive {
+		agents = agents[:4] // Alice, Bob, Carol, Dave only
+	}
+
+	fmt.Fprintf(os.Stderr, "\n📅 Calendar Scheduling Demo — %d agents", len(agents))
+	if interactive {
+		fmt.Fprintf(os.Stderr, " + you")
+	}
+	fmt.Fprintf(os.Stderr, "\n   Week of %s\n\n", week)
 
 	// ── Step 1: Create a negotiation-type deliberation ─────────────────
 	fmt.Fprintf(os.Stderr, "Creating deliberation...\n")
@@ -223,6 +238,55 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 		}
 		mustParse(res, &pos)
 		positions = append(positions, positionInfo{agentID: a.id, positionID: pos.ID})
+	}
+
+	// ── Interactive mode: generate join code and wait ─────────────────
+	if interactive {
+		fmt.Fprintf(os.Stderr, "\n  Generating join code...\n")
+		joinRes := callTool(ctx, session, "generate_join_code", map[string]any{
+			"deliberation_id": delib.ID,
+			"role":            "participant",
+		})
+		var jc struct {
+			Code string `json:"code"`
+		}
+		mustParse(joinRes, &jc)
+
+		fmt.Fprintf(os.Stderr, "\n"+strings.Repeat("=", 60)+"\n")
+		fmt.Fprintf(os.Stderr, "  YOU ARE EVE — part-time, Mon-Wed only\n")
+		fmt.Fprintf(os.Stderr, "  4 agents have submitted their availability.\n\n")
+		fmt.Fprintf(os.Stderr, "  Join this deliberation with your MCP client:\n")
+		fmt.Fprintf(os.Stderr, "    join code: %s\n", jc.Code)
+		fmt.Fprintf(os.Stderr, "    URL: https://gemot.dev/join/%s\n\n", jc.Code)
+		fmt.Fprintf(os.Stderr, "  Steps:\n")
+		fmt.Fprintf(os.Stderr, "    1. join_deliberation with code '%s'\n", jc.Code)
+		fmt.Fprintf(os.Stderr, "    2. get_positions to see what others proposed\n")
+		fmt.Fprintf(os.Stderr, "    3. submit_position with your availability\n")
+		fmt.Fprintf(os.Stderr, "    4. vote on others' proposals (+1 overlap, -1 no overlap)\n")
+		fmt.Fprintf(os.Stderr, "    5. analyze to find the scheduling crux\n")
+		fmt.Fprintf(os.Stderr, "    6. get_context to see your personalized analysis\n")
+		fmt.Fprintf(os.Stderr, "    7. propose_compromise for a group-acceptable time\n")
+		fmt.Fprintf(os.Stderr, "    8. commit to the proposed time\n")
+		fmt.Fprintf(os.Stderr, strings.Repeat("=", 60)+"\n")
+		fmt.Fprintf(os.Stderr, "\n  Deliberation ID: %s\n", delib.ID)
+		fmt.Fprintf(os.Stderr, "  Waiting for you to join and participate...\n")
+		fmt.Fprintf(os.Stderr, "  (Press Ctrl+C when done)\n\n")
+
+		// Print machine-readable summary
+		summary := map[string]any{
+			"deliberation_id": delib.ID,
+			"join_code":       jc.Code,
+			"join_url":        "https://gemot.dev/join/" + jc.Code,
+			"your_role":       "Eve (part-time, Mon-Wed, prefers late morning)",
+			"agents_seeded":   4,
+			"week":            week,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(summary) //nolint:errcheck
+
+		// Block until interrupted
+		select {}
 	}
 
 	// ── Step 3: Cross-vote ────────────────────────────────────────────
