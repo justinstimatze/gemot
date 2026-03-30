@@ -820,9 +820,7 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 			// Lead with compromise/ZOPA (what's possible)
 			if bc.ctx.CompromiseProposal != "" {
 				proposal := bc.ctx.CompromiseProposal
-				if len(proposal) > 300 {
-					proposal = proposal[:300] + "..."
-				}
+				proposal = truncateRunes(proposal, 300)
 				fmt.Fprintf(&b, "  AVAILABLE COMPROMISE: %s\n", proposal)
 			}
 
@@ -830,9 +828,7 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 			if len(bc.ctx.BridgingStatements) > 0 {
 				for _, bs := range bc.ctx.BridgingStatements {
 					content := bs.Content
-					if len(content) > 150 {
-						content = content[:150] + "..."
-					}
+					content = truncateRunes(content, 150)
 					fmt.Fprintf(&b, "  SHARED GROUND: %s (%.0f%% support)\n", content, bs.BridgingScore*100)
 				}
 			}
@@ -852,9 +848,7 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 					fmt.Fprintf(&b, "    • %s\n", c.Claim)
 					if c.Explanation != "" {
 						expl := c.Explanation
-						if len(expl) > 200 {
-							expl = expl[:200] + "..."
-						}
+						expl = truncateRunes(expl, 200)
 						fmt.Fprintf(&b, "      %s\n", expl)
 					}
 				}
@@ -1066,6 +1060,16 @@ type namedContext struct {
 }
 
 // --- Helpers ---
+
+// truncateRunes truncates a string to at most maxRunes runes, appending "..." if truncated.
+// Unlike byte slicing (s[:n]), this never splits a multibyte UTF-8 character.
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
+}
 
 func countByTag(scopes []scope, tag string) int {
 	n := 0
