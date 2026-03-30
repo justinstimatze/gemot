@@ -1,17 +1,19 @@
 // diplomacy analyzes AI Diplomacy game messages through gemot's deliberation pipeline.
 //
-// For each power, it creates a deliberation containing that power's diplomatic messages,
-// runs analysis to detect cruxes and alliance patterns, and outputs briefing files
-// that can be injected into system prompts for the next game year.
+// Multi-scope architecture with scope-appropriate deliberation types:
+//   - 1 global deliberation (assembly — public broadcasts, all 7 powers)
+//   - N bilateral deliberations (negotiation — private pair, ZOPA/BATNA analysis)
+//   - M alliance deliberations (consensus — mutual allies, internal coordination)
 //
-// This replaces the T3C pipeline (CSV export → Playwright browser → report parsing)
-// with direct MCP calls to gemot.
+// Alliance detection via cross-power support orders and optional --alliances flag.
+// Each power's briefing synthesizes intelligence from all deliberations they're party to.
 //
 // Usage:
-//   go run scripts/diplomacy/main.go --game /path/to/lmvsgame.json --year 1 --output /path/to/briefings
+//
+//	go run scripts/diplomacy/main.go --game /path/to/lmvsgame.json --year 1 --output /path/to/briefings
+//	go run scripts/diplomacy/main.go --game game.json --year 3 --output out/ --alliances "ENGLAND+FRANCE+RUSSIA,AUSTRIA+TURKEY"
 //
 // Requires: GEMOT_LIVE_URL and GEMOT_API_SECRET env vars
-
 package main
 
 import (
@@ -22,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -48,8 +51,15 @@ type GameState struct {
 
 // Phase represents a single game phase with messages and orders.
 type Phase struct {
-	Name     string    `json:"name"`
-	Messages []Message `json:"messages"`
+	Name     string         `json:"name"`
+	Messages []Message      `json:"messages"`
+	Orders   map[string][]any `json:"orders,omitempty"`
+	State    PhaseState     `json:"state,omitempty"`
+}
+
+// PhaseState holds the game state at the end of a phase.
+type PhaseState struct {
+	Units map[string][]string `json:"units,omitempty"` // power -> ["A VIE", "F TRI", ...]
 }
 
 // Message is a diplomatic message between powers.
@@ -60,11 +70,27 @@ type Message struct {
 	Phase     string `json:"phase"`
 }
 
+// scope describes a deliberation at a particular scope level.
+type scope struct {
+	name     string   // e.g., "global", "ENGLAND-FRANCE", "ENGLAND-FRANCE-RUSSIA"
+	scopeTag string   // "global", "bilateral", "alliance"
+	template string   // gemot template: "assembly", "negotiation", "consensus"
+	powers   []string // which powers participate
+	messages []Message
+}
+
+// scopeResult holds the analysis context for each power in a deliberation.
+type scopeResult struct {
+	scope    scope
+	contexts map[string]string // power (lowercase) -> context JSON
+}
+
 func main() {
 	gameFile := flag.String("game", "", "Path to lmvsgame.json")
 	year := flag.Int("year", 1, "Game year number (1-based, e.g. 1 = 1901)")
 	outputDir := flag.String("output", "", "Output directory for briefing files")
 	gemotURL := flag.String("url", "", "Gemot MCP URL (default: GEMOT_LIVE_URL env)")
+	alliancesFlag := flag.String("alliances", "", "Explicit alliances: ENGLAND+FRANCE+RUSSIA,AUSTRIA+TURKEY (comma-separated groups)")
 	flag.Parse()
 
 	if *gameFile == "" || *outputDir == "" {
@@ -104,121 +130,393 @@ func main() {
 		fmt.Sprintf("F%dM", gameYear): true,
 	}
 
-	// Collect messages per power (messages they sent or received)
-	powerMessages := make(map[string][]Message)
+	// Collect all messages for this year
+	var yearMessages []Message
 	for _, phase := range game.Phases {
 		if !targetPhases[phase.Name] {
 			continue
 		}
-		for _, msg := range phase.Messages {
-			sender := strings.ToUpper(msg.Sender)
-			recipient := strings.ToUpper(msg.Recipient)
-			powerMessages[sender] = append(powerMessages[sender], msg)
-			if recipient != "GLOBAL" && recipient != sender {
-				powerMessages[recipient] = append(powerMessages[recipient], msg)
-			}
-			if recipient == "GLOBAL" {
-				for _, p := range powers {
-					if p != sender {
-						powerMessages[p] = append(powerMessages[p], msg)
-					}
-				}
-			}
-		}
+		yearMessages = append(yearMessages, phase.Messages...)
+	}
+
+	if len(yearMessages) == 0 {
+		fmt.Fprintf(os.Stderr, "No messages for year %d\n", *year)
+		os.Exit(0)
+	}
+
+	// Detect alliances: explicit flag, or inferred from cross-power support orders
+	alliances := parseAllianceFlag(*alliancesFlag)
+	if len(alliances) == 0 {
+		alliances = detectAlliancesFromOrders(game, gameYear)
+	}
+
+	// Categorize messages by scope
+	scopes := buildScopes(yearMessages, alliances, *year)
+	fmt.Fprintf(os.Stderr, "Year %d: %d messages → %d scopes (%d global, %d bilateral, %d alliance)\n",
+		*year, len(yearMessages), len(scopes),
+		countByTag(scopes, "global"), countByTag(scopes, "bilateral"), countByTag(scopes, "alliance"))
+	for _, a := range alliances {
+		fmt.Fprintf(os.Stderr, "  Alliance detected: %s\n", strings.Join(a, "+"))
 	}
 
 	os.MkdirAll(*outputDir, 0755) //nolint:errcheck
 	ctx := context.Background()
 
-	// Process powers in parallel with staggered starts to avoid rate limiting.
-	// Each power gets its own SSE connection. Stagger by 3s to spread the
-	// initial burst of create+submit+vote calls across the rate limit window.
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	succeeded := 0
-	failed := 0
+	// Analyze all scopes in parallel
+	results := analyzeScopes(ctx, scopes, url, secret, *year)
 
-	for i, power := range powers {
-		msgs := powerMessages[power]
-		if len(msgs) == 0 {
-			fmt.Fprintf(os.Stderr, "  %s: no messages for year %d, skipping\n", power, *year)
+	// Synthesize per-power briefings from all relevant scopes
+	var wg sync.WaitGroup
+	for _, power := range powers {
+		wg.Add(1)
+		go func(power string) {
+			defer wg.Done()
+			briefing := synthesizeBriefing(power, *year, results)
+			if briefing == "" {
+				fmt.Fprintf(os.Stderr, "  %s: no data for briefing\n", power)
+				return
+			}
+			outFile := filepath.Join(*outputDir, fmt.Sprintf("%s_briefing.txt", strings.ToLower(power)))
+			if err := os.WriteFile(outFile, []byte(briefing), 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: ERROR writing briefing: %v\n", power, err)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "  %s: wrote %s\n", power, outFile)
+		}(power)
+	}
+	wg.Wait()
+
+	fmt.Fprintf(os.Stderr, "Done. Briefings written to %s\n", *outputDir)
+}
+
+// buildScopes categorizes messages into global, bilateral, and alliance scopes.
+// Each scope gets the appropriate gemot deliberation template.
+func buildScopes(messages []Message, alliances [][]string, year int) []scope {
+	var globalMsgs []Message
+	bilateral := make(map[string][]Message) // "AUSTRIA-ENGLAND" -> messages
+
+	for _, msg := range messages {
+		if strings.ToUpper(msg.Recipient) == "GLOBAL" {
+			globalMsgs = append(globalMsgs, msg)
+		} else {
+			key := pairKey(msg.Sender, msg.Recipient)
+			bilateral[key] = append(bilateral[key], msg)
+		}
+	}
+
+	var scopes []scope
+
+	// Global scope → assembly (broad multi-party discourse)
+	if len(globalMsgs) > 0 {
+		scopes = append(scopes, scope{
+			name:     "global",
+			scopeTag: "global",
+			template: "assembly",
+			powers:   powers,
+			messages: globalMsgs,
+		})
+	}
+
+	// Bilateral scopes → negotiation (two-party, ZOPA/BATNA analysis)
+	for key, msgs := range bilateral {
+		parts := strings.SplitN(key, "-", 2)
+		scopes = append(scopes, scope{
+			name:     key,
+			scopeTag: "bilateral",
+			template: "negotiation",
+			powers:   parts,
+			messages: msgs,
+		})
+	}
+
+	// Alliance scopes → consensus (coalition coordination, all members must engage)
+	for _, alliance := range alliances {
+		var msgs []Message
+		for i := 0; i < len(alliance); i++ {
+			for j := i + 1; j < len(alliance); j++ {
+				key := pairKey(alliance[i], alliance[j])
+				msgs = append(msgs, bilateral[key]...)
+			}
+		}
+		if len(msgs) > 0 {
+			scopes = append(scopes, scope{
+				name:     strings.Join(alliance, "+"),
+				scopeTag: "alliance",
+				template: "consensus",
+				powers:   alliance,
+				messages: msgs,
+			})
+		}
+	}
+
+	return scopes
+}
+
+// pairKey returns a canonical key for a pair of powers (sorted alphabetically).
+func pairKey(a, b string) string {
+	a, b = strings.ToUpper(a), strings.ToUpper(b)
+	if a > b {
+		a, b = b, a
+	}
+	return a + "-" + b
+}
+
+
+// parseAllianceFlag parses "ENGLAND+FRANCE+RUSSIA,AUSTRIA+TURKEY" into alliance groups.
+func parseAllianceFlag(flag string) [][]string {
+	if flag == "" {
+		return nil
+	}
+	var alliances [][]string
+	for _, group := range strings.Split(flag, ",") {
+		group = strings.TrimSpace(group)
+		if group == "" {
 			continue
 		}
+		members := strings.Split(group, "+")
+		for i := range members {
+			members[i] = strings.ToUpper(strings.TrimSpace(members[i]))
+		}
+		if len(members) >= 2 {
+			sort.Strings(members)
+			alliances = append(alliances, members)
+		}
+	}
+	return alliances
+}
 
+// detectAlliancesFromOrders finds alliances by detecting cross-power support orders.
+// If Power A orders a unit to support Power B's unit, that's an alliance signal.
+// Mutual support (A supports B AND B supports A) = strong alliance.
+func detectAlliancesFromOrders(game GameState, gameYear int) [][]string {
+	targetPhases := map[string]bool{
+		fmt.Sprintf("S%dM", gameYear): true,
+		fmt.Sprintf("F%dM", gameYear): true,
+	}
+
+	// Build unit ownership map from game state
+	unitOwner := make(map[string]string) // "A VIE" -> "AUSTRIA"
+	for _, phase := range game.Phases {
+		if !targetPhases[phase.Name] {
+			continue
+		}
+		if phase.State.Units == nil {
+			continue
+		}
+		for power, units := range phase.State.Units {
+			for _, unit := range units {
+				unitOwner[unit] = strings.ToUpper(power)
+			}
+		}
+	}
+
+	// Find cross-power support orders
+	supportPairs := make(map[string]bool) // "ENGLAND->FRANCE" = England supports French unit
+	for _, phase := range game.Phases {
+		if !targetPhases[phase.Name] {
+			continue
+		}
+		for power, orders := range phase.Orders {
+			power = strings.ToUpper(power)
+			for _, order := range orders {
+				if order == nil {
+					continue
+				}
+				orderStr, ok := order.(string)
+				if !ok {
+					continue
+				}
+				// Support orders contain " S " (e.g., "F NTH S A YOR - WAL")
+				if !strings.Contains(orderStr, " S ") {
+					continue
+				}
+				// Parse the supported unit: everything after " S "
+				parts := strings.SplitN(orderStr, " S ", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				// The supported unit is the first token(s) of the support target
+				// e.g., "A YOR - WAL" → supported unit is "A YOR"
+				supportTarget := strings.TrimSpace(parts[1])
+				supportedUnit := supportTarget
+				if dashIdx := strings.Index(supportTarget, " - "); dashIdx != -1 {
+					supportedUnit = supportTarget[:dashIdx]
+				}
+				supportedUnit = strings.TrimSpace(supportedUnit)
+
+				// Check who owns the supported unit
+				if owner, ok := unitOwner[supportedUnit]; ok && owner != power {
+					key := power + "->" + owner
+					supportPairs[key] = true
+				}
+			}
+		}
+	}
+
+	// Find mutual support pairs → alliances
+	mutualPairs := make(map[string]bool)
+	for pair := range supportPairs {
+		parts := strings.SplitN(pair, "->", 2)
+		reverse := parts[1] + "->" + parts[0]
+		if supportPairs[reverse] {
+			key := pairKey(parts[0], parts[1])
+			mutualPairs[key] = true
+		}
+	}
+
+	// Build alliance groups from mutual support graph
+	// For now: each mutual pair is a 2-power alliance.
+	// Also check for 3-power alliances (triangles in mutual support graph).
+	edges := make(map[string]map[string]bool)
+	for key := range mutualPairs {
+		parts := strings.SplitN(key, "-", 2)
+		if edges[parts[0]] == nil {
+			edges[parts[0]] = make(map[string]bool)
+		}
+		if edges[parts[1]] == nil {
+			edges[parts[1]] = make(map[string]bool)
+		}
+		edges[parts[0]][parts[1]] = true
+		edges[parts[1]][parts[0]] = true
+	}
+
+	// Find triangles (3-power alliances)
+	var alliances [][]string
+	seen := make(map[string]bool)
+	sortedPowers := make([]string, 0, len(edges))
+	for p := range edges {
+		sortedPowers = append(sortedPowers, p)
+	}
+	sort.Strings(sortedPowers)
+
+	for _, a := range sortedPowers {
+		for _, b := range sortedPowers {
+			if b <= a || !edges[a][b] {
+				continue
+			}
+			for _, c := range sortedPowers {
+				if c <= b || !edges[b][c] || !edges[a][c] {
+					continue
+				}
+				key := a + "+" + b + "+" + c
+				if !seen[key] {
+					seen[key] = true
+					alliances = append(alliances, []string{a, b, c})
+				}
+			}
+		}
+	}
+
+	// Also include 2-power mutual support pairs not part of a triangle
+	for key := range mutualPairs {
+		parts := strings.SplitN(key, "-", 2)
+		inTriangle := false
+		for _, a := range alliances {
+			if containsStr(a, parts[0]) && containsStr(a, parts[1]) {
+				inTriangle = true
+				break
+			}
+		}
+		if !inTriangle {
+			alliances = append(alliances, []string{parts[0], parts[1]})
+		}
+	}
+
+	return alliances
+}
+
+func containsStr(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// analyzeScopes processes all scopes in parallel and returns results.
+func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year int) []scopeResult {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var results []scopeResult
+
+	for i, sc := range scopes {
 		wg.Add(1)
-		stagger := time.Duration(i) * 3 * time.Second
-		go func(power string, msgs []Message, delay time.Duration) {
+		stagger := time.Duration(i) * 2 * time.Second
+		go func(sc scope, delay time.Duration) {
+			defer wg.Done()
 			if delay > 0 {
 				time.Sleep(delay)
 			}
-			defer wg.Done()
-			fmt.Fprintf(os.Stderr, "  %s: %d messages — connecting...\n", power, len(msgs))
 
-			var briefing string
+			fmt.Fprintf(os.Stderr, "  [%s] %s: %d messages, %d powers\n",
+				sc.scopeTag, sc.name, len(sc.messages), len(sc.powers))
+
+			var result *scopeResult
 			var lastErr error
 			for attempt := 1; attempt <= 3; attempt++ {
 				if attempt > 1 {
-					fmt.Fprintf(os.Stderr, "  %s: retry %d/3...\n", power, attempt)
+					fmt.Fprintf(os.Stderr, "  [%s] %s: retry %d/3...\n", sc.scopeTag, sc.name, attempt)
 					time.Sleep(10 * time.Second)
 				}
 
 				session, err := connect(ctx, url, secret)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "  %s: ERROR connecting: %v\n", power, err)
+					fmt.Fprintf(os.Stderr, "  [%s] %s: ERROR connecting: %v\n", sc.scopeTag, sc.name, err)
 					lastErr = err
 					continue
 				}
 
-				briefing, err = analyzePower(ctx, session, url, secret, power, msgs, *year)
+				result, err = analyzeScope(ctx, session, url, secret, sc, year)
 				session.Close() //nolint:errcheck
 				if err == nil {
 					lastErr = nil
 					break
 				}
-				fmt.Fprintf(os.Stderr, "  %s: ERROR: %v\n", power, err)
+				fmt.Fprintf(os.Stderr, "  [%s] %s: ERROR: %v\n", sc.scopeTag, sc.name, err)
 				lastErr = err
 			}
+
 			if lastErr != nil {
-				fmt.Fprintf(os.Stderr, "  %s: FAILED after 3 attempts: %v\n", power, lastErr)
-				mu.Lock()
-				failed++
-				mu.Unlock()
+				fmt.Fprintf(os.Stderr, "  [%s] %s: FAILED: %v\n", sc.scopeTag, sc.name, lastErr)
 				return
 			}
 
-			outFile := filepath.Join(*outputDir, fmt.Sprintf("%s_briefing.txt", strings.ToLower(power)))
-			if err := os.WriteFile(outFile, []byte(briefing), 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "  %s: ERROR writing briefing: %v\n", power, err)
-				mu.Lock()
-				failed++
-				mu.Unlock()
-				return
-			}
-			fmt.Fprintf(os.Stderr, "  %s: wrote %s\n", power, outFile)
 			mu.Lock()
-			succeeded++
+			results = append(results, *result)
 			mu.Unlock()
-		}(power, msgs, stagger)
+			fmt.Fprintf(os.Stderr, "  [%s] %s: complete (%d contexts)\n", sc.scopeTag, sc.name, len(result.contexts))
+		}(sc, stagger)
 	}
 
 	wg.Wait()
-	fmt.Fprintf(os.Stderr, "Done. %d/%d briefings written to %s\n", succeeded, succeeded+failed, *outputDir)
-	if failed > 0 {
-		os.Exit(1)
-	}
+	return results
 }
 
-func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secret, power string, msgs []Message, year int) (string, error) {
-	// 1. Create deliberation
-	topic := fmt.Sprintf("%s diplomatic intelligence — Year %d", power, 1900+year)
-	desc := fmt.Sprintf("Analysis of diplomatic messages involving %s during Year %d. "+
-		"Each position represents a message between powers. Analysis identifies "+
-		"alliance patterns, points of disagreement, and strategic cruxes.", power, 1900+year)
+// analyzeScope creates a deliberation for one scope, submits messages, runs analysis,
+// and returns contexts for each participating power.
+func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secret string, sc scope, year int) (*scopeResult, error) {
+	gameYear := 1900 + year
 
+	// Build topic based on scope
+	var topic, desc string
+	switch sc.scopeTag {
+	case "global":
+		topic = fmt.Sprintf("Public diplomacy — Year %d", gameYear)
+		desc = fmt.Sprintf("Analysis of public broadcast messages between all powers during Year %d.", gameYear)
+	case "bilateral":
+		topic = fmt.Sprintf("%s bilateral negotiations — Year %d", sc.name, gameYear)
+		desc = fmt.Sprintf("Private diplomatic messages between %s during Year %d.", strings.Join(sc.powers, " and "), gameYear)
+	case "alliance":
+		topic = fmt.Sprintf("%s alliance coordination — Year %d", sc.name, gameYear)
+		desc = fmt.Sprintf("Multi-party diplomatic messages within the %s alliance during Year %d.", sc.name, gameYear)
+	}
+
+	// 1. Create deliberation with scope-appropriate template
 	createJSON := callTool(ctx, session, "create_deliberation", map[string]any{
 		"topic":       topic,
 		"description": desc,
-		"type":        "negotiation",
+		"type":        sc.template,
 	})
 
 	var createResp struct {
@@ -228,7 +526,7 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 	deliberationID := createResp.DeliberationID
 
 	// 2. Submit each message as a position
-	for i, msg := range msgs {
+	for _, msg := range sc.messages {
 		sender := strings.ToUpper(msg.Sender)
 		recipient := strings.ToUpper(msg.Recipient)
 		positionText := fmt.Sprintf("[%s → %s, %s] %s", sender, recipient, msg.Phase, msg.Content)
@@ -240,92 +538,70 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 			"content":         positionText,
 			"interests":       fmt.Sprintf("%s's strategic objectives", strings.ToLower(msg.Sender)),
 		})
-		_ = i
 	}
 
-	// 3. Get positions and have each power vote
-	posJSON := callTool(ctx, session, "get_positions", map[string]any{
-		"deliberation_id": deliberationID,
-	})
+	// 3. Voting: only for alliance scopes where members vote on proposals.
+	// Global and bilateral scopes rely on content analysis for crux detection —
+	// artificial votes conflate "I heard this" with "I agree with this."
+	// Alliance consensus deliberations benefit from votes: members agree/disagree
+	// with each other's strategic proposals, which feeds clustering and bridging.
+	if sc.scopeTag == "alliance" {
+		posJSON := callTool(ctx, session, "get_positions", map[string]any{
+			"deliberation_id": deliberationID,
+		})
+		var positions []struct {
+			ID      string `json:"position_id"`
+			AgentID string `json:"agent_id"`
+		}
+		mustParse(posJSON, &positions)
 
-	var positions []struct {
-		ID      string `json:"position_id"`
-		AgentID string `json:"agent_id"`
-	}
-	mustParse(posJSON, &positions)
-
-	// Build a map of position ID to message metadata for voting decisions
-	type posInfo struct {
-		sender, recipient string
-	}
-	posMap := make(map[string]posInfo)
-	for i, pos := range positions {
-		if i < len(msgs) {
-			posMap[pos.ID] = posInfo{
-				sender:    strings.ToLower(msgs[i].Sender),
-				recipient: strings.ToLower(msgs[i].Recipient),
+		// Each alliance member votes on every other member's messages.
+		// +1 for messages from their bilateral partner (shared negotiation context),
+		// 0 (skip) for messages from bilateral channels they're not part of.
+		for _, pos := range positions {
+			for _, p := range sc.powers {
+				voterAgent := strings.ToLower(p) + "-agent"
+				if voterAgent == pos.AgentID {
+					continue // don't vote on own positions
+				}
+				// In alliance scope, vote +1 on all other members' positions.
+				// Alliance members are cooperating — votes signal internal agreement/disagreement.
+				callToolSoft(ctx, session, "vote", map[string]any{
+					"deliberation_id": deliberationID,
+					"agent_id":        voterAgent,
+					"position_id":     pos.ID,
+					"vote":            1,
+				})
 			}
 		}
 	}
 
-	for _, pos := range positions {
-		info := posMap[pos.ID]
-		for _, voterPower := range powers {
-			voterAgent := strings.ToLower(voterPower) + "-agent"
-			voter := strings.ToLower(voterPower)
-			if voterAgent == pos.AgentID {
-				continue
-			}
-
-			// Vote based on diplomatic relationship:
-			// - Agree with messages addressed to you (they engaged with you)
-			// - Pass on everything else (don't penalize for being excluded)
-			// NOTE: Previously excluded powers voted -1 (disagree), which created
-			// false polarization — 5 powers "disagreeing" with a private message
-			// doesn't mean they disagree with its content. T3C has no voting at all.
-			vote := 0
-			if info.recipient == voter || info.sender == voter {
-				vote = 1 // you're party to this conversation
-			}
-
-			callToolSoft(ctx, session, "vote", map[string]any{
-				"deliberation_id": deliberationID,
-				"agent_id":        voterAgent,
-				"position_id":     pos.ID,
-				"vote":            vote,
-			})
-		}
-	}
-
-	// 4. Run analysis
-	prefix := fmt.Sprintf("  %s:", power)
+	// 4. Analyze
+	prefix := fmt.Sprintf("  [%s] %s:", sc.scopeTag, sc.name)
 	fmt.Fprintf(os.Stderr, "%s analyzing...\n", prefix)
 	callTool(ctx, session, "analyze", map[string]any{
 		"deliberation_id": deliberationID,
 	})
 
-	// 5. Poll for completion by trying get_context directly.
-	// This is the most reliable signal — if get_context returns data,
-	// analysis is done. No need to interpret status transitions.
+	// 5. Poll for completion using first power's context
+	firstPower := strings.ToLower(sc.powers[0]) + "-agent"
 	time.Sleep(5 * time.Second)
-	var contextJSON string
+	completed := false
 	for i := 0; i < 200; i++ {
 		time.Sleep(3 * time.Second)
 
 		result := callToolSoft(ctx, session, "get_context", map[string]any{
 			"deliberation_id": deliberationID,
-			"agent_id":        strings.ToLower(power) + "-agent",
+			"agent_id":        firstPower,
 		})
 
 		if result == "" {
-			// Session may have died — reconnect
 			session.Close() //nolint:errcheck
 			var reconnErr error
 			session, reconnErr = connect(ctx, url, secret)
 			if reconnErr != nil {
 				fmt.Fprintf(os.Stderr, "%s reconnect failed: %v\n", prefix, reconnErr)
 			}
-			// Log progress from get_deliberation
 			if session != nil {
 				statusJSON := callToolSoft(ctx, session, "get_deliberation", map[string]any{
 					"deliberation_id": deliberationID,
@@ -342,21 +618,222 @@ func analyzePower(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 			continue
 		}
 
-		contextJSON = result
+		completed = true
 		fmt.Fprintf(os.Stderr, "%s analysis complete\n", prefix)
 		break
 	}
-	if contextJSON == "" {
-		return "", fmt.Errorf("analysis did not produce results after 10 minutes")
+	if !completed {
+		return nil, fmt.Errorf("analysis did not produce results after 10 minutes")
 	}
 
-	// 6. Format as briefing
-	return formatBriefing(power, year, contextJSON), nil
+	// 6. Collect contexts for each participating power
+	contexts := make(map[string]string)
+	for _, p := range sc.powers {
+		agentID := strings.ToLower(p) + "-agent"
+		result := callToolSoft(ctx, session, "get_context", map[string]any{
+			"deliberation_id": deliberationID,
+			"agent_id":        agentID,
+		})
+		if result != "" {
+			contexts[strings.ToLower(p)] = result
+		}
+	}
+
+	return &scopeResult{scope: sc, contexts: contexts}, nil
 }
 
+// synthesizeBriefing merges intelligence from all scopes into one briefing per power.
+func synthesizeBriefing(power string, year int, results []scopeResult) string {
+	powerLower := strings.ToLower(power)
+	gameYear := 1900 + year
+
+	// Collect relevant contexts by scope type
+	var globalCtx *agentContext
+	var bilateralCtxs []namedContext
+	var allianceCtxs []namedContext
+
+	for _, r := range results {
+		ctxJSON, ok := r.contexts[powerLower]
+		if !ok {
+			continue
+		}
+		var ac agentContext
+		mustParseSoft(ctxJSON, &ac)
+
+		switch r.scope.scopeTag {
+		case "global":
+			globalCtx = &ac
+		case "bilateral":
+			// Name the bilateral by the OTHER power
+			other := ""
+			for _, p := range r.scope.powers {
+				if strings.ToLower(p) != powerLower {
+					other = p
+				}
+			}
+			bilateralCtxs = append(bilateralCtxs, namedContext{name: other, ctx: ac})
+		case "alliance":
+			allianceCtxs = append(allianceCtxs, namedContext{name: r.scope.name, ctx: ac})
+		}
+	}
+
+	if globalCtx == nil && len(bilateralCtxs) == 0 && len(allianceCtxs) == 0 {
+		return ""
+	}
+
+	// Sort bilateral by number of cruxes (most informative first)
+	sort.Slice(bilateralCtxs, func(i, j int) bool {
+		return len(bilateralCtxs[i].ctx.RelevantCruxes) > len(bilateralCtxs[j].ctx.RelevantCruxes)
+	})
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "=== DIPLOMATIC INTELLIGENCE BRIEFING: %s — Year %d ===\n\n", power, gameYear)
+
+	// Section 1: Public diplomatic landscape (from global)
+	if globalCtx != nil {
+		if len(globalCtx.TopicSummaries) > 0 {
+			fmt.Fprintf(&b, "PUBLIC DIPLOMATIC LANDSCAPE:\n")
+			for i, ts := range globalCtx.TopicSummaries {
+				fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, ts.Topic, ts.Summary)
+			}
+			fmt.Fprintln(&b)
+		}
+
+		if len(globalCtx.AlignmentScores) > 0 {
+			fmt.Fprintf(&b, "GLOBAL ALIGNMENT MATRIX:\n")
+			for _, a := range globalCtx.AlignmentScores {
+				label := "OPPOSED"
+				if a.AlignmentScore >= 0.67 {
+					label = "STRONG ALLY"
+				} else if a.AlignmentScore >= 0.4 {
+					label = "PARTIAL ALLY"
+				} else if a.AlignmentScore > 0 {
+					label = "WEAK"
+				}
+				fmt.Fprintf(&b, "  %s: %.0f%% aligned (%d/%d cruxes) — %s\n",
+					a.AgentID, a.AlignmentScore*100, a.AgreeCruxes, a.SharedCruxes, label)
+			}
+			fmt.Fprintln(&b)
+		}
+
+		if len(globalCtx.SwingAgents) > 0 {
+			fmt.Fprintf(&b, "PERSUADABLE POWERS (undecided on many public cruxes):\n  %s\n\n",
+				strings.Join(globalCtx.SwingAgents, ", "))
+		}
+
+		if len(globalCtx.RelevantCruxes) > 0 {
+			fmt.Fprintf(&b, "PUBLIC CRUXES:\n")
+			writeCruxes(&b, globalCtx.RelevantCruxes)
+			fmt.Fprintln(&b)
+		}
+	}
+
+	// Section 2: Bilateral intelligence
+	if len(bilateralCtxs) > 0 {
+		fmt.Fprintf(&b, "BILATERAL INTELLIGENCE:\n\n")
+		for _, bc := range bilateralCtxs {
+			fmt.Fprintf(&b, "  === %s ↔ %s ===\n", power, bc.name)
+			if len(bc.ctx.RelevantCruxes) > 0 {
+				for _, c := range bc.ctx.RelevantCruxes {
+					fmt.Fprintf(&b, "  • %s\n", c.Claim)
+					if c.Controversy > 0 {
+						fmt.Fprintf(&b, "    Controversy: %.0f%%\n", c.Controversy*100)
+					}
+					if c.Explanation != "" {
+						// Truncate long explanations for bilateral section
+						expl := c.Explanation
+						if len(expl) > 200 {
+							expl = expl[:200] + "..."
+						}
+						fmt.Fprintf(&b, "    %s\n", expl)
+					}
+				}
+			} else {
+				fmt.Fprintf(&b, "  (No cruxes detected — possible agreement or insufficient data)\n")
+			}
+			fmt.Fprintln(&b)
+		}
+	}
+
+	// Section 3: Alliance dynamics
+	if len(allianceCtxs) > 0 {
+		fmt.Fprintf(&b, "ALLIANCE DYNAMICS:\n\n")
+		for _, ac := range allianceCtxs {
+			fmt.Fprintf(&b, "  === %s Alliance ===\n", ac.name)
+			if len(ac.ctx.AlignmentScores) > 0 {
+				fmt.Fprintf(&b, "  Internal alignment:\n")
+				for _, a := range ac.ctx.AlignmentScores {
+					fmt.Fprintf(&b, "    %s: %.0f%% aligned (%d/%d cruxes)\n",
+						a.AgentID, a.AlignmentScore*100, a.AgreeCruxes, a.SharedCruxes)
+				}
+			}
+			if len(ac.ctx.RelevantCruxes) > 0 {
+				fmt.Fprintf(&b, "  Internal disagreements:\n")
+				for _, c := range ac.ctx.RelevantCruxes {
+					fmt.Fprintf(&b, "    • %s\n", c.Claim)
+				}
+			}
+			fmt.Fprintln(&b)
+		}
+	}
+
+	// Section 4: Strategic recommendations (synthesized from all scopes)
+	var stratParts []string
+	if globalCtx != nil && globalCtx.StrategicNudge != "" {
+		stratParts = append(stratParts, globalCtx.StrategicNudge)
+	}
+	for _, bc := range bilateralCtxs {
+		if bc.ctx.StrategicNudge != "" {
+			stratParts = append(stratParts, fmt.Sprintf("[%s] %s", bc.name, bc.ctx.StrategicNudge))
+		}
+	}
+	if len(stratParts) > 0 {
+		fmt.Fprintf(&b, "STRATEGIC RECOMMENDATIONS:\n")
+		for _, s := range stratParts {
+			fmt.Fprintf(&b, "  %s\n", s)
+		}
+		fmt.Fprintln(&b)
+	}
+
+	// Diversity nudge
+	if globalCtx != nil && globalCtx.DiversityNudge != "" {
+		fmt.Fprintf(&b, "POSITION ASSESSMENT:\n%s\n\n", globalCtx.DiversityNudge)
+	}
+
+	fmt.Fprintf(&b, "=== END BRIEFING ===\n")
+	return b.String()
+}
+
+// writeCruxes renders cruxes in the standard format.
+func writeCruxes(b *strings.Builder, cruxes []crux) {
+	for i, c := range cruxes {
+		fmt.Fprintf(b, "\n%d. %s\n", i+1, c.Claim)
+		if c.Topic != "" {
+			fmt.Fprintf(b, "   Topic: %s\n", c.Topic)
+		}
+		if c.Controversy > 0 {
+			fmt.Fprintf(b, "   Controversy: %.0f%%\n", c.Controversy*100)
+		}
+		if len(c.AgreeAgents) > 0 {
+			fmt.Fprintf(b, "   AGREE: %s\n", strings.Join(c.AgreeAgents, ", "))
+		}
+		if len(c.DisagreeAgents) > 0 {
+			fmt.Fprintf(b, "   DISAGREE: %s\n", strings.Join(c.DisagreeAgents, ", "))
+		}
+		if len(c.NoClearPosition) > 0 {
+			fmt.Fprintf(b, "   NO CLEAR POSITION: %s\n", strings.Join(c.NoClearPosition, ", "))
+		}
+		if c.Explanation != "" {
+			fmt.Fprintf(b, "   %s\n", c.Explanation)
+		}
+	}
+}
+
+// --- Types for context parsing ---
+
 type crux struct {
-	Claim          string   `json:"crux_claim"`
-	Topic          string   `json:"topic"`
+	Claim           string   `json:"crux_claim"`
+	Topic           string   `json:"topic"`
 	Explanation     string   `json:"explanation"`
 	Controversy     float64  `json:"controversy_score"`
 	AgreeAgents     []string `json:"agree_agents"`
@@ -383,117 +860,36 @@ type bridging struct {
 	BridgingScore float64 `json:"bridging_score"`
 }
 
-func formatBriefing(power string, year int, contextJSON string) string {
-	var ac struct {
-		AgentID              string         `json:"agent_id"`
-		ClusterID            *int           `json:"cluster_id"`
-		NearestAllies        []string       `json:"nearest_allies"`
-		BiggestDisagreements []string       `json:"biggest_disagreements_with"`
-		RelevantCruxes       []crux         `json:"relevant_cruxes"`
-		TopicSummaries       []topicSummary `json:"topic_summaries"`
-		AlignmentScores      []alignment    `json:"alignment_scores"`
-		SwingAgents          []string       `json:"swing_agents"`
-		BridgingStatements   []bridging     `json:"bridging_statements"`
-		StrategicNudge       string         `json:"strategic_nudge"`
-		DiversityNudge       string         `json:"diversity_nudge"`
-		IntegrityWarnings    []string       `json:"integrity_warnings"`
-	}
-	mustParse(contextJSON, &ac)
+type agentContext struct {
+	AgentID              string         `json:"agent_id"`
+	ClusterID            *int           `json:"cluster_id"`
+	NearestAllies        []string       `json:"nearest_allies"`
+	BiggestDisagreements []string       `json:"biggest_disagreements_with"`
+	RelevantCruxes       []crux         `json:"relevant_cruxes"`
+	TopicSummaries       []topicSummary `json:"topic_summaries"`
+	AlignmentScores      []alignment    `json:"alignment_scores"`
+	SwingAgents          []string       `json:"swing_agents"`
+	BridgingStatements   []bridging     `json:"bridging_statements"`
+	StrategicNudge       string         `json:"strategic_nudge"`
+	DiversityNudge       string         `json:"diversity_nudge"`
+	IntegrityWarnings    []string       `json:"integrity_warnings"`
+}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, "=== DIPLOMATIC INTELLIGENCE BRIEFING: %s — Year %d ===\n\n", power, 1900+year)
+type namedContext struct {
+	name string
+	ctx  agentContext
+}
 
-	// Key discussion themes (landscape overview)
-	if len(ac.TopicSummaries) > 0 {
-		fmt.Fprintf(&b, "KEY DISCUSSION THEMES:\n")
-		for i, ts := range ac.TopicSummaries {
-			fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, ts.Topic, ts.Summary)
+// --- Helpers ---
+
+func countByTag(scopes []scope, tag string) int {
+	n := 0
+	for _, s := range scopes {
+		if s.scopeTag == tag {
+			n++
 		}
-		fmt.Fprintln(&b)
 	}
-
-	// Pairwise alignment matrix (T3C-style)
-	if len(ac.AlignmentScores) > 0 {
-		fmt.Fprintf(&b, "ALIGNMENT MATRIX:\n")
-		for _, a := range ac.AlignmentScores {
-			label := "OPPOSED"
-			if a.AlignmentScore >= 0.67 {
-				label = "STRONG ALLY"
-			} else if a.AlignmentScore >= 0.4 {
-				label = "PARTIAL ALLY"
-			} else if a.AlignmentScore > 0 {
-				label = "WEAK ALIGNMENT"
-			}
-			fmt.Fprintf(&b, "  %s: %.0f%% aligned (%d/%d cruxes) — %s\n",
-				a.AgentID, a.AlignmentScore*100, a.AgreeCruxes, a.SharedCruxes, label)
-		}
-		fmt.Fprintln(&b)
-	} else if len(ac.NearestAllies) > 0 {
-		fmt.Fprintf(&b, "ALLIANCE ALIGNMENT:\nYour closest allies based on voting patterns: %s\n\n",
-			strings.Join(ac.NearestAllies, ", "))
-	}
-
-	if len(ac.BiggestDisagreements) > 0 {
-		fmt.Fprintf(&b, "BIGGEST DISAGREEMENTS WITH:\n%s\n\n",
-			strings.Join(ac.BiggestDisagreements, ", "))
-	}
-
-	// Swing agents (persuadable)
-	if len(ac.SwingAgents) > 0 {
-		fmt.Fprintf(&b, "PERSUADABLE POWERS (undecided on many cruxes):\n%s\n\n",
-			strings.Join(ac.SwingAgents, ", "))
-	}
-
-	if len(ac.RelevantCruxes) > 0 {
-		fmt.Fprintf(&b, "KEY POINTS OF DISAGREEMENT (CRUXES):\n")
-		for i, c := range ac.RelevantCruxes {
-			fmt.Fprintf(&b, "\n%d. %s\n", i+1, c.Claim)
-			if c.Topic != "" {
-				fmt.Fprintf(&b, "   Topic: %s\n", c.Topic)
-			}
-			if c.Controversy > 0 {
-				fmt.Fprintf(&b, "   Controversy: %.0f%%\n", c.Controversy*100)
-			}
-			if len(c.AgreeAgents) > 0 {
-				fmt.Fprintf(&b, "   AGREE: %s\n", strings.Join(c.AgreeAgents, ", "))
-			}
-			if len(c.DisagreeAgents) > 0 {
-				fmt.Fprintf(&b, "   DISAGREE: %s\n", strings.Join(c.DisagreeAgents, ", "))
-			}
-			if len(c.NoClearPosition) > 0 {
-				fmt.Fprintf(&b, "   NO CLEAR POSITION: %s\n", strings.Join(c.NoClearPosition, ", "))
-			}
-			if c.Explanation != "" {
-				fmt.Fprintf(&b, "   %s\n", c.Explanation)
-			}
-		}
-		fmt.Fprintln(&b)
-	}
-
-	// Bridging positions (cross-cluster agreement)
-	if len(ac.BridgingStatements) > 0 {
-		fmt.Fprintf(&b, "BRIDGING POSITIONS (cross-faction support):\n")
-		for _, bs := range ac.BridgingStatements {
-			content := bs.Content
-			if len(content) > 150 {
-				content = content[:150] + "..."
-			}
-			fmt.Fprintf(&b, "  %s (%.0f%% cross-cluster support): %s\n",
-				bs.AgentID, bs.BridgingScore*100, content)
-		}
-		fmt.Fprintln(&b)
-	}
-
-	// Strategic guidance
-	if ac.StrategicNudge != "" {
-		fmt.Fprintf(&b, "STRATEGIC RECOMMENDATIONS:\n%s\n\n", ac.StrategicNudge)
-	}
-	if ac.DiversityNudge != "" {
-		fmt.Fprintf(&b, "POSITION ASSESSMENT:\n%s\n\n", ac.DiversityNudge)
-	}
-
-	fmt.Fprintf(&b, "=== END BRIEFING ===\n")
-	return b.String()
+	return n
 }
 
 func connect(ctx context.Context, url, secret string) (*sdkmcp.ClientSession, error) {
@@ -503,7 +899,7 @@ func connect(ctx context.Context, url, secret string) (*sdkmcp.ClientSession, er
 			Transport: &authTransport{base: http.DefaultTransport, token: secret},
 		},
 	}
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "diplomacy", Version: "1.0"}, nil)
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "diplomacy", Version: "2.0"}, nil)
 	return client.Connect(ctx, transport, nil)
 }
 
@@ -539,6 +935,13 @@ func mustParse(jsonStr string, v any) {
 		fmt.Fprintf(os.Stderr, "JSON parse error: %v\nRaw: %s\n", err, jsonStr[:min(200, len(jsonStr))])
 		os.Exit(1)
 	}
+}
+
+func mustParseSoft(jsonStr string, v any) {
+	if idx := strings.Index(jsonStr, "\n\n---\n"); idx != -1 {
+		jsonStr = jsonStr[:idx]
+	}
+	json.Unmarshal([]byte(jsonStr), v) //nolint:errcheck
 }
 
 func envOr(key, fallback string) string {
