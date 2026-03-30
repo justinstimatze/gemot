@@ -177,7 +177,7 @@ func TestSoftDelete(t *testing.T) {
 	}
 
 	// Should NOT appear in list
-	deliberations, err := svc.ListDeliberations()
+	deliberations, err := svc.ListDeliberations(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

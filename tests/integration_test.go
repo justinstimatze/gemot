@@ -176,7 +176,7 @@ func TestFullDeliberationLoop(t *testing.T) {
 	}
 
 	// Step 7: List deliberations
-	list, err := svc.ListDeliberations()
+	list, err := svc.ListDeliberations(0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

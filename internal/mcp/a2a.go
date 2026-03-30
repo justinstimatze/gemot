@@ -13,6 +13,38 @@ import (
 	"github.com/justinstimatze/gemot/internal/payments"
 )
 
+// a2aMethods is the canonical list of supported A2A methods.
+var a2aMethods = []string{
+	"agent/info",
+	"gemot/create_deliberation",
+	"gemot/submit_position",
+	"gemot/vote",
+	"gemot/analyze",
+	"gemot/get_deliberation",
+	"gemot/get_positions",
+	"gemot/get_context",
+	"gemot/list_deliberations",
+	"gemot/list_by_group",
+	"gemot/list_by_agent",
+	"gemot/set_group",
+	"gemot/propose_compromise",
+	"gemot/dispute_crux",
+	"gemot/commit",
+	"gemot/invite_agent",
+	"gemot/delegate",
+	"gemot/generate_join_code",
+	"gemot/join_deliberation",
+	"gemot/list_templates",
+	"gemot/set_template",
+	"gemot/delete_deliberation",
+	"gemot/report_abuse",
+	"gemot/get_audit_log",
+	"gemot/get_analysis_result",
+	"gemot/get_votes",
+	"gemot/create_share",
+	"gemot/lookup_share",
+}
+
 // A2ARequest is an A2A JSON-RPC 2.0 request.
 type A2ARequest struct {
 	JSONRPC string         `json:"jsonrpc"`
@@ -338,7 +370,14 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			writeA2AResult(w, req.ID, actx)
 
 		case "gemot/list_deliberations":
-			allDelibs, err := svc.ListDeliberations()
+			var pgLimit, pgOffset int
+			if v, ok := req.Params["limit"].(float64); ok {
+				pgLimit = int(v)
+			}
+			if v, ok := req.Params["offset"].(float64); ok {
+				pgOffset = int(v)
+			}
+			allDelibs, err := svc.ListDeliberations(pgLimit, pgOffset)
 			if err != nil {
 				writeA2AError(w, req.ID, -32000, err.Error())
 				return
@@ -576,18 +615,73 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			writeA2AResult(w, req.ID, map[string]string{"status": "updated", "group_id": groupID})
 
+		case "gemot/create_share":
+			if !isAdmin {
+				writeA2AError(w, req.ID, -32000, "admin only")
+				return
+			}
+			groupID := str("group_id")
+			if groupID == "" {
+				writeA2AError(w, req.ID, -32000, "group_id is required")
+				return
+			}
+			shareToken, err := svc.CreateShareToken(groupID)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			writeA2AResult(w, req.ID, map[string]string{
+				"token":    shareToken,
+				"group_id": groupID,
+			})
+
+		case "gemot/lookup_share":
+			shareToken := str("token")
+			if shareToken == "" {
+				writeA2AError(w, req.ID, -32000, "token is required")
+				return
+			}
+			groupID, err := svc.LookupShareToken(shareToken)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			allDelibs, err := svc.ListByGroup(groupID, 0, 0)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
+			delibs := []deliberation.Deliberation{}
+			for _, d := range allDelibs {
+				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
+					continue
+				}
+				delibs = append(delibs, d)
+			}
+			writeA2AResult(w, req.ID, map[string]any{
+				"group_id":      groupID,
+				"deliberations": delibs,
+			})
+
 		case "gemot/list_by_group":
 			groupID := str("group_id")
 			if groupID == "" {
 				writeA2AError(w, req.ID, -32000, "group_id is required")
 				return
 			}
-			allDelibs, err := svc.ListByGroup(groupID)
+			var pgLimit, pgOffset int
+			if v, ok := req.Params["limit"].(float64); ok {
+				pgLimit = int(v)
+			}
+			if v, ok := req.Params["offset"].(float64); ok {
+				pgOffset = int(v)
+			}
+			allDelibs, err := svc.ListByGroup(groupID, pgLimit, pgOffset)
 			if err != nil {
 				writeA2AError(w, req.ID, -32000, err.Error())
 				return
 			}
-			var delibs []deliberation.Deliberation
+			delibs := []deliberation.Deliberation{}
 			for _, d := range allDelibs {
 				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
 					continue
@@ -602,12 +696,19 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AError(w, req.ID, -32000, "agent_id is required")
 				return
 			}
-			allDelibs, err := svc.ListByAgent(agentID)
+			var pgLimit, pgOffset int
+			if v, ok := req.Params["limit"].(float64); ok {
+				pgLimit = int(v)
+			}
+			if v, ok := req.Params["offset"].(float64); ok {
+				pgOffset = int(v)
+			}
+			allDelibs, err := svc.ListByAgent(agentID, pgLimit, pgOffset)
 			if err != nil {
 				writeA2AError(w, req.ID, -32000, err.Error())
 				return
 			}
-			var delibs []deliberation.Deliberation
+			delibs := []deliberation.Deliberation{}
 			for _, d := range allDelibs {
 				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
 					continue
@@ -618,7 +719,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 
 		default:
 			writeA2AError(w, req.ID, -32601,
-				fmt.Sprintf("Method not found: %s. Available methods: agent/info, gemot/create_deliberation, gemot/submit_position, gemot/vote, gemot/analyze, gemot/get_deliberation, gemot/get_positions, gemot/get_context, gemot/list_deliberations, gemot/list_by_group, gemot/list_by_agent, gemot/set_group, gemot/propose_compromise, gemot/dispute_crux, gemot/commit, gemot/invite_agent, gemot/delegate, gemot/generate_join_code, gemot/join_deliberation, gemot/list_templates, gemot/set_template, gemot/delete_deliberation, gemot/report_abuse, gemot/get_audit_log, gemot/get_analysis_result, gemot/get_votes", req.Method))
+				fmt.Sprintf("Method not found: %s. Available methods: %s", req.Method, strings.Join(a2aMethods, ", ")))
 		}
 	}
 }

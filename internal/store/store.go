@@ -96,6 +96,14 @@ func Open(path string) (*DB, error) {
 		PRIMARY KEY (deliberation_id, agent_id, round)
 	)`) //nolint:errcheck
 
+	// Share tokens for groups
+	db.Exec(`CREATE TABLE IF NOT EXISTS share_tokens (
+		token TEXT PRIMARY KEY,
+		group_id TEXT NOT NULL,
+		created_at TEXT DEFAULT (datetime('now')),
+		expires_at TEXT DEFAULT ''
+	)`) //nolint:errcheck
+
 	return &DB{db: db, path: path}, nil
 }
 

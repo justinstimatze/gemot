@@ -579,7 +579,7 @@ func (s *server) handleGetContext(ctx context.Context, _ *sdkmcp.CallToolRequest
 }
 
 func (s *server) handleListDeliberations(_ context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
-	deliberations, err := s.svc.ListDeliberations()
+	deliberations, err := s.svc.ListDeliberations(0, 0)
 	if err != nil {
 		return errResult(err)
 	}

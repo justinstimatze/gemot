@@ -111,19 +111,18 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			return allowed
 		}
 
-		// Limit concurrent event stream subscribers
-		if events.ClientCount() >= 100 {
-			http.Error(w, "too many event stream clients", http.StatusServiceUnavailable)
+		// Atomically check limit and subscribe in one lock acquisition (no TOCTOU race).
+		ch, unsub, err := events.SubscribeIfUnder(100, 64)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
+		defer unsub()
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("Access-Control-Allow-Origin", "*") // browser EventSource needs this
-
-		ch, unsub := events.Subscribe(64)
-		defer unsub()
 
 		ping := time.NewTicker(15 * time.Second)
 		defer ping.Stop()

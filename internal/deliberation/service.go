@@ -24,9 +24,9 @@ const (
 type Store interface {
 	CreateDeliberation(d *Deliberation) error
 	GetDeliberation(id string) (*Deliberation, error)
-	ListDeliberations() ([]Deliberation, error)
-	ListByGroup(groupID string) ([]Deliberation, error)
-	ListByAgent(agentID string) ([]Deliberation, error)
+	ListDeliberations(limit, offset int) ([]Deliberation, error)
+	ListByGroup(groupID string, limit, offset int) ([]Deliberation, error)
+	ListByAgent(agentID string, limit, offset int) ([]Deliberation, error)
 	SetGroupID(deliberationID, groupID string) error
 	UpdateDeliberationStatus(id, status string) error
 	UpdateDeliberationTemplate(id, template string) error
@@ -76,6 +76,9 @@ type Store interface {
 	GetLatestAnalysisResult(deliberationID string) (*AnalysisResult, error)
 
 	RecoverStuckAnalyzing(maxAge time.Duration) (int, error)
+
+	CreateShareToken(token, groupID string, expiresAt time.Time) error
+	LookupShareToken(token string) (groupID string, err error)
 }
 
 // ContextKeyDeliberationID is the context key for passing the deliberation ID
@@ -411,16 +414,16 @@ func (s *Service) GetLatestAnalysisResult(deliberationID string) (*AnalysisResul
 	return s.store.GetLatestAnalysisResult(deliberationID)
 }
 
-func (s *Service) ListDeliberations() ([]Deliberation, error) {
-	return s.store.ListDeliberations()
+func (s *Service) ListDeliberations(limit, offset int) ([]Deliberation, error) {
+	return s.store.ListDeliberations(limit, offset)
 }
 
-func (s *Service) ListByGroup(groupID string) ([]Deliberation, error) {
-	return s.store.ListByGroup(groupID)
+func (s *Service) ListByGroup(groupID string, limit, offset int) ([]Deliberation, error) {
+	return s.store.ListByGroup(groupID, limit, offset)
 }
 
-func (s *Service) ListByAgent(agentID string) ([]Deliberation, error) {
-	return s.store.ListByAgent(agentID)
+func (s *Service) ListByAgent(agentID string, limit, offset int) ([]Deliberation, error) {
+	return s.store.ListByAgent(agentID, limit, offset)
 }
 
 func (s *Service) SetGroupID(deliberationID, groupID string) error {
@@ -1357,6 +1360,29 @@ func (s *Service) RecoverStuck() (int, error) {
 
 func (s *Service) GetAnalysisResult(deliberationID string, round int) (*AnalysisResult, error) {
 	return s.store.GetAnalysisResult(deliberationID, round)
+}
+
+// CreateShareToken generates a random share token for a group and stores it.
+// The token is 16 random bytes, hex-encoded (32 characters).
+func (s *Service) CreateShareToken(groupID string) (string, error) {
+	if groupID == "" {
+		return "", fmt.Errorf("group_id is required")
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating token: %w", err)
+	}
+	token := fmt.Sprintf("%x", b)
+	expiresAt := time.Now().Add(30 * 24 * time.Hour) // 30 days
+	if err := s.store.CreateShareToken(token, groupID, expiresAt); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// LookupShareToken returns the group ID for a valid share token.
+func (s *Service) LookupShareToken(token string) (string, error) {
+	return s.store.LookupShareToken(token)
 }
 
 // detectRoundDrift compares the current analysis with the previous round's analysis.
