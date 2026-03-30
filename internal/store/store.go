@@ -79,6 +79,9 @@ func Open(path string) (*DB, error) {
 	db.Exec("ALTER TABLE deliberations ADD COLUMN rules TEXT DEFAULT '{}'") //nolint:errcheck
 	db.Exec("ALTER TABLE positions ADD COLUMN interests TEXT DEFAULT ''")  //nolint:errcheck
 
+	// Group ID for linking related deliberations
+	db.Exec("ALTER TABLE deliberations ADD COLUMN group_id TEXT DEFAULT ''") //nolint:errcheck
+
 	// Multi-use join codes for sandbox deliberations
 	db.Exec("ALTER TABLE join_codes ADD COLUMN max_uses INTEGER DEFAULT 1")  //nolint:errcheck
 	db.Exec("ALTER TABLE join_codes ADD COLUMN use_count INTEGER DEFAULT 0") //nolint:errcheck
