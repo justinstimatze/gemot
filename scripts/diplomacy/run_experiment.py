@@ -88,11 +88,14 @@ def run_diplomacy_year(
     return run_dir / "lmvsgame.json"
 
 
-def generate_gemot_briefings(game_json: Path, year: int, output_dir: Path):
+def generate_gemot_briefings(
+    game_json: Path, year: int, output_dir: Path, state_file: Path = None
+):
     """Run gemot analysis on game messages and output briefing files.
 
     Powers are processed in parallel by the Go script. If some fail or the
     process times out, we still use whatever briefings were written to disk.
+    Persistent deliberations are tracked via the state file across years.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -107,6 +110,9 @@ def generate_gemot_briefings(game_json: Path, year: int, output_dir: Path):
         "--output",
         str(output_dir),
     ]
+
+    if state_file:
+        cmd.extend(["--state", str(state_file)])
 
     # Pass through gemot env vars
     env = os.environ.copy()
@@ -218,6 +224,7 @@ def run_experiment(
     game_dir = experiment_dir / "game"
     current_prompts = None
     max_year = 1900 + num_years
+    state_file = experiment_dir / "deliberation_state.json"
 
     for year_num in range(1, num_years + 1):
         game_year = 1900 + year_num
@@ -243,7 +250,9 @@ def run_experiment(
         # Generate gemot briefings
         briefings_dir = experiment_dir / f"year{year_num}" / "briefings"
         try:
-            briefings = generate_gemot_briefings(game_json, year_num, briefings_dir)
+            briefings = generate_gemot_briefings(
+                game_json, year_num, briefings_dir, state_file
+            )
         except Exception as e:
             print(f"\n  WARNING: Briefing generation failed: {e}")
             print(f"  Continuing without briefings for Year {year_num + 1}")
