@@ -337,7 +337,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 	mux.HandleFunc("/export", func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
-		if !strings.HasPrefix(auth, "Bearer ") || (apiSecret != "" && token != apiSecret) {
+		if !strings.HasPrefix(auth, "Bearer ") || (apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1) {
 			// Also allow customer API keys
 			if creditStore != nil {
 				if valid, _ := creditStore.ValidateKey(token); !valid {

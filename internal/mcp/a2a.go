@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -96,7 +97,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		token := strings.TrimPrefix(auth, "Bearer ")
 
 		// Validate token
-		isAdmin := apiSecret != "" && token == apiSecret
+		isAdmin := apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
 		var keyID string
 		if !isAdmin {
 			if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
@@ -452,6 +453,10 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			writeA2AResult(w, req.ID, c)
 
 		case "gemot/invite_agent":
+			if err := checkAccess(str("deliberation_id")); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
 			invitedBy := scope(str("invited_by"))
 			inv, err := svc.InviteAgent(str("deliberation_id"), invitedBy, str("invited_agent"), str("role"), str("reason"))
 			if err != nil {
@@ -461,6 +466,10 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			writeA2AResult(w, req.ID, inv)
 
 		case "gemot/delegate":
+			if err := checkAccess(str("deliberation_id")); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
 			from := scope(str("from_agent"))
 			to := scope(str("to_agent"))
 			d, err := svc.Delegate(str("deliberation_id"), from, to, str("scope"))
