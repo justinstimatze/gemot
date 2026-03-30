@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/llm"
@@ -199,6 +200,7 @@ func reportProgress(ctx context.Context, subStatus string) {
 }
 
 func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Position, votes []deliberation.Vote, agents []string) (*deliberation.AnalysisResult, error) {
+	startTime := time.Now()
 
 	if len(positions) == 0 {
 		return &deliberation.AnalysisResult{
@@ -738,7 +740,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		Stage: "summaries", Detail: fmt.Sprintf("%d topic summaries", len(summaries)), Count: len(summaries),
 	})
 
-	return &deliberation.AnalysisResult{
+	result := &deliberation.AnalysisResult{
 		Clusters:            clusters,
 		Coalitions:          coalitions,
 		ConstitutionalRules: constitutionalRules,
@@ -764,7 +766,12 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		PerspectiveDiversity: perspectiveDiversity(len(clusters), len(agents)),
 		ParetoEfficient:     paretoEfficient,
 		DominatedProposals:  dominatedProposals,
-	}, nil
+	}
+
+	log.Printf("[gemot] analysis complete: deliberation=%s round=%d agents=%d positions=%d cruxes=%d clusters=%d duration=%s",
+		result.DeliberationID, result.Round, result.AgentCount, result.PositionCount, len(result.Cruxes), len(result.Clusters), time.Since(startTime))
+
+	return result, nil
 }
 
 // --- LLM call methods ---

@@ -2,9 +2,13 @@ package deliberation
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 )
+
+// ErrTooManyClients is returned when SubscribeIfUnder exceeds the limit.
+var ErrTooManyClients = errors.New("too many event stream clients")
 
 // Event represents a state change in a deliberation.
 type Event struct {
@@ -42,6 +46,26 @@ func (eb *EventBus) Subscribe(bufSize int) (<-chan Event, func()) {
 		close(ch)
 		eb.mu.Unlock()
 	}
+}
+
+// SubscribeIfUnder atomically checks the client count and subscribes in one
+// lock acquisition, eliminating the TOCTOU race between ClientCount and Subscribe.
+func (eb *EventBus) SubscribeIfUnder(limit, bufSize int) (<-chan Event, func(), error) {
+	ch := make(chan Event, bufSize)
+	eb.mu.Lock()
+	if len(eb.clients) >= limit {
+		eb.mu.Unlock()
+		return nil, nil, ErrTooManyClients
+	}
+	eb.clients[ch] = struct{}{}
+	eb.mu.Unlock()
+
+	return ch, func() {
+		eb.mu.Lock()
+		delete(eb.clients, ch)
+		close(ch)
+		eb.mu.Unlock()
+	}, nil
 }
 
 // Emit sends an event to all subscribers. Non-blocking: drops events for slow clients.
