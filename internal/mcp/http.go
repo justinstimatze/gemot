@@ -184,6 +184,11 @@ No API key needed — the join code is your credential.
 	a2aLimiter := payments.NewRateLimiter(30, time.Minute) // 30/min, same as MCP
 	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB))
 
+	// SSE event stream — real-time deliberation state changes
+	eventBus := deliberation.NewEventBus()
+	svc.SetEventBus(eventBus)
+	mux.HandleFunc("GET /events", EventsHandler(svc, creditStore, apiSecret, a2aLimiter))
+
 	// Stripe Checkout — purchase credit packs (public)
 	mux.HandleFunc("/checkout", payments.CheckoutHandler(creditStore, baseURL))
 	mux.HandleFunc("/checkout/success", payments.SuccessHandler(creditStore))
