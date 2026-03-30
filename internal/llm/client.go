@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"time"
@@ -141,9 +142,11 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 		if !isRetryable(lastErr) {
 			return fmt.Errorf("API call failed: %w", lastErr)
 		}
-		// Retryable error — loop continues
+		// Retryable error — log and continue
+		log.Printf("[gemot] LLM retry %d/%d: %v", attempt+1, maxRetries, lastErr)
 	}
 	if lastErr != nil {
+		log.Printf("[gemot] LLM call failed after %d retries: %v", maxRetries, lastErr)
 		return fmt.Errorf("API call failed after %d retries: %w", maxRetries, lastErr)
 	}
 
