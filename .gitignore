@@ -2,6 +2,7 @@ gemot
 .gemot/
 *.db
 .env
+__pycache__/
 
 # defn database
 .defn/

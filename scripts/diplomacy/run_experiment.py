@@ -326,6 +326,7 @@ def run_experiment(
     skip_analysis: bool = False,
     seed: int = 42,
     use_personalities: bool = False,
+    start_year: int = 1,
 ):
     """Run the full iterative experiment."""
     experiment_dir = AI_DIPLOMACY_DIR / "results" / name
@@ -339,7 +340,7 @@ def run_experiment(
 
     print(f"\n{'=' * 60}")
     print(f"Starting Gemot Diplomacy Experiment: {name}")
-    print(f"Years: {num_years}, Seed: {seed}")
+    print(f"Years: {num_years}, Seed: {seed}, Start: year {start_year}")
     print(f"Output: {experiment_dir}")
     print(f"Analysis: {'SKIP (control)' if skip_analysis else 'gemot'}")
     if personality_assignments:
@@ -360,7 +361,16 @@ def run_experiment(
             {}, base_prompts, prompts_dir, 0, personality_assignments
         )
 
-    for year_num in range(1, num_years + 1):
+    # When resuming, reconstruct current_prompts from the last completed year's prompts
+    if start_year > 1:
+        for prev_year in range(start_year - 1, -1, -1):
+            prev_prompts = experiment_dir / f"year{prev_year}" / "prompts"
+            if prev_prompts.exists():
+                current_prompts = prev_prompts
+                print(f"  Resuming with prompts from year {prev_year}")
+                break
+
+    for year_num in range(start_year, num_years + 1):
         game_year = 1900 + year_num
         year_seed = seed + (game_year - 1901)
 
@@ -472,6 +482,12 @@ def main():
         action="store_true",
         help="Assign random diplomatic personalities to powers (Civ-style leader traits)",
     )
+    parser.add_argument(
+        "--start-year",
+        type=int,
+        default=1,
+        help="Year to resume from (default: 1). Use to resume interrupted experiments.",
+    )
 
     args = parser.parse_args()
     base_prompts = Path(args.prompts) if args.prompts else None
@@ -484,6 +500,7 @@ def main():
         skip_analysis=args.skip_analysis,
         seed=args.seed,
         use_personalities=args.personalities,
+        start_year=args.start_year,
     )
 
 
