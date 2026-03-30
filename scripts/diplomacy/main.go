@@ -59,7 +59,8 @@ type Phase struct {
 
 // PhaseState holds the game state at the end of a phase.
 type PhaseState struct {
-	Units map[string][]string `json:"units,omitempty"` // power -> ["A VIE", "F TRI", ...]
+	Units   map[string][]string `json:"units,omitempty"`   // power -> ["A VIE", "F TRI", ...]
+	Centers map[string][]string `json:"centers,omitempty"` // power -> ["VIE", "TRI", ...]
 }
 
 // Message is a diplomatic message between powers.
@@ -174,13 +175,16 @@ func main() {
 	// Save updated state
 	saveState(*stateFile, state)
 
+	// Extract power balance for briefing headers
+	balance := extractPowerBalance(&game, *year)
+
 	// Synthesize per-power briefings from all relevant scopes
 	var wg sync.WaitGroup
 	for _, power := range powers {
 		wg.Add(1)
 		go func(power string) {
 			defer wg.Done()
-			briefing := synthesizeBriefing(power, *year, results)
+			briefing := synthesizeBriefing(power, *year, results, balance)
 			if briefing == "" {
 				fmt.Fprintf(os.Stderr, "  %s: no data for briefing\n", power)
 				return
@@ -722,7 +726,52 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 }
 
 // synthesizeBriefing merges intelligence from all scopes into one briefing per power.
-func synthesizeBriefing(power string, year int, results []scopeResult) string {
+// powerBalance holds SC counts for the briefing header.
+type powerBalance struct {
+	current  map[string]int // power -> SC count this year
+	previous map[string]int // power -> SC count last year (nil if year 1)
+}
+
+func extractPowerBalance(game *GameState, year int) powerBalance {
+	pb := powerBalance{
+		current:  make(map[string]int),
+		previous: make(map[string]int),
+	}
+	gameYear := 1900 + year
+	prevYear := gameYear - 1
+
+	// Walk phases backwards to find the latest state for each year
+	for i := len(game.Phases) - 1; i >= 0; i-- {
+		p := game.Phases[i]
+		if len(p.State.Centers) == 0 {
+			continue
+		}
+		// Parse year from phase name (e.g., "W1904A" -> 1904)
+		phaseYear := 0
+		for j := 0; j < len(p.Name); j++ {
+			if p.Name[j] >= '0' && p.Name[j] <= '9' {
+				fmt.Sscanf(p.Name[j:], "%d", &phaseYear)
+				break
+			}
+		}
+		if phaseYear == gameYear && len(pb.current) == 0 {
+			for power, centers := range p.State.Centers {
+				pb.current[power] = len(centers)
+			}
+		}
+		if phaseYear == prevYear && len(pb.previous) == 0 {
+			for power, centers := range p.State.Centers {
+				pb.previous[power] = len(centers)
+			}
+		}
+		if len(pb.current) > 0 && len(pb.previous) > 0 {
+			break
+		}
+	}
+	return pb
+}
+
+func synthesizeBriefing(power string, year int, results []scopeResult, balance powerBalance) string {
 	powerLower := strings.ToLower(power)
 	gameYear := 1900 + year
 
@@ -770,6 +819,59 @@ func synthesizeBriefing(power string, year int, results []scopeResult) string {
 	fmt.Fprintf(&b, "This briefing identifies opportunities for diplomatic cooperation.\n")
 	fmt.Fprintf(&b, "Military conflict is costly — the analysis below highlights where\n")
 	fmt.Fprintf(&b, "mutual agreements serve your interests better than unilateral action.\n\n")
+
+	// ========================================
+	// POWER BALANCE (situational awareness)
+	// ========================================
+
+	if len(balance.current) > 0 {
+		fmt.Fprintf(&b, "CURRENT POWER BALANCE:\n")
+
+		// Sort by SC count descending
+		type powerSC struct{ name string; scs int; delta int }
+		var sorted []powerSC
+		maxSCs := 0
+		for p, scs := range balance.current {
+			delta := 0
+			if prev, ok := balance.previous[p]; ok {
+				delta = scs - prev
+			}
+			sorted = append(sorted, powerSC{p, scs, delta})
+			if scs > maxSCs {
+				maxSCs = scs
+			}
+		}
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].scs > sorted[j].scs })
+
+		for _, ps := range sorted {
+			marker := ""
+			if ps.name == strings.ToUpper(power) {
+				marker = " ← YOU"
+			}
+			trend := ""
+			if ps.delta > 0 {
+				trend = fmt.Sprintf(" (+%d)", ps.delta)
+			} else if ps.delta < 0 {
+				trend = fmt.Sprintf(" (%d)", ps.delta)
+			}
+			fmt.Fprintf(&b, "  %s: %d SCs%s%s\n", ps.name, ps.scs, trend, marker)
+		}
+
+		// Flag runaway leaders
+		yourSCs := balance.current[strings.ToUpper(power)]
+		for _, ps := range sorted {
+			if ps.name == strings.ToUpper(power) {
+				continue
+			}
+			if ps.scs >= 7 {
+				fmt.Fprintf(&b, "  ⚠ %s is approaching victory (18 SCs needed). Coalition response may be warranted.\n", ps.name)
+			} else if ps.delta >= 2 {
+				fmt.Fprintf(&b, "  ⚠ %s gained %d SCs this year — rapid expansion.\n", ps.name, ps.delta)
+			}
+		}
+		_ = yourSCs
+		fmt.Fprintln(&b)
+	}
 
 	// ========================================
 	// SECTION 1: WHAT YOU AGREE ON (cooperation baseline)
