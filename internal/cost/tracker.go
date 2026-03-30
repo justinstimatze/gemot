@@ -2,6 +2,7 @@ package cost
 
 import (
 	"sync"
+	"time"
 )
 
 // Tracker accumulates LLM token usage per deliberation.
@@ -11,11 +12,12 @@ type Tracker struct {
 }
 
 type Usage struct {
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	TotalTokens  int     `json:"total_tokens"`
-	Calls        int     `json:"calls"`
-	EstCostUSD   float64 `json:"est_cost_usd"`
+	InputTokens  int       `json:"input_tokens"`
+	OutputTokens int       `json:"output_tokens"`
+	TotalTokens  int       `json:"total_tokens"`
+	Calls        int       `json:"calls"`
+	EstCostUSD   float64   `json:"est_cost_usd"`
+	LastAccess   time.Time `json:"last_access"`
 }
 
 func NewTracker() *Tracker {
@@ -44,6 +46,7 @@ func (t *Tracker) Record(deliberationID, model string, inputTokens, outputTokens
 	u.OutputTokens += outputTokens
 	u.TotalTokens += inputTokens + outputTokens
 	u.Calls++
+	u.LastAccess = time.Now()
 
 	pricing, ok := modelPricing[model]
 	if !ok {
@@ -69,4 +72,17 @@ func (t *Tracker) Reset(deliberationID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.costs, deliberationID)
+}
+
+// Cleanup removes entries that have not been accessed within maxAge.
+func (t *Tracker) Cleanup(maxAge time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cutoff := time.Now().Add(-maxAge)
+	for id, u := range t.costs {
+		if u.LastAccess.Before(cutoff) {
+			delete(t.costs, id)
+		}
+	}
 }

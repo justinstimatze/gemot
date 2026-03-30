@@ -21,4 +21,4 @@ go test ./...           # Test
 - `internal/llm/` — Anthropic SDK wrapper with structured output
 - `internal/sanitize/` — PII stripping, prompt injection detection
 - `internal/cost/` — Per-deliberation token tracking
-- `tests/` — 111 tests (integration, adversarial, billing, benchmarks)
+- `tests/` — Integration, adversarial, billing, and benchmark tests

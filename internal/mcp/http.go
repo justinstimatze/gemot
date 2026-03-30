@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -45,7 +46,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 		Currency:        "usd",
 		Enabled:         os.Getenv("STRIPE_SECRET_KEY") != "",
 	}
-	paymentMiddleware := payments.Middleware(mppCfg, apiSecret, creditStore)
+	paymentMiddleware := payments.Middleware(ctx, mppCfg, apiSecret, creditStore)
 
 	mcpHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
 
@@ -177,11 +178,11 @@ No API key needed — the join code is your credential.
 
 </div></body></html>`,
 			topic, statusColor, statusColor, status, minutesLeft,
-			jc.Code, jc.Code, jc.Code, jc.Code)
+			html.EscapeString(jc.Code), html.EscapeString(jc.Code), html.EscapeString(jc.Code), html.EscapeString(jc.Code))
 	})
 
 	// A2A endpoint — JSON-RPC for all gemot tools (authenticated, rate-limited)
-	a2aLimiter := payments.NewRateLimiter(30, time.Minute) // 30/min, same as MCP
+	a2aLimiter := payments.NewRateLimiter(ctx, 30, time.Minute) // 30/min, same as MCP
 	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB))
 
 	// SSE event stream — real-time deliberation state changes
@@ -189,9 +190,23 @@ No API key needed — the join code is your credential.
 	svc.SetEventBus(eventBus)
 	mux.HandleFunc("GET /events", EventsHandler(svc, creditStore, apiSecret, a2aLimiter))
 
-	// Stripe Checkout — purchase credit packs (public)
-	mux.HandleFunc("/checkout", payments.CheckoutHandler(creditStore, baseURL))
-	mux.HandleFunc("/checkout/success", payments.SuccessHandler(creditStore))
+	// Stripe Checkout — purchase credit packs (public, IP rate-limited)
+	checkoutLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
+	rateLimitCheckout := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			ip := r.RemoteAddr
+			if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+				ip = strings.Split(fwd, ",")[0]
+			}
+			if !checkoutLimiter.Allow("checkout:" + strings.TrimSpace(ip)) {
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+			next(w, r)
+		}
+	}
+	mux.HandleFunc("/checkout", rateLimitCheckout(payments.CheckoutHandler(creditStore, baseURL)))
+	mux.HandleFunc("/checkout/success", rateLimitCheckout(payments.SuccessHandler(creditStore)))
 	mux.HandleFunc("/checkout/cancel", payments.CancelHandler())
 
 	// Stripe Webhook — credit accounts on successful payment (Stripe-signed)
@@ -215,7 +230,7 @@ No API key needed — the join code is your credential.
 		w.Header().Set("Content-Type", "application/json")
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
-		if apiSecret == "" || !strings.HasPrefix(auth, "Bearer ") || token != apiSecret {
+		if apiSecret == "" || !strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1 {
 			http.Error(w, `{"error":"admin access required"}`, http.StatusUnauthorized)
 			return
 		}
@@ -416,7 +431,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 	}
 
 	// Sandbox — zero-auth trial deliberations
-	tryLimiter := payments.NewRateLimiter(3, 24*time.Hour) // 3 per IP per day
+	tryLimiter := payments.NewRateLimiter(ctx, 3, 24*time.Hour) // 3 per IP per day
 	mux.HandleFunc("/try", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost && r.Method != http.MethodGet {
 			http.Error(w, "GET or POST", http.StatusMethodNotAllowed)
@@ -584,7 +599,7 @@ pre code{background:none;padding:0;}
 
 <p style="color:#94a3b8;font-size:0.75rem;margin-top:2rem;"><a href="https://gemot.dev">gemot.dev</a> · Structured deliberation for AI agents</p>
 </div></body></html>`,
-			topic, topic, hoursLeft, jc.Code, topic)
+			topic, topic, hoursLeft, html.EscapeString(jc.Code), topic)
 	})
 
 	// Landing page

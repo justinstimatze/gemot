@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -14,7 +15,8 @@ type RateLimiter struct {
 }
 
 // NewRateLimiter creates a rate limiter allowing limit requests per window per key.
-func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
+// The cleanup goroutine stops when ctx is cancelled.
+func NewRateLimiter(ctx context.Context, limit int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
 		windows: make(map[string][]time.Time),
 		limit:   limit,
@@ -24,8 +26,13 @@ func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			rl.cleanup()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				rl.cleanup()
+			}
 		}
 	}()
 	return rl
