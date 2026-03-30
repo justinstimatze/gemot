@@ -155,6 +155,7 @@ type Service struct {
 	compromiser      CompromiseGenerator
 	reframer         Reframer
 	contentClassifier sanitize.Classifier
+	events           *EventBus // nil = no event emission
 }
 
 func NewService(store Store, analyzer Analyzer) *Service {
@@ -164,6 +165,28 @@ func NewService(store Store, analyzer Analyzer) *Service {
 // SetContentClassifier sets the LLM content screening function.
 func (s *Service) SetContentClassifier(c sanitize.Classifier) {
 	s.contentClassifier = c
+}
+
+// SetEventBus enables event emission for state changes.
+func (s *Service) SetEventBus(eb *EventBus) {
+	s.events = eb
+}
+
+// Events returns the event bus, or nil if not set.
+func (s *Service) Events() *EventBus {
+	return s.events
+}
+
+func (s *Service) emit(eventType, deliberationID, agentID, detail string) {
+	if s.events == nil {
+		return
+	}
+	s.events.Emit(Event{
+		Type:           eventType,
+		DeliberationID: deliberationID,
+		AgentID:        agentID,
+		Detail:         detail,
+	})
 }
 
 // SetCompromiseGenerator sets the compromise generation engine.
@@ -329,6 +352,7 @@ func (s *Service) CreateDeliberation(topic, description string, opts ...Delibera
 		_ = s.store.AddToACL(d.ID, d.CreatorKey)
 	}
 
+	s.emit("deliberation_created", d.ID, "", d.Topic)
 	return d, nil
 }
 
@@ -458,6 +482,7 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 	if err := s.store.CreatePosition(p); err != nil {
 		return nil, err
 	}
+	s.emit("position_submitted", deliberationID, agentID, p.ID)
 	return p, nil
 }
 
@@ -512,7 +537,11 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 	if len(criterionID) > 0 && criterionID[0] != "" {
 		v.CriterionID = criterionID[0]
 	}
-	return s.store.CreateVote(v)
+	if err := s.store.CreateVote(v); err != nil {
+		return err
+	}
+	s.emit("vote_cast", deliberationID, agentID, positionID)
+	return nil
 }
 
 func (s *Service) Analyze(ctx context.Context, deliberationID string) (*AnalysisResult, error) {
@@ -630,8 +659,10 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		}
 	}
 
+	s.emit("analysis_started", deliberationID, "", "")
 	progressFn := ProgressFunc(func(subStatus string) {
 		_ = s.store.UpdateSubStatus(deliberationID, subStatus)
+		s.emit("analysis_progress", deliberationID, "", subStatus)
 	})
 	analysisCtx = context.WithValue(analysisCtx, ContextKeyProgressFunc{}, progressFn)
 
@@ -673,6 +704,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		return nil, err
 	}
 
+	s.emit("analysis_complete", deliberationID, "", fmt.Sprintf("round_%d", d.Round))
 	return result, nil
 }
 
