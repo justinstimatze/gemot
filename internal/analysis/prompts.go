@@ -222,3 +222,27 @@ Respond with JSON:
 }
 
 Output ONLY the JSON, no explanation.`
+
+// agreementPrompt is used when there are no votes (e.g. bilateral negotiations).
+// It asks the LLM to identify shared ground and potential compromises directly from positions.
+// %s = deliberation topic, %s = positions text, %s = cruxes text
+const agreementPrompt = `You are analyzing a deliberation about "%s" between a small number of participants. There are no votes — you must identify agreement and potential compromises directly from the position texts.
+
+POSITIONS:
+%s
+
+KEY DISAGREEMENTS (CRUXES):
+%s
+
+Your task:
+1. SHARED GROUND: Identify 1-5 specific points where participants actually agree (stated or implied). Look for overlapping concerns, shared goals, mutual acknowledgments, compatible proposals. Be specific — quote or closely paraphrase the actual language used.
+
+2. POTENTIAL COMPROMISES: For each crux, propose 1 concrete compromise that addresses both sides' core concerns. Each should be specific and actionable, not a vague "both sides should talk more."
+
+Respond with JSON:
+{
+  "shared_ground": [{"content": "specific shared position text", "participants": ["agent-1", "agent-2"]}],
+  "compromises": [{"crux": "the crux claim", "proposal": "specific compromise proposal", "rationale": "why both sides could accept this"}]
+}
+
+Output ONLY the JSON, no explanation.`

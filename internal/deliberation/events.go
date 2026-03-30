@@ -17,6 +17,7 @@ type Event struct {
 	AgentID        string `json:"agent_id,omitempty"`
 	Detail         string `json:"detail,omitempty"` // sub_status for progress, position_id for submissions, etc.
 	Timestamp      string `json:"timestamp"`
+	Data           any    `json:"data,omitempty"` // optional rich payload (position content, vote value, etc.)
 }
 
 // EventBus provides pub/sub for deliberation events.
