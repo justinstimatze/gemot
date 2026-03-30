@@ -111,6 +111,12 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			return allowed
 		}
 
+		// Limit concurrent event stream subscribers
+		if events.ClientCount() >= 100 {
+			http.Error(w, "too many event stream clients", http.StatusServiceUnavailable)
+			return
+		}
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
