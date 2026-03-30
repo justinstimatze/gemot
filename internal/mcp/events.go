@@ -5,39 +5,53 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
 )
 
+var sseConnectionCount atomic.Int64
+
+const maxSSEConnections = 100
+
 // EventsHandler returns an SSE endpoint that streams deliberation events.
 //
 // Query params:
 //
 //	deliberation_id — filter to a specific deliberation (optional)
+//	token           — Bearer token (alternative to Authorization header, for browser EventSource)
 //
-// Auth: Bearer token (API key or admin secret), same as A2A.
+// Auth: Bearer token via header or query param. Same credentials as A2A.
 func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "GET required", http.StatusMethodNotAllowed)
-			return
-		}
-
 		events := svc.Events()
 		if events == nil {
 			http.Error(w, "events not enabled", http.StatusServiceUnavailable)
 			return
 		}
 
-		// Auth: same as A2A
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
-			http.Error(w, "Authorization: Bearer <api_key> required", http.StatusUnauthorized)
+		// Connection limit
+		current := sseConnectionCount.Add(1)
+		defer sseConnectionCount.Add(-1)
+		if current > maxSSEConnections {
+			http.Error(w, "too many connections", http.StatusServiceUnavailable)
 			return
 		}
-		token := strings.TrimPrefix(auth, "Bearer ")
+
+		// Auth: Bearer token from header or ?token= query param
+		// Query param is needed because browser EventSource API can't set custom headers.
+		token := ""
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		} else if t := r.URL.Query().Get("token"); t != "" {
+			token = t
+		}
+		if token == "" {
+			http.Error(w, "authorization required (Bearer header or ?token= param)", http.StatusUnauthorized)
+			return
+		}
 
 		isAdmin := apiSecret != "" && token == apiSecret
 		var keyID string
@@ -53,7 +67,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			keyID = payments.KeyID(token)
 		}
 
-		// Rate limit check (but SSE is a single long-lived connection, so this is just the initial check)
+		// Rate limit: initial check only (SSE is long-lived)
 		if !isAdmin && keyID != "" {
 			if !rateLimiter.Allow(keyID) {
 				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
@@ -67,13 +81,40 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			return
 		}
 
-		// Optional filter
 		filterDelibID := r.URL.Query().Get("deliberation_id")
+
+		// If filtering to a specific deliberation, verify access upfront
+		if filterDelibID != "" && !isAdmin {
+			if err := svc.CheckAccess(filterDelibID, keyID); err != nil {
+				http.Error(w, "access denied", http.StatusForbidden)
+				return
+			}
+		}
+
+		// Cache accessible deliberation IDs for non-admin unfiltered streams.
+		// Refreshed every 60s to pick up new access grants.
+		var accessCache map[string]bool
+		var accessCacheTime time.Time
+		checkAccess := func(delibID string) bool {
+			if isAdmin || filterDelibID != "" {
+				return true // already verified at connection time
+			}
+			if time.Since(accessCacheTime) > 60*time.Second || accessCache == nil {
+				accessCache = make(map[string]bool)
+				accessCacheTime = time.Now()
+			}
+			if allowed, cached := accessCache[delibID]; cached {
+				return allowed
+			}
+			allowed := svc.CheckAccess(delibID, keyID) == nil
+			accessCache[delibID] = allowed
+			return allowed
+		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("Access-Control-Allow-Origin", "*") // vis.gemot.dev needs this
+		w.Header().Set("Access-Control-Allow-Origin", "*") // browser EventSource needs this
 
 		ch, unsub := events.Subscribe(64)
 		defer unsub()
@@ -89,15 +130,11 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		for {
 			select {
 			case event := <-ch:
-				// Apply filter
 				if filterDelibID != "" && event.DeliberationID != filterDelibID {
 					continue
 				}
-				// Access check: non-admin users can only see deliberations they have access to
-				if !isAdmin && filterDelibID == "" {
-					if err := svc.CheckAccess(event.DeliberationID, keyID); err != nil {
-						continue // skip events for deliberations this key can't access
-					}
+				if !checkAccess(event.DeliberationID) {
+					continue
 				}
 				data, err := deliberation.MarshalEvent(event)
 				if err != nil {
