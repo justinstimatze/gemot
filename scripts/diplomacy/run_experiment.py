@@ -181,7 +181,7 @@ def inject_briefings(
             print(f"    WARNING: no briefing for {power}, using base prompt")
             continue
 
-        briefing_content = briefings[power].read_text()
+        briefing_content = briefings[power].read_text(errors="replace")
         injected = f"""{original}
 
 === YOUR PRIVATE DIPLOMATIC INTELLIGENCE BRIEFING (Year {year}) ===
