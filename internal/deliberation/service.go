@@ -184,6 +184,10 @@ func (s *Service) Events() *EventBus {
 }
 
 func (s *Service) emit(eventType, deliberationID, agentID, detail string) {
+	s.emitWithData(eventType, deliberationID, agentID, detail, nil)
+}
+
+func (s *Service) emitWithData(eventType, deliberationID, agentID, detail string, data any) {
 	if s.events == nil {
 		return
 	}
@@ -192,6 +196,7 @@ func (s *Service) emit(eventType, deliberationID, agentID, detail string) {
 		DeliberationID: deliberationID,
 		AgentID:        agentID,
 		Detail:         detail,
+		Data:           data,
 	})
 }
 
@@ -514,7 +519,11 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 	if err := s.store.CreatePosition(p); err != nil {
 		return nil, err
 	}
-	s.emit("position_submitted", deliberationID, agentID, p.ID)
+	s.emitWithData("position_submitted", deliberationID, agentID, p.ID, map[string]any{
+		"position_id": p.ID,
+		"content":     p.Content,
+		"round":       p.Round,
+	})
 	return p, nil
 }
 
@@ -572,7 +581,10 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 	if err := s.store.CreateVote(v); err != nil {
 		return err
 	}
-	s.emit("vote_cast", deliberationID, agentID, positionID)
+	s.emitWithData("vote_cast", deliberationID, agentID, positionID, map[string]any{
+		"position_id": positionID,
+		"value":       value,
+	})
 	return nil
 }
 

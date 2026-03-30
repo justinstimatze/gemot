@@ -23,8 +23,9 @@ const maxSSEConnections = 100
 //
 //	deliberation_id — filter to a specific deliberation (optional)
 //	token           — Bearer token (alternative to Authorization header, for browser EventSource)
+//	join_code       — join code for anonymous read-only access (scoped to one deliberation)
 //
-// Auth: Bearer token via header or query param. Same credentials as A2A.
+// Auth: Bearer token via header or query param, OR join_code query param.
 func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		events := svc.Events()
@@ -41,38 +42,52 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			return
 		}
 
-		// Auth: Bearer token from header or ?token= query param
-		// Query param is needed because browser EventSource API can't set custom headers.
-		token := ""
-		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-			token = strings.TrimPrefix(auth, "Bearer ")
-		} else if t := r.URL.Query().Get("token"); t != "" {
-			token = t
-		}
-		if token == "" {
-			http.Error(w, "authorization required (Bearer header or ?token= param)", http.StatusUnauthorized)
-			return
-		}
-
-		isAdmin := apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
+		var isAdmin bool
 		var keyID string
-		if !isAdmin {
-			if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
-				http.Error(w, "invalid API key", http.StatusUnauthorized)
-				return
-			}
-			if valid, _ := creditStore.ValidateKey(token); !valid {
-				http.Error(w, "invalid or expired API key", http.StatusUnauthorized)
-				return
-			}
-			keyID = payments.KeyID(token)
-		}
+		filterDelibID := r.URL.Query().Get("deliberation_id")
+		joinCodeAuth := false
 
-		// Rate limit: initial check only (SSE is long-lived)
-		if !isAdmin && keyID != "" {
-			if !rateLimiter.Allow(keyID) {
-				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		// Auth path 1: join_code query param (anonymous, scoped to one deliberation)
+		if jc := r.URL.Query().Get("join_code"); jc != "" {
+			_, d, err := svc.LookupJoinCode(jc)
+			if err != nil || d == nil {
+				http.Error(w, "invalid or expired join code", http.StatusNotFound)
 				return
+			}
+			filterDelibID = d.ID
+			joinCodeAuth = true
+		} else {
+			// Auth path 2: Bearer token from header or ?token= query param
+			token := ""
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				token = strings.TrimPrefix(auth, "Bearer ")
+			} else if t := r.URL.Query().Get("token"); t != "" {
+				token = t
+			}
+			if token == "" {
+				http.Error(w, "authorization required (Bearer header, ?token=, or ?join_code=)", http.StatusUnauthorized)
+				return
+			}
+
+			isAdmin = apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
+			if !isAdmin {
+				if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
+					http.Error(w, "invalid API key", http.StatusUnauthorized)
+					return
+				}
+				if valid, _ := creditStore.ValidateKey(token); !valid {
+					http.Error(w, "invalid or expired API key", http.StatusUnauthorized)
+					return
+				}
+				keyID = payments.KeyID(token)
+			}
+
+			// Rate limit: initial check only (SSE is long-lived)
+			if !isAdmin && keyID != "" {
+				if !rateLimiter.Allow(keyID) {
+					http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+					return
+				}
 			}
 		}
 
@@ -82,10 +97,8 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			return
 		}
 
-		filterDelibID := r.URL.Query().Get("deliberation_id")
-
-		// If filtering to a specific deliberation, verify access upfront
-		if filterDelibID != "" && !isAdmin {
+		// If filtering to a specific deliberation, verify access upfront (skip for join_code — already scoped)
+		if filterDelibID != "" && !isAdmin && !joinCodeAuth {
 			if err := svc.CheckAccess(filterDelibID, keyID); err != nil {
 				http.Error(w, "access denied", http.StatusForbidden)
 				return
@@ -97,7 +110,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		var accessCache map[string]bool
 		var accessCacheTime time.Time
 		checkAccess := func(delibID string) bool {
-			if isAdmin || filterDelibID != "" {
+			if isAdmin || joinCodeAuth || filterDelibID != "" {
 				return true // already verified at connection time
 			}
 			if time.Since(accessCacheTime) > 60*time.Second || accessCache == nil {
