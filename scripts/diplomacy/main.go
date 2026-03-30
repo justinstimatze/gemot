@@ -93,6 +93,7 @@ func main() {
 	gemotURL := flag.String("url", "", "Gemot MCP URL (default: GEMOT_LIVE_URL env)")
 	alliancesFlag := flag.String("alliances", "", "Explicit alliances: ENGLAND+FRANCE+RUSSIA,AUSTRIA+TURKEY (comma-separated groups)")
 	stateFile := flag.String("state", "", "State file for persistent deliberation IDs across years (JSON)")
+	experiment := flag.String("experiment", "", "Experiment name (used as group_id to link deliberations for visualization)")
 	flag.Parse()
 
 	if *gameFile == "" || *outputDir == "" {
@@ -168,7 +169,7 @@ func main() {
 	ctx := context.Background()
 
 	// Analyze all scopes in parallel, reusing existing deliberations where possible
-	results := analyzeScopes(ctx, scopes, url, secret, *year, state)
+	results := analyzeScopes(ctx, scopes, url, secret, *year, state, *experiment)
 
 	// Save updated state
 	saveState(*stateFile, state)
@@ -481,7 +482,7 @@ func saveState(path string, state *persistentState) {
 }
 
 // analyzeScopes processes all scopes in parallel and returns results.
-func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year int, state *persistentState) []scopeResult {
+func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year int, state *persistentState, experimentID string) []scopeResult {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var results []scopeResult
@@ -513,7 +514,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 					continue
 				}
 
-				result, err = analyzeScope(ctx, session, url, secret, sc, year, state)
+				result, err = analyzeScope(ctx, session, url, secret, sc, year, state, experimentID)
 				session.Close() //nolint:errcheck
 				if err == nil {
 					lastErr = nil
@@ -542,7 +543,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 // analyzeScope creates or reuses a deliberation for one scope, submits messages,
 // runs analysis, and returns contexts for each participating power.
 // When state is provided, deliberations persist across years as multi-round deliberations.
-func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secret string, sc scope, year int, state *persistentState) (*scopeResult, error) {
+func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secret string, sc scope, year int, state *persistentState, experimentID string) (*scopeResult, error) {
 	// Check if we have a persistent deliberation for this scope
 	state.mu.Lock()
 	existingID := state.IDs[sc.name]
@@ -570,11 +571,15 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 			desc = fmt.Sprintf("Multi-party coordination within the %s alliance. Each round represents one game year.", sc.name)
 		}
 
-		createJSON := callTool(ctx, session, "create_deliberation", map[string]any{
+		createArgs := map[string]any{
 			"topic":       topic,
 			"description": desc,
 			"type":        sc.delibType,
-		})
+		}
+		if experimentID != "" {
+			createArgs["group_id"] = experimentID
+		}
+		createJSON := callTool(ctx, session, "create_deliberation", createArgs)
 
 		var createResp struct {
 			DeliberationID string `json:"deliberation_id"`

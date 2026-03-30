@@ -25,6 +25,8 @@ type Store interface {
 	CreateDeliberation(d *Deliberation) error
 	GetDeliberation(id string) (*Deliberation, error)
 	ListDeliberations() ([]Deliberation, error)
+	ListByGroup(groupID string) ([]Deliberation, error)
+	ListByAgent(agentID string) ([]Deliberation, error)
 	UpdateDeliberationStatus(id, status string) error
 	UpdateDeliberationTemplate(id, template string) error
 	DeleteDeliberation(id string) error
@@ -240,6 +242,11 @@ func WithCreatorKey(k string) DeliberationOption {
 	return func(d *Deliberation) { d.CreatorKey = k }
 }
 
+// WithGroupID links this deliberation to a group (experiment, workflow, session).
+func WithGroupID(g string) DeliberationOption {
+	return func(d *Deliberation) { d.GroupID = g }
+}
+
 // WithMaxParticipants sets the maximum number of unique agents.
 func WithMaxParticipants(n int) DeliberationOption {
 	return func(d *Deliberation) { d.MaxParticipants = n }
@@ -405,6 +412,14 @@ func (s *Service) GetLatestAnalysisResult(deliberationID string) (*AnalysisResul
 
 func (s *Service) ListDeliberations() ([]Deliberation, error) {
 	return s.store.ListDeliberations()
+}
+
+func (s *Service) ListByGroup(groupID string) ([]Deliberation, error) {
+	return s.store.ListByGroup(groupID)
+}
+
+func (s *Service) ListByAgent(agentID string) ([]Deliberation, error) {
+	return s.store.ListByAgent(agentID)
 }
 
 func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts ...PositionOption) (*Position, error) {

@@ -16,6 +16,7 @@ type Deliberation struct {
 	MaxParticipants int    `json:"max_participants,omitempty"` // 0 = unlimited
 	Template        string         `json:"template,omitempty"`         // governance template (assembly, jury, etc.)
 	Rules           map[string]any `json:"rules,omitempty"`            // governance rules (quorum, timelock, etc.)
+	GroupID         string         `json:"group_id,omitempty"`         // links related deliberations (experiment, workflow, session)
 	CreatedAt       time.Time      `json:"created_at"`
 }
 
