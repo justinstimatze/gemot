@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -53,7 +54,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			return
 		}
 
-		isAdmin := apiSecret != "" && token == apiSecret
+		isAdmin := apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
 		var keyID string
 		if !isAdmin {
 			if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
