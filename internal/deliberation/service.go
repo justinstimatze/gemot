@@ -27,6 +27,7 @@ type Store interface {
 	ListDeliberations() ([]Deliberation, error)
 	ListByGroup(groupID string) ([]Deliberation, error)
 	ListByAgent(agentID string) ([]Deliberation, error)
+	SetGroupID(deliberationID, groupID string) error
 	UpdateDeliberationStatus(id, status string) error
 	UpdateDeliberationTemplate(id, template string) error
 	DeleteDeliberation(id string) error
@@ -422,6 +423,10 @@ func (s *Service) ListByAgent(agentID string) ([]Deliberation, error) {
 	return s.store.ListByAgent(agentID)
 }
 
+func (s *Service) SetGroupID(deliberationID, groupID string) error {
+	return s.store.SetGroupID(deliberationID, groupID)
+}
+
 func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts ...PositionOption) (*Position, error) {
 	if len(agentID) > maxAgentIDLen {
 		return nil, fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
@@ -815,6 +820,13 @@ func (s *Service) GetContext(deliberationID, agentID string) (*AgentContext, err
 	if w, ok := result.EffectiveWeights[agentID]; ok {
 		ctx.EffectiveWeight = w
 	}
+
+	// Surface cooperation data: compromise, failure scenarios, constitutional rules
+	ctx.CompromiseProposal = result.CompromiseProposal
+	ctx.FailureScenarios = result.FailureScenarios
+	ctx.ConstitutionalRules = result.ConstitutionalRules
+	ctx.EmergentNorms = result.EmergentNorms
+	ctx.RuleViolations = result.RuleViolations
 
 	// Anti-sycophancy: generate a diversity nudge based on the agent's unique position
 	ctx.DiversityNudge = buildDiversityNudge(ctx, result)
