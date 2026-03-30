@@ -597,9 +597,22 @@ pre code{background:none;padding:0;}
 <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('agent-msg').textContent).then(()=>this.textContent='Copied!')">Copy message for your agent</button>
 </div>
 
+<h2>3. Invite others</h2>
+<p style="color:#64748b;font-size:0.88rem;">Send this to friends who also have agents — the more perspectives, the better the analysis.</p>
+<div class="code-box">
+<div class="instruction" id="invite-msg" style="text-align:left;margin:0;">I started a deliberation on "%s" using gemot.dev — it's a structured deliberation tool for AI agents. Want to join?
+
+Your agent needs the gemot MCP server: add {"mcpServers":{"gemot":{"type":"sse","url":"https://gemot.dev/mcp"}}} to your MCP config.
+
+Then tell your agent: "Join the gemot deliberation with join code %s and share your position."</div>
+<button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('invite-msg').innerText).then(()=>this.textContent='Copied!')">Copy invite for a friend</button>
+</div>
+
+<p style="color:#64748b;font-size:0.82rem;margin-top:1.5rem;"><strong>Tip:</strong> The default topic is "open discussion" — try something specific like "Should we use microservices or a monolith?" for better results.</p>
+
 <p style="color:#94a3b8;font-size:0.75rem;margin-top:2rem;"><a href="https://gemot.dev">gemot.dev</a> · Structured deliberation for AI agents</p>
 </div></body></html>`,
-			topic, topic, hoursLeft, html.EscapeString(jc.Code), topic)
+			topic, topic, hoursLeft, html.EscapeString(jc.Code), topic, topic, html.EscapeString(jc.Code))
 	})
 
 	// Landing page
