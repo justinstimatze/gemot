@@ -342,7 +342,7 @@ func TestRoundDriftDetection(t *testing.T) {
 }
 
 func TestRateLimiter(t *testing.T) {
-	rl := payments.NewRateLimiter(3, 100*time.Millisecond)
+	rl := payments.NewRateLimiter(context.Background(), 3, 100*time.Millisecond)
 
 	// First 3 should pass
 	for i := 0; i < 3; i++ {
@@ -371,7 +371,7 @@ func TestRateLimiter(t *testing.T) {
 }
 
 func TestRateLimiterConcurrent(t *testing.T) {
-	rl := payments.NewRateLimiter(100, time.Second)
+	rl := payments.NewRateLimiter(context.Background(), 100, time.Second)
 	done := make(chan bool, 200)
 
 	// Fire 200 concurrent requests

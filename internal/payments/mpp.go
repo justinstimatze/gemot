@@ -46,7 +46,7 @@ type ContextKeySandbox struct{}
 // Middleware returns HTTP middleware that implements MPP 402 payment gating.
 // It also supports traditional bearer token auth as a fallback.
 // If a CreditStore is provided, customer API keys (gmt_...) are validated against it.
-func Middleware(cfg Config, bearerSecret string, creditStore ...*CreditStore) func(http.Handler) http.Handler {
+func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStore ...*CreditStore) func(http.Handler) http.Handler {
 	var cs *CreditStore
 	if len(creditStore) > 0 {
 		cs = creditStore[0]
@@ -59,7 +59,7 @@ func Middleware(cfg Config, bearerSecret string, creditStore ...*CreditStore) fu
 	}
 
 	// Rate limit: 30 requests per minute per API key
-	limiter := NewRateLimiter(30, time.Minute)
+	limiter := NewRateLimiter(ctx, 30, time.Minute)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
