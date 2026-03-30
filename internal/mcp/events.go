@@ -122,7 +122,9 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("Access-Control-Allow-Origin", "*") // browser EventSource needs this
+		if origin := allowedCORSOrigin(r); origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 
 		ping := time.NewTicker(15 * time.Second)
 		defer ping.Stop()
@@ -155,4 +157,26 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			}
 		}
 	}
+}
+
+// allowedCORSOrigin returns the request Origin if it matches a known allowed origin,
+// or empty string if it should not be reflected.
+func allowedCORSOrigin(r *http.Request) string {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return ""
+	}
+	allowed := map[string]bool{
+		"https://gemot.dev":     true,
+		"https://vis.gemot.dev": true,
+		"http://localhost":      true,
+	}
+	// Check exact match or localhost with port
+	if allowed[origin] {
+		return origin
+	}
+	if strings.HasPrefix(origin, "http://localhost:") {
+		return origin
+	}
+	return ""
 }

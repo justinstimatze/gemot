@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
@@ -86,37 +88,48 @@ func cmdServe(httpMode bool, addr string) {
 		svc.SetContentClassifier(screeningClient.Classify)
 	}
 
+	// Signal-aware context for graceful shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	// Background janitor: recover stuck deliberations and jobs
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			if n, err := svc.RecoverStuck(); err != nil {
-				fmt.Fprintf(os.Stderr, "gemot: stuck recovery error: %v\n", err)
-			} else if n > 0 {
-				fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck deliberation(s)\n", n)
-			}
-			if n, err := db.RecoverStuckJobs(10 * time.Minute); err != nil {
-				fmt.Fprintf(os.Stderr, "gemot: stuck job recovery error: %v\n", err)
-			} else if n > 0 {
-				fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck job(s)\n", n)
-			}
-			// Clean up expired sandbox deliberations (48h TTL)
-			if n, err := db.DeleteExpiredSandboxDeliberations(48 * time.Hour); err != nil {
-				fmt.Fprintf(os.Stderr, "gemot: sandbox cleanup error: %v\n", err)
-			} else if n > 0 {
-				fmt.Fprintf(os.Stderr, "gemot: cleaned up %d expired sandbox deliberation(s)\n", n)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if n, err := svc.RecoverStuck(); err != nil {
+					fmt.Fprintf(os.Stderr, "gemot: stuck recovery error: %v\n", err)
+				} else if n > 0 {
+					fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck deliberation(s)\n", n)
+				}
+				if n, err := db.RecoverStuckJobs(10 * time.Minute); err != nil {
+					fmt.Fprintf(os.Stderr, "gemot: stuck job recovery error: %v\n", err)
+				} else if n > 0 {
+					fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck job(s)\n", n)
+				}
+				// Clean up expired sandbox deliberations (48h TTL)
+				if n, err := db.DeleteExpiredSandboxDeliberations(48 * time.Hour); err != nil {
+					fmt.Fprintf(os.Stderr, "gemot: sandbox cleanup error: %v\n", err)
+				} else if n > 0 {
+					fmt.Fprintf(os.Stderr, "gemot: cleaned up %d expired sandbox deliberation(s)\n", n)
+				}
+				// Evict stale cost tracker entries (24h)
+				tracker.Cleanup(24 * time.Hour)
 			}
 		}
 	}()
 
 	if httpMode {
-		if err := mcp.RunHTTP(context.Background(), svc, db.RawDB(), addr); err != nil {
+		if err := mcp.RunHTTP(ctx, svc, db.RawDB(), addr); err != nil {
 			fmt.Fprintf(os.Stderr, "HTTP server error: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		if err := mcp.Run(context.Background(), svc); err != nil {
+		if err := mcp.Run(ctx, svc); err != nil {
 			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 			os.Exit(1)
 		}

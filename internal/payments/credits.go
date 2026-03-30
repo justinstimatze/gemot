@@ -118,29 +118,35 @@ func (s *CreditStore) AddCreditsByEmail(email string, amount int) (string, int, 
 
 // Deduct attempts to deduct credits from a key. Returns remaining balance.
 // Returns error if insufficient credits.
+// Uses a single atomic UPDATE to eliminate TOCTOU races.
 func (s *CreditStore) Deduct(key string, amount int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	var balance int
-	err := s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = ?`, key).Scan(&balance)
-	if err != nil {
-		return 0, fmt.Errorf("invalid api key")
-	}
-
-	if balance < amount {
-		return balance, fmt.Errorf("insufficient credits: have %d, need %d", balance, amount)
-	}
-
-	_, err = s.db.Exec(
-		`UPDATE api_keys SET credits_remaining = credits_remaining - ?, last_used_at = ? WHERE key = ?`,
-		amount, time.Now().UTC().Format(time.RFC3339), key,
+	res, err := s.db.Exec(
+		`UPDATE api_keys SET credits_remaining = credits_remaining - ?, last_used_at = ? WHERE key = ? AND credits_remaining >= ?`,
+		amount, time.Now().UTC().Format(time.RFC3339), key, amount,
 	)
 	if err != nil {
 		return 0, err
 	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// Either key doesn't exist or insufficient credits — distinguish by checking balance
+		var balance int
+		err := s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = ?`, key).Scan(&balance)
+		if err != nil {
+			return 0, fmt.Errorf("invalid api key")
+		}
+		return balance, fmt.Errorf("insufficient credits: have %d, need %d", balance, amount)
+	}
 
-	return balance - amount, nil
+	var balance int
+	err = s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = ?`, key).Scan(&balance)
+	if err != nil {
+		return 0, err
+	}
+	return balance, nil
 }
 
 // GetBalance returns the credit balance for a key.

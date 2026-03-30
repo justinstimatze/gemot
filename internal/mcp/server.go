@@ -436,9 +436,13 @@ func (s *server) handleVote(ctx context.Context, _ *sdkmcp.CallToolRequest, args
 return textResult("vote recorded\n\n---\nNext: vote on more positions, or call analyze when all votes are in."), nil, nil
 }
 
-func (s *server) handleGetPositions(_ context.Context, _ *sdkmcp.CallToolRequest, args getPositionsParams) (*sdkmcp.CallToolResult, any, error) {
+func (s *server) handleGetPositions(ctx context.Context, _ *sdkmcp.CallToolRequest, args getPositionsParams) (*sdkmcp.CallToolResult, any, error) {
 	if args.DeliberationID == "" {
 		return errResult(fmt.Errorf("deliberation_id is required"))
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		return errResult(err)
 	}
 	positions, err := s.svc.GetPositions(args.DeliberationID, args.ExcludeAgentID, args.Round)
 	if err != nil {
@@ -465,9 +469,13 @@ func (s *server) handleGetPositions(_ context.Context, _ *sdkmcp.CallToolRequest
 	return jsonResult(positions)
 }
 
-func (s *server) handleGetDeliberation(_ context.Context, _ *sdkmcp.CallToolRequest, args getDeliberationParams) (*sdkmcp.CallToolResult, any, error) {
+func (s *server) handleGetDeliberation(ctx context.Context, _ *sdkmcp.CallToolRequest, args getDeliberationParams) (*sdkmcp.CallToolResult, any, error) {
 	if args.DeliberationID == "" {
 		return errResult(fmt.Errorf("deliberation_id is required"))
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		return errResult(err)
 	}
 	d, err := s.svc.GetDeliberation(args.DeliberationID)
 	if err != nil {
@@ -566,6 +574,10 @@ func (s *server) handleGetContext(ctx context.Context, _ *sdkmcp.CallToolRequest
 	if args.DeliberationID == "" || args.AgentID == "" {
 		return errResult(fmt.Errorf("deliberation_id and agent_id are required"))
 	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		return errResult(err)
+	}
 	args.AgentID = scopeAgentID(ctx, args.AgentID)
 	actx, err := s.svc.GetContext(args.DeliberationID, args.AgentID)
 	if err != nil {
@@ -578,10 +590,18 @@ func (s *server) handleGetContext(ctx context.Context, _ *sdkmcp.CallToolRequest
 	return jsonResultWithHints(actx, hint)
 }
 
-func (s *server) handleListDeliberations(_ context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
-	deliberations, err := s.svc.ListDeliberations(0, 0)
+func (s *server) handleListDeliberations(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, any, error) {
+	allDelibs, err := s.svc.ListDeliberations(0, 0)
 	if err != nil {
 		return errResult(err)
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	var deliberations []deliberation.Deliberation
+	for _, d := range allDelibs {
+		if d.Visibility == "private" && d.CreatorKey != keyID {
+			continue
+		}
+		deliberations = append(deliberations, d)
 	}
 	return jsonResult(deliberations)
 }
@@ -727,9 +747,13 @@ func (s *server) handleCommit(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 	return jsonResult(c)
 }
 
-func (s *server) handleGetCommitments(_ context.Context, _ *sdkmcp.CallToolRequest, args getCommitmentsParams) (*sdkmcp.CallToolResult, any, error) {
+func (s *server) handleGetCommitments(ctx context.Context, _ *sdkmcp.CallToolRequest, args getCommitmentsParams) (*sdkmcp.CallToolResult, any, error) {
 	if args.DeliberationID == "" {
 		return errResult(fmt.Errorf("deliberation_id is required"))
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		return errResult(err)
 	}
 	commitments, err := s.svc.GetCommitments(args.DeliberationID)
 	if err != nil {

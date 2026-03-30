@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +12,17 @@ import (
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
+	"github.com/justinstimatze/gemot/internal/llm"
 	"github.com/justinstimatze/gemot/internal/payments"
 )
+
+// sanitizeError maps known internal errors to user-friendly messages.
+func sanitizeError(err error) string {
+	if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no rows") {
+		return "not found"
+	}
+	return err.Error()
+}
 
 // a2aMethods is the canonical list of supported A2A methods.
 var a2aMethods = []string{
@@ -234,7 +245,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			agentID := scope(str("agent_id"))
 			content := str("content")
 			if content == "" {
-				writeA2AError(w, req.ID, -32000, "content is required")
+				writeA2AError(w, req.ID, -32602, "content is required")
 				return
 			}
 			var popts []deliberation.PositionOption
@@ -320,8 +331,13 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AError(w, req.ID, -32000, err.Error())
 				return
 			}
+			analyzeCtx, analyzeCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			if model := str("model"); model != "" {
+				analyzeCtx = context.WithValue(analyzeCtx, llm.ContextKeyModel{}, model)
+			}
 			go func() {
-				_, err := svc.Analyze(context.Background(), deliberationID)
+				defer analyzeCancel()
+				_, err := svc.Analyze(analyzeCtx, deliberationID)
 				if err != nil {
 					refundCredits(creditCost)
 				}
@@ -339,7 +355,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			d, err := svc.GetDeliberation(str("deliberation_id"))
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			writeA2AResult(w, req.ID, d)
@@ -351,7 +367,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			positions, err := svc.GetPositions(str("deliberation_id"), nil, nil)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			writeA2AResult(w, req.ID, positions)
@@ -364,7 +380,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			agentID := scope(str("agent_id"))
 			actx, err := svc.GetContext(str("deliberation_id"), agentID)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			writeA2AResult(w, req.ID, actx)
@@ -379,7 +395,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			allDelibs, err := svc.ListDeliberations(pgLimit, pgOffset)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			var deliberations []deliberation.Deliberation
@@ -410,6 +426,10 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			writeA2AResult(w, req.ID, map[string]string{"compromise_proposal": proposal})
 
 		case "gemot/dispute_crux":
+			if err := checkAccess(str("deliberation_id")); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
 			agentID := scope(str("agent_id"))
 			d, err := svc.DisputeCrux(str("deliberation_id"), agentID, str("crux_claim"), str("correction"))
 			if err != nil {
@@ -419,6 +439,10 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			writeA2AResult(w, req.ID, d)
 
 		case "gemot/commit":
+			if err := checkAccess(str("deliberation_id")); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
+				return
+			}
 			agentID := scope(str("agent_id"))
 			c, err := svc.Commit(str("deliberation_id"), agentID, str("statement"), str("conditional"))
 			if err != nil {
@@ -479,7 +503,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			code := str("code")
 			agentID := scope(str("agent_id"))
 			if code == "" || agentID == "" {
-				writeA2AError(w, req.ID, -32000, "code and agent_id are required")
+				writeA2AError(w, req.ID, -32602, "code and agent_id are required")
 				return
 			}
 			deliberationID, role, err := svc.JoinDeliberation(code, agentID)
@@ -497,7 +521,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		case "gemot/get_analysis_result":
 			deliberationID := str("deliberation_id")
 			if deliberationID == "" {
-				writeA2AError(w, req.ID, -32000, "deliberation_id is required")
+				writeA2AError(w, req.ID, -32602, "deliberation_id is required")
 				return
 			}
 			if err := checkAccess(deliberationID); err != nil {
@@ -506,7 +530,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			result, err := svc.GetLatestAnalysisResult(deliberationID)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			if result == nil {
@@ -518,7 +542,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		case "gemot/get_votes":
 			deliberationID := str("deliberation_id")
 			if deliberationID == "" {
-				writeA2AError(w, req.ID, -32000, "deliberation_id is required")
+				writeA2AError(w, req.ID, -32602, "deliberation_id is required")
 				return
 			}
 			if err := checkAccess(deliberationID); err != nil {
@@ -527,7 +551,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			votes, err := svc.GetVotes(deliberationID)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			writeA2AResult(w, req.ID, votes)
@@ -535,7 +559,11 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		case "gemot/get_audit_log":
 			deliberationID := str("deliberation_id")
 			if deliberationID == "" {
-				writeA2AError(w, req.ID, -32000, "deliberation_id is required")
+				writeA2AError(w, req.ID, -32602, "deliberation_id is required")
+				return
+			}
+			if err := checkAccess(deliberationID); err != nil {
+				writeA2AError(w, req.ID, -32000, err.Error())
 				return
 			}
 			var opLog []map[string]string
@@ -557,11 +585,11 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		case "gemot/delete_deliberation":
 			deliberationID := str("deliberation_id")
 			if deliberationID == "" {
-				writeA2AError(w, req.ID, -32000, "deliberation_id is required")
+				writeA2AError(w, req.ID, -32602, "deliberation_id is required")
 				return
 			}
 			if err := svc.DeleteDeliberation(deliberationID, keyID, isAdmin); err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			writeA2AResult(w, req.ID, map[string]string{"status": "deleted"})
@@ -570,7 +598,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			deliberationID := str("deliberation_id")
 			reason := str("reason")
 			if deliberationID == "" || reason == "" {
-				writeA2AError(w, req.ID, -32000, "deliberation_id and reason are required")
+				writeA2AError(w, req.ID, -32602, "deliberation_id and reason are required")
 				return
 			}
 			if err := svc.ReportAbuse(deliberationID, keyID, reason); err != nil {
@@ -583,7 +611,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			deliberationID := str("deliberation_id")
 			template := str("template")
 			if deliberationID == "" || template == "" {
-				writeA2AError(w, req.ID, -32000, "deliberation_id and template are required")
+				writeA2AError(w, req.ID, -32602, "deliberation_id and template are required")
 				return
 			}
 			if err := svc.SetTemplate(deliberationID, template, keyID); err != nil {
@@ -606,7 +634,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			deliberationID := str("deliberation_id")
 			groupID := str("group_id")
 			if deliberationID == "" || groupID == "" {
-				writeA2AError(w, req.ID, -32000, "deliberation_id and group_id are required")
+				writeA2AError(w, req.ID, -32602, "deliberation_id and group_id are required")
 				return
 			}
 			if err := svc.SetGroupID(deliberationID, groupID); err != nil {
@@ -622,7 +650,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			groupID := str("group_id")
 			if groupID == "" {
-				writeA2AError(w, req.ID, -32000, "group_id is required")
+				writeA2AError(w, req.ID, -32602, "group_id is required")
 				return
 			}
 			shareToken, err := svc.CreateShareToken(groupID)
@@ -638,17 +666,17 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		case "gemot/lookup_share":
 			shareToken := str("token")
 			if shareToken == "" {
-				writeA2AError(w, req.ID, -32000, "token is required")
+				writeA2AError(w, req.ID, -32602, "token is required")
 				return
 			}
 			groupID, err := svc.LookupShareToken(shareToken)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			allDelibs, err := svc.ListByGroup(groupID, 0, 0)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			delibs := []deliberation.Deliberation{}
@@ -666,7 +694,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		case "gemot/list_by_group":
 			groupID := str("group_id")
 			if groupID == "" {
-				writeA2AError(w, req.ID, -32000, "group_id is required")
+				writeA2AError(w, req.ID, -32602, "group_id is required")
 				return
 			}
 			var pgLimit, pgOffset int
@@ -678,7 +706,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			allDelibs, err := svc.ListByGroup(groupID, pgLimit, pgOffset)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			delibs := []deliberation.Deliberation{}
@@ -693,7 +721,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 		case "gemot/list_by_agent":
 			agentID := str("agent_id")
 			if agentID == "" {
-				writeA2AError(w, req.ID, -32000, "agent_id is required")
+				writeA2AError(w, req.ID, -32602, "agent_id is required")
 				return
 			}
 			var pgLimit, pgOffset int
@@ -705,7 +733,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			allDelibs, err := svc.ListByAgent(agentID, pgLimit, pgOffset)
 			if err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
+				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
 			delibs := []deliberation.Deliberation{}

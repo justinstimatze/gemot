@@ -438,6 +438,15 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 		return nil, fmt.Errorf("content exceeds %d characters", maxContentLen)
 	}
 
+	// PII sanitization at write time (defense in depth — also sanitized at analysis time)
+	sanitized := sanitize.Position(content)
+	if len(sanitized.Warnings) > 0 {
+		for _, w := range sanitized.Warnings {
+			fmt.Fprintf(os.Stderr, "gemot: PII sanitization warning for position in %s: %s\n", deliberationID, w)
+		}
+	}
+	content = sanitized.Text
+
 	// Content screening — LLM classifier (Haiku, ~200ms, ~$0.001)
 	var screeningWarning string
 	if s.contentClassifier != nil {
