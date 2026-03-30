@@ -207,8 +207,10 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 		if !isRetryable(lastErr) {
 			return "", fmt.Errorf("classify API call failed: %w", lastErr)
 		}
+		log.Printf("[gemot] LLM classify retry %d/%d: %v", attempt+1, maxRetries, lastErr)
 	}
 	if lastErr != nil {
+		log.Printf("[gemot] LLM classify failed after %d retries: %v", maxRetries, lastErr)
 		return "", fmt.Errorf("classify API call failed after %d retries: %w", maxRetries, lastErr)
 	}
 
