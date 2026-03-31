@@ -220,9 +220,6 @@ func buildScopes(messages []Message, alliances [][]string, year int) []scope {
 	var scopes []scope
 
 	// Global scope → policy type + assembly template
-	// AI Diplomacy doesn't produce "GLOBAL" messages, so we synthesize a global
-	// assembly from all bilateral messages. Each power's messages to any counterpart
-	// represent their public diplomatic stance.
 	if len(globalMsgs) > 0 {
 		scopes = append(scopes, scope{
 			name:      "global",
@@ -231,20 +228,6 @@ func buildScopes(messages []Message, alliances [][]string, year int) []scope {
 			delibType: "policy",
 			powers:    powers,
 			messages:  globalMsgs,
-		})
-	} else if len(bilateral) > 0 {
-		// Synthesize global assembly from all bilateral messages
-		var allMsgs []Message
-		for _, msgs := range bilateral {
-			allMsgs = append(allMsgs, msgs...)
-		}
-		scopes = append(scopes, scope{
-			name:      "global",
-			scopeTag:  "global",
-			template:  "assembly",
-			delibType: "policy",
-			powers:    powers,
-			messages:  allMsgs,
 		})
 	}
 
