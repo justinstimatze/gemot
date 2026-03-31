@@ -220,16 +220,16 @@ func buildScopes(messages []Message, alliances [][]string, year int) []scope {
 	var scopes []scope
 
 	// Global scope → policy type + assembly template
-	if len(globalMsgs) > 0 {
-		scopes = append(scopes, scope{
-			name:      "global",
-			scopeTag:  "global",
-			template:  "assembly",
-			delibType: "policy",
-			powers:    powers,
-			messages:  globalMsgs,
-		})
-	}
+	// Always create the global assembly even without explicit GLOBAL messages —
+	// it provides the 7-power deliberation for cross-cutting analysis.
+	scopes = append(scopes, scope{
+		name:      "global",
+		scopeTag:  "global",
+		template:  "assembly",
+		delibType: "policy",
+		powers:    powers,
+		messages:  globalMsgs, // may be empty
+	})
 
 	// Bilateral scopes → negotiation type + negotiation template
 	for key, msgs := range bilateral {
@@ -621,6 +621,11 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 	}
 
 	// 3. Submit each message as a position
+	if len(sc.messages) == 0 {
+		// No messages for this scope (e.g. global assembly with no broadcasts).
+		// Deliberation exists but has no data to analyze yet.
+		return &scopeResult{scope: sc, contexts: make(map[string]string)}, nil
+	}
 	for _, msg := range sc.messages {
 		sender := strings.ToUpper(msg.Sender)
 		recipient := strings.ToUpper(msg.Recipient)
