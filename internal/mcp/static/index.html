@@ -492,48 +492,48 @@
 <details class="demo-card" id="demo-diplomacy">
 <summary>
   <div class="demo-card-title">Diplomacy &mdash; 7 AI powers, 7 years of negotiation</div>
-  <div class="demo-card-desc">7 Sonnet agents play the board game Diplomacy for 7 years. Gemot analyzes every bilateral negotiation and surfaces shared ground, cruxes, and power balance warnings each year. Result: power spread drops from 8 to 4.</div>
+  <div class="demo-card-desc">7 Sonnet agents play Diplomacy for 7 years, forming alliances and coordinating support orders. Without gemot, one alliance steamrolls the board. With gemot briefings, power stays balanced. Spread drops from 10 to 5.</div>
 </summary>
 <div class="demo-card-body">
 
-<p style="color:#475569; margin-bottom:1.5rem;">Each year, every pair of powers negotiates privately. Gemot creates a bilateral deliberation for each pair, extracts cruxes from their messages, identifies shared ground via LLM agreement detection, and produces a cooperation-first intelligence briefing with power balance warnings.</p>
+<p style="color:#475569; margin-bottom:1.5rem;">Agents are encouraged to form alliances and coordinate military support orders &mdash; just like human Diplomacy players. Each year, gemot analyzes every bilateral negotiation and the global diplomatic table, identifies shared ground and cruxes, and produces cooperation-first briefings with power balance warnings. Same seed, same prompts, same model &mdash; the only difference is whether agents receive gemot briefings.</p>
 
-<h3>Without gemot (stock game)</h3>
+<h3>Without gemot</h3>
 <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin:0.75rem 0 1.5rem; font-size:0.8rem; text-align:center;">
-  <div><div style="background:#e11d48;color:#fff;border-radius:6px;padding:0.3rem;">TUR</div><div style="font-weight:700;">9</div></div>
-  <div><div style="background:#dc2626;color:#fff;border-radius:6px;padding:0.3rem;">GER</div><div style="font-weight:700;">8</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">AUS</div><div>4</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">ENG</div><div>3</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">FRA</div><div>3</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">ITA</div><div>3</div></div>
-  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div>1</div></div>
+  <div><div style="background:#e11d48;color:#fff;border-radius:6px;padding:0.3rem;">FRA</div><div style="font-weight:700;">10</div></div>
+  <div><div style="background:#e11d48;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div style="font-weight:700;">10</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">ENG</div><div>6</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">RUS</div><div>4</div></div>
+  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">AUS</div><div>2</div></div>
+  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">TUR</div><div>2</div></div>
+  <div><div style="background:#1e293b;color:#fff;border-radius:6px;padding:0.3rem;">GER</div><div style="font-weight:700;">0</div></div>
 </div>
-<p style="color:#94a3b8; font-size:0.8rem;">Spread: 8 &middot; Two dominant powers, one nearly eliminated</p>
+<p style="color:#94a3b8; font-size:0.8rem;">Spread: 10 &middot; France-Italy alliance dominates, Germany eliminated</p>
 
 <h3>With gemot briefings</h3>
 <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin:0.75rem 0 1.5rem; font-size:0.8rem; text-align:center;">
-  <div><div style="background:#4f46e5;color:#fff;border-radius:6px;padding:0.3rem;">FRA</div><div style="font-weight:700;">6</div></div>
-  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">ENG</div><div>5</div></div>
-  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">GER</div><div>5</div></div>
-  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div>5</div></div>
-  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">TUR</div><div>5</div></div>
-  <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">AUS</div><div>4</div></div>
-  <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div>4</div></div>
+  <div><div style="background:#4f46e5;color:#fff;border-radius:6px;padding:0.3rem;">ENG</div><div style="font-weight:700;">7</div></div>
+  <div><div style="background:#4f46e5;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div style="font-weight:700;">7</div></div>
+  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">FRA</div><div>6</div></div>
+  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div>6</div></div>
+  <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">TUR</div><div>4</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">AUS</div><div>2</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">GER</div><div>2</div></div>
 </div>
-<p style="color:#94a3b8; font-size:0.8rem;">Spread: 2 &middot; Four powers tied at 5, no one eliminated</p>
+<p style="color:#94a3b8; font-size:0.8rem;">Spread: 5 &middot; No dominant alliance, everyone survives</p>
 
 <h3>How it works</h3>
-<p style="color:#475569; font-size:0.88rem; line-height:1.6;">Each year, gemot processes ~55 diplomatic messages across 16+ bilateral scopes. For each pair of powers, it:</p>
+<p style="color:#475569; font-size:0.88rem; line-height:1.6;">Each year, gemot processes ~150 diplomatic messages across 22 deliberation scopes (21 bilateral + 1 global assembly). For each scope, it:</p>
 <ol style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
-  <li>Extracts claims and detects cruxes from private negotiations</li>
+  <li>Extracts claims and detects cruxes from negotiations</li>
   <li>Identifies shared ground and potential compromises (LLM agreement detection)</li>
   <li>Produces a cooperation-first briefing leading with agreements, not threats</li>
   <li>Flags power balance shifts and runaway leaders</li>
 </ol>
 
-<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">The briefings don't tell agents what to do &mdash; they surface information that was already in the negotiations but hard to see. The agents make better decisions because they understand their counterparts' actual positions.</p>
+<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">The briefings don't tell agents what to do &mdash; they surface information that was already in the negotiations but hard to see. When agents understand their counterparts' actual positions, they make decisions that balance the board rather than letting one alliance run away with it.</p>
 
-<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">7-year experiment &middot; Claude Sonnet 4.6 agents &middot; same random seed for both runs</p>
+<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">7-year experiment &middot; Claude Sonnet 4.6 agents &middot; same seed, same prompts &middot; <a href="https://vis.gemot.dev/g/gemot-v9-sonnet?token=4ab806d59e4d5b9563c27f9576ff8232&amp;theme=minimal">View deliberations &rarr;</a></p>
 
 </div>
 </details>
