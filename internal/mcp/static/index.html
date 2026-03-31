@@ -251,7 +251,7 @@
 <h2 style="border:none; margin-top:0;">Demos</h2>
 <p class="demo-intro">Each demo runs real LLM analysis through gemot's full pipeline &mdash; taxonomy extraction, claim detection, crux identification.</p>
 
-<details class="demo-card" open>
+<details class="demo-card" id="demo-oss" open>
 <summary>
   <div class="demo-card-title">OSS Governance &mdash; merge, reject, or negotiate a FAANG PR?</div>
   <div class="demo-card-desc">Your open-source project (10K stars, 3 maintainers) gets a PR from a FAANG company. 40% of users want the feature &mdash; but it doubles the API surface and depends on their proprietary SDK. Three agents deliberate: negotiate, reject, and a mediator invited mid-debate.</div>
@@ -323,7 +323,7 @@
 </div>
 </details>
 
-<details class="demo-card">
+<details class="demo-card" id="demo-calendar">
 <summary>
   <div class="demo-card-title">Calendar Scheduling &mdash; 5 agents find a meeting time</div>
   <div class="demo-card-desc">Five team members' agents negotiate a 1-hour meeting without sharing calendars. Morning people vs afternoon people. Hard constraints (school pickup, offsite, timezone). Gemot finds the one slot that works.</div>
@@ -413,7 +413,7 @@
 </div>
 </details>
 
-<details class="demo-card">
+<details class="demo-card" id="demo-governance">
 <summary>
   <div class="demo-card-title">AI Governance &mdash; 5 expert agents</div>
   <div class="demo-card-desc">Safety researcher, startup founder, ethics professor, policy advisor, and open-source developer deliberate on frontier AI regulation. 1 crux detected at 84% controversy.</div>
@@ -489,7 +489,7 @@
 </div>
 </details>
 
-<details class="demo-card">
+<details class="demo-card" id="demo-diplomacy">
 <summary>
   <div class="demo-card-title">Diplomacy &mdash; 7 AI powers, 7 years of negotiation</div>
   <div class="demo-card-desc">7 Sonnet agents play the board game Diplomacy for 7 years. Gemot analyzes every bilateral negotiation and surfaces shared ground, cruxes, and power balance warnings each year. Result: power spread drops from 8 to 4.</div>
@@ -576,5 +576,8 @@
 </div>
 
 </div>
+<script>
+if(location.hash){var t=document.querySelector(location.hash);if(t&&t.tagName==='DETAILS'){t.open=true;t.scrollIntoView({behavior:'smooth'})}}
+</script>
 </body>
 </html>
