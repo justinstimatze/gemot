@@ -745,10 +745,25 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		Stage: "summaries", Detail: fmt.Sprintf("%d topic summaries", len(summaries)), Count: len(summaries),
 	})
 
+	// Auto-generate compromise proposal when we have cruxes and agreement data
+	var compromiseProposal string
+	if !refused && len(cruxes) > 0 && (len(consensus) > 0 || len(bridging) > 0) {
+		tempResult := &deliberation.AnalysisResult{
+			Cruxes:             cruxes,
+			ConsensusStatements: consensus,
+			BridgingStatements:  bridging,
+			Clusters:            clusters,
+		}
+		if proposal, err := a.GenerateCompromise(ctx, deliberationTopic, tempResult); err == nil && proposal != "" {
+			compromiseProposal = proposal
+		}
+	}
+
 	result := &deliberation.AnalysisResult{
 		Clusters:            clusters,
 		Coalitions:          coalitions,
 		ConstitutionalRules: constitutionalRules,
+		CompromiseProposal:  compromiseProposal,
 		FailureScenarios:    failureScenarios,
 		ZOPA:                zopa,
 		CriteriaResults:     criteriaResults,
