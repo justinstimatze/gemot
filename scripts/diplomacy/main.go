@@ -305,9 +305,13 @@ func parseAllianceFlag(flag string) [][]string {
 // If Power A orders a unit to support Power B's unit, that's an alliance signal.
 // Mutual support (A supports B AND B supports A) = strong alliance.
 func detectAlliancesFromOrders(game GameState, gameYear int) [][]string {
+	// Look at current year plus previous year — alliances form across years,
+	// not just within a single year's movement phases.
 	targetPhases := map[string]bool{
-		fmt.Sprintf("S%dM", gameYear): true,
-		fmt.Sprintf("F%dM", gameYear): true,
+		fmt.Sprintf("S%dM", gameYear):   true,
+		fmt.Sprintf("F%dM", gameYear):   true,
+		fmt.Sprintf("S%dM", gameYear-1): true,
+		fmt.Sprintf("F%dM", gameYear-1): true,
 	}
 
 	// Build unit ownership map from game state
