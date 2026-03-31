@@ -220,14 +220,31 @@ func buildScopes(messages []Message, alliances [][]string, year int) []scope {
 	var scopes []scope
 
 	// Global scope → policy type + assembly template
+	// AI Diplomacy doesn't produce "GLOBAL" messages, so we synthesize a global
+	// assembly from all bilateral messages. Each power's messages to any counterpart
+	// represent their public diplomatic stance.
 	if len(globalMsgs) > 0 {
 		scopes = append(scopes, scope{
-			name:     "global",
-			scopeTag: "global",
-			template: "assembly",
+			name:      "global",
+			scopeTag:  "global",
+			template:  "assembly",
 			delibType: "policy",
-			powers:   powers,
-			messages: globalMsgs,
+			powers:    powers,
+			messages:  globalMsgs,
+		})
+	} else if len(bilateral) > 0 {
+		// Synthesize global assembly from all bilateral messages
+		var allMsgs []Message
+		for _, msgs := range bilateral {
+			allMsgs = append(allMsgs, msgs...)
+		}
+		scopes = append(scopes, scope{
+			name:      "global",
+			scopeTag:  "global",
+			template:  "assembly",
+			delibType: "policy",
+			powers:    powers,
+			messages:  allMsgs,
 		})
 	}
 
@@ -608,7 +625,19 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 			sc.scopeTag, sc.name, deliberationID[:8])
 	}
 
-	// 2. Submit each message as a position
+	// 2. Satisfy forced acknowledgment: call get_context for all agents before submitting
+	// (required for round 2+ deliberations — agents must review cruxes before contributing)
+	if existingID != "" && year > 1 {
+		for _, p := range sc.powers {
+			agentID := strings.ToLower(p) + "-agent"
+			callToolSoft(ctx, session, "get_context", map[string]any{
+				"deliberation_id": deliberationID,
+				"agent_id":        agentID,
+			})
+		}
+	}
+
+	// 3. Submit each message as a position
 	for _, msg := range sc.messages {
 		sender := strings.ToUpper(msg.Sender)
 		recipient := strings.ToUpper(msg.Recipient)
@@ -623,7 +652,7 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 		})
 	}
 
-	// 3. Voting: only for alliance scopes where members vote on proposals.
+	// 4. Voting: only for alliance scopes where members vote on proposals.
 	// Global and bilateral scopes rely on content analysis for crux detection —
 	// artificial votes conflate "I heard this" with "I agree with this."
 	// Alliance consensus deliberations benefit from votes: members agree/disagree
@@ -659,14 +688,14 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 		}
 	}
 
-	// 4. Analyze
+	// 5. Analyze
 	prefix := fmt.Sprintf("  [%s] %s:", sc.scopeTag, sc.name)
 	fmt.Fprintf(os.Stderr, "%s analyzing...\n", prefix)
 	callTool(ctx, session, "analyze", map[string]any{
 		"deliberation_id": deliberationID,
 	})
 
-	// 5. Poll for completion using first power's context
+	// 6. Poll for completion using first power's context
 	firstPower := strings.ToLower(sc.powers[0]) + "-agent"
 	time.Sleep(5 * time.Second)
 	completed := false
@@ -709,7 +738,7 @@ func analyzeScope(ctx context.Context, session *sdkmcp.ClientSession, url, secre
 		return nil, fmt.Errorf("analysis did not produce results after 10 minutes")
 	}
 
-	// 6. Collect contexts for each participating power
+	// 7. Collect contexts for each participating power
 	contexts := make(map[string]string)
 	for _, p := range sc.powers {
 		agentID := strings.ToLower(p) + "-agent"
@@ -1210,9 +1239,15 @@ func callTool(ctx context.Context, s *sdkmcp.ClientSession, name string, args ma
 func callToolSoft(ctx context.Context, s *sdkmcp.ClientSession, name string, args map[string]any) string {
 	res, err := s.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "  [soft] %s failed: %v\n", name, err)
 		return ""
 	}
 	if res.IsError || len(res.Content) == 0 {
+		errMsg := ""
+		if res.IsError && len(res.Content) > 0 {
+			errMsg = res.Content[0].(*sdkmcp.TextContent).Text
+		}
+		fmt.Fprintf(os.Stderr, "  [soft] %s error: %s\n", name, errMsg)
 		return ""
 	}
 	return res.Content[0].(*sdkmcp.TextContent).Text
