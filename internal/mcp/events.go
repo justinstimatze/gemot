@@ -46,6 +46,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		var keyID string
 		filterDelibID := r.URL.Query().Get("deliberation_id")
 		joinCodeAuth := false
+		var groupDelibIDs map[string]bool // for share token auth: set of deliberation IDs in the group
 
 		// Auth path 1: join_code query param (anonymous, scoped to one deliberation)
 		if jc := r.URL.Query().Get("join_code"); jc != "" {
@@ -56,6 +57,23 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			}
 			filterDelibID = d.ID
 			joinCodeAuth = true
+		} else if st := r.URL.Query().Get("share_token"); st != "" {
+			// Auth path 2: share_token query param (anonymous, scoped to a group of deliberations)
+			groupID, err := svc.LookupShareToken(st)
+			if err != nil || groupID == "" {
+				http.Error(w, "invalid or expired share token", http.StatusNotFound)
+				return
+			}
+			delibs, err := svc.ListByGroup(groupID, 500, 0)
+			if err != nil || len(delibs) == 0 {
+				http.Error(w, "group not found", http.StatusNotFound)
+				return
+			}
+			groupDelibIDs = make(map[string]bool, len(delibs))
+			for _, d := range delibs {
+				groupDelibIDs[d.ID] = true
+			}
+			joinCodeAuth = true // reuse the "pre-scoped" flag to skip per-event access checks
 		} else {
 			// Auth path 2: Bearer token from header or ?token= query param
 			token := ""
@@ -152,6 +170,9 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			select {
 			case event := <-ch:
 				if filterDelibID != "" && event.DeliberationID != filterDelibID {
+					continue
+				}
+				if groupDelibIDs != nil && !groupDelibIDs[event.DeliberationID] {
 					continue
 				}
 				if !checkAccess(event.DeliberationID) {
