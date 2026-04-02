@@ -23,7 +23,7 @@ jobs:
       GEMOT_KEY: ${{ secrets.GEMOT_REVIEW_KEY }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: refs/pull/${{ github.event.issue.number }}/head
