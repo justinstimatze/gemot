@@ -1,6 +1,8 @@
 package tests
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
@@ -190,5 +192,124 @@ func TestTemplatePersistsRoundTrip(t *testing.T) {
 	}
 	if d2.Type != "negotiation" {
 		t.Fatalf("type from template should persist: expected 'negotiation', got %q", d2.Type)
+	}
+}
+
+func TestSetTemplateAppliesDefaultRules(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	// Create with no template
+	d, err := svc.CreateDeliberation("Test", "No template initially")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rules should be empty
+	minP := deliberation.RuleInt(d, "min_participants", 0)
+	if minP != 0 {
+		t.Fatalf("expected no min_participants, got %d", minP)
+	}
+
+	// Apply parliament template
+	if err := svc.SetTemplate(d.ID, "parliament", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reload and check rules
+	d2, err := svc.GetDeliberation(d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d2.Template != "parliament" {
+		t.Fatalf("expected template 'parliament', got %q", d2.Template)
+	}
+	minP = deliberation.RuleInt(d2, "min_participants", 0)
+	if minP != 5 {
+		t.Fatalf("set_template should apply parliament's min_participants=5, got %d", minP)
+	}
+	cooling := deliberation.RuleInt(d2, "cooling_period_minutes", 0)
+	if cooling != 60 {
+		t.Fatalf("set_template should apply parliament's cooling_period=60, got %d", cooling)
+	}
+}
+
+func TestSetTemplatePreservesExplicitRules(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	// Create with explicit rule
+	d, err := svc.CreateDeliberation("Test", "Explicit rules",
+		deliberation.WithRules(map[string]any{"min_participants": 2}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Apply parliament template (which has min_participants=5)
+	if err := svc.SetTemplate(d.ID, "parliament", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Explicit rule should be preserved, not overwritten by template
+	d2, err := svc.GetDeliberation(d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minP := deliberation.RuleInt(d2, "min_participants", 0)
+	if minP != 2 {
+		t.Fatalf("explicit min_participants=2 should be preserved, got %d", minP)
+	}
+	// But cooling_period (not explicitly set) should come from template
+	cooling := deliberation.RuleInt(d2, "cooling_period_minutes", 0)
+	if cooling != 60 {
+		t.Fatalf("template cooling_period=60 should apply for non-explicit rule, got %d", cooling)
+	}
+}
+
+func TestCoolingPeriodEnforcement(t *testing.T) {
+	svc, db := newTestService(t)
+
+	d, err := svc.CreateDeliberation("Cooling Test", "Testing cooling period",
+		deliberation.WithRules(map[string]any{
+			"min_participants":       2,
+			"cooling_period_minutes": 60,
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Submit positions from 2 agents
+	svc.SubmitPosition(d.ID, "agent1", "Position A")
+	svc.SubmitPosition(d.ID, "agent2", "Position B")
+	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	for _, voter := range []string{"agent1", "agent2"} {
+		for _, p := range positions {
+			if p.AgentID != voter {
+				svc.Vote(d.ID, voter, p.ID, 1)
+			}
+		}
+	}
+
+	// First analysis should work (cooling period only applies after round 1)
+	_, err = svc.Analyze(context.Background(), d.ID)
+	// Will fail at LLM call, but should NOT fail at cooling period
+	if err != nil && strings.Contains(err.Error(), "cooling period") {
+		t.Fatalf("first analysis should not be blocked by cooling period: %v", err)
+	}
+
+	// Manually set status_changed_at to 5 minutes ago (within the 60-min cooling period)
+	db.RawDB().Exec(`UPDATE deliberations SET status_changed_at = datetime('now', '-5 minutes'), status = 'open', round_number = 2 WHERE id = ?`, d.ID)
+
+	// Submit more positions for round 2
+	svc.SubmitPosition(d.ID, "agent1", "Position C round 2")
+	svc.SubmitPosition(d.ID, "agent2", "Position D round 2")
+
+	// Second analysis should be blocked by cooling period
+	_, err = svc.Analyze(context.Background(), d.ID)
+	if err == nil {
+		t.Fatal("expected cooling period error")
+	}
+	if !strings.Contains(err.Error(), "cooling period") {
+		t.Fatalf("expected 'cooling period' error, got: %v", err)
 	}
 }
