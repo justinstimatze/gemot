@@ -108,10 +108,10 @@ jobs:
           JOIN_CODE=$(result_field "$JOIN" "code")
 
           CONTEXT=$(rpc "gemot/get_context" "{\"deliberation_id\":\"$DELIB_ID\",\"agent_id\":\"code-quality-reviewer\"}")
-          CRUX_COUNT=$(echo "$CONTEXT" | jq '.result.cruxes // [] | length')
+          CRUX_COUNT=$(echo "$CONTEXT" | jq '.result.relevant_cruxes // [] | length')
           CRUX_LIST=""
           if [ "$CRUX_COUNT" -gt 0 ]; then
-            CRUX_LIST=$(echo "$CONTEXT" | jq -r '.result.cruxes[] | "- **\(.crux_claim // .claim)** (\(.controversy_score // 0 | . * 100 | floor)% controversial)"' 2>/dev/null || echo "- (see deliberation)")
+            CRUX_LIST=$(echo "$CONTEXT" | jq -r '.result.relevant_cruxes[] | "- **\(.crux_claim // .claim)** (\(.controversy_score // 0 | . * 100 | floor)% controversial)"' 2>/dev/null || echo "- (see deliberation)")
           fi
 
           cat > /tmp/pr-comment.md << COMMENT_EOF
