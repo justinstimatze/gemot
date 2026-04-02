@@ -30,6 +30,7 @@ type Store interface {
 	SetGroupID(deliberationID, groupID string) error
 	UpdateDeliberationStatus(id, status string) error
 	UpdateDeliberationTemplate(id, template string) error
+	UpdateDeliberationRules(id string, rules map[string]any) error
 	DeleteDeliberation(id string) error
 	CreateAbuseReport(deliberationID, reporterKey, reason string) error
 	RecordContextAccess(deliberationID, agentID string, round int) error
@@ -377,9 +378,11 @@ func (s *Service) GetDeliberation(id string) (*Deliberation, error) {
 }
 
 // SetTemplate changes the governance template on an existing deliberation.
-// Only the creator can change the template. Only affects future analysis rounds.
+// Only the creator can change the template. Applies the new template's default
+// rules (without overwriting any explicitly-set rules).
 func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) error {
-	if _, ok := GetTemplate(template); !ok {
+	tmpl, ok := GetTemplate(template)
+	if !ok {
 		return fmt.Errorf("unknown template %q — use list_templates to see available templates", template)
 	}
 	d, err := s.store.GetDeliberation(deliberationID)
@@ -389,7 +392,23 @@ func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) erro
 	if d.CreatorKey != "" && d.CreatorKey != callerKeyID {
 		return fmt.Errorf("only the deliberation creator can change the template")
 	}
-	return s.store.UpdateDeliberationTemplate(deliberationID, template)
+	if err := s.store.UpdateDeliberationTemplate(deliberationID, template); err != nil {
+		return err
+	}
+	// Merge new template's default rules into existing rules (explicit overrides preserved)
+	if tmpl.DefaultRules != nil {
+		rules := d.Rules
+		if rules == nil {
+			rules = make(map[string]any)
+		}
+		for k, v := range tmpl.DefaultRules {
+			if _, exists := rules[k]; !exists {
+				rules[k] = v
+			}
+		}
+		return s.store.UpdateDeliberationRules(deliberationID, rules)
+	}
+	return nil
 }
 
 // DeleteDeliberation removes a deliberation and all its data.

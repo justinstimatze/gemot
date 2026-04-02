@@ -127,6 +127,18 @@ func (s *DB) UpdateDeliberationTemplate(id, template string) error {
 	return nil
 }
 
+func (s *DB) UpdateDeliberationRules(id string, rules map[string]any) error {
+	res, err := s.db.Exec(`UPDATE deliberations SET rules = ? WHERE id = ?`, marshalRules(rules), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("deliberation not found: %s", id)
+	}
+	return nil
+}
+
 // DeleteDeliberation soft-deletes a deliberation by setting status to "deleted".
 // Data is preserved for compliance and abuse auditing.
 func (s *DB) DeleteDeliberation(id string) error {
