@@ -102,27 +102,26 @@ jobs:
         env:
           GEMOT_KEY: ${{ secrets.GEMOT_REVIEW_KEY }}
         run: |
-          RESULT=$(curl -s https://gemot.dev/mcp -X POST \
+          RESULT=$(curl -s https://gemot.dev/a2a -X POST \
             -H "Authorization: Bearer $GEMOT_KEY" \
             -H "Content-Type: application/json" \
             -d '{
-              "method": "tools/call",
+              "jsonrpc": "2.0",
+              "id": 1,
+              "method": "gemot/create_deliberation",
               "params": {
-                "name": "create_deliberation",
-                "arguments": {
-                  "topic": "PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}",
-                  "description": "Review of PR changes. Diff summary follows.",
-                  "template": "review",
-                  "type": "reasoning",
-                  "visibility": "private",
-                  "max_participants": 10
-                }
+                "topic": "PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}",
+                "description": "Review of PR changes. Diff summary follows.",
+                "template": "review",
+                "type": "reasoning",
+                "visibility": "private",
+                "max_participants": 10
               }
             }')
-          echo "result=$RESULT" >> $GITHUB_OUTPUT
+          echo "delib_id=$(echo $RESULT | jq -r '.result.deliberation_id')" >> $GITHUB_OUTPUT
 
       # ... submit positions from review agents, vote, analyze
-      # Full implementation depends on your agent framework
+      # See .github/workflows/gemot-review.yml for the full implementation
 ```
 
 ### 3. Configure review agents

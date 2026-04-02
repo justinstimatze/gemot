@@ -10,7 +10,7 @@ GEMOT_URL="${GEMOT_URL:-https://gemot.dev/a2a}"
 
 # ── Helper ──────────────────────────────────────────────────────────
 rpc() {
-  local method="$1" params="$2"
+  local method="gemot/$1" params="$2"
   curl -s "$GEMOT_URL" -X POST \
     -H "Authorization: Bearer $GEMOT_KEY" \
     -H "Content-Type: application/json" \
