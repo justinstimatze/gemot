@@ -617,8 +617,9 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	var bridging []deliberation.BridgingStatement
 	if refused {
 		warnings = append(warnings, "ANALYSIS_REFUSED: integrity too compromised to produce reliable consensus/bridging. Cruxes and warnings are still available. Fix the underlying issues and re-analyze.")
-	} else if len(votes) == 0 {
-		// No votes (e.g. bilateral negotiations): use LLM to find agreement directly from positions
+	} else if len(votes) == 0 || !hasVotesForCurrentPositions(votes, positions) {
+		// No votes on current positions (e.g. bilateral negotiations, or multi-round
+		// where new positions were submitted without voting): use LLM agreement detection
 		consensus, bridging = a.findAgreementsLLM(ctx, deliberationTopic, positions, cruxes)
 	} else {
 		consensus = findConsensus(ctx, positions, votes, clusters, effectiveWeights)
@@ -1538,6 +1539,22 @@ func consensusThreshold(ctx context.Context) float64 {
 		}
 	}
 	return 0.67 // default supermajority
+}
+
+// hasVotesForCurrentPositions checks whether any votes reference the current
+// set of positions. In multi-round deliberations, old votes on previous-round
+// positions shouldn't prevent LLM agreement detection on new positions.
+func hasVotesForCurrentPositions(votes []deliberation.Vote, positions []deliberation.Position) bool {
+	posIDs := make(map[string]bool, len(positions))
+	for _, p := range positions {
+		posIDs[p.ID] = true
+	}
+	for _, v := range votes {
+		if posIDs[v.PositionID] {
+			return true
+		}
+	}
+	return false
 }
 
 func findConsensus(ctx context.Context, positions []deliberation.Position, votes []deliberation.Vote, clusters []deliberation.OpinionCluster, weights map[string]float64) []deliberation.ConsensusStatement {
