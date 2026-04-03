@@ -63,6 +63,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	// /mcp serves streamable HTTP for modern clients (Hermes, Claude Code, etc.)
 	// /mcp/sse serves legacy SSE for older clients (Claude Desktop, Cursor, etc.)
 	mux.Handle("/mcp", paymentMiddleware(mcpStreamHandler))
+	mux.Handle("/mcp/", paymentMiddleware(mcpStreamHandler))
 	mux.Handle("/mcp/sse/", paymentMiddleware(mcpSSEHandler))
 	mux.Handle("/mcp/sse", paymentMiddleware(mcpSSEHandler))
 
