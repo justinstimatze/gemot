@@ -620,7 +620,10 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	} else if len(votes) == 0 || !hasVotesForLatestPositions(votes, positions) {
 		// No votes on latest-round positions (e.g. bilateral negotiations, or multi-round
 		// where new positions were submitted without voting): use LLM agreement detection
+		log.Printf("[gemot] using LLM agreement detection (votes=%d, hasLatestVotes=%v, ctx.Err=%v)",
+			len(votes), hasVotesForLatestPositions(votes, positions), ctx.Err())
 		consensus, bridging = a.findAgreementsLLM(ctx, deliberationTopic, positions, cruxes)
+		log.Printf("[gemot] LLM agreement result: consensus=%d, bridging=%d", len(consensus), len(bridging))
 	} else {
 		consensus = findConsensus(ctx, positions, votes, clusters, effectiveWeights)
 		bridging = findBridging(positions, votes, clusters, effectiveWeights)
