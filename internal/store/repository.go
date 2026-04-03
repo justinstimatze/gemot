@@ -378,6 +378,28 @@ func (s *DB) GetLatestAnalysisResult(deliberationID string) (*deliberation.Analy
 // RecoverStuckAnalyzing resets deliberations stuck in "analyzing" status
 // back to "open" if their created_at is older than maxAge.
 // Returns the count of recovered deliberations.
+// GetStuckAnalyzing returns deliberation IDs stuck in "analyzing" for longer than maxAge.
+func (s *DB) GetStuckAnalyzing(maxAge time.Duration) ([]string, error) {
+	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
+	rows, err := s.db.Query(
+		`SELECT id FROM deliberations WHERE status = 'analyzing' AND COALESCE(status_changed_at, created_at) < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *DB) RecoverStuckAnalyzing(maxAge time.Duration) (int, error) {
 	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
 	res, err := s.db.Exec(
