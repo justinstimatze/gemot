@@ -16,9 +16,9 @@ The models disagree:
 - **Gemini 3 Pro**: "Unsafe — `get` then `setitem` is two operations; another thread can modify between them"
 - **DeepSeek V3.2**: "Unsafe — the GIL doesn't make multi-step read-modify-write atomic"
 
-The MoA aggregator synthesizes: *"The code has potential thread-safety concerns. While individual dict operations are atomic under CPython's GIL, the compound read-modify-write pattern may not be..."*
+The MoA aggregator synthesizes: *"The code should be generally thread-safe due to CPython's GIL, which ensures only one thread executes Python bytecode at a time. However, for production use, consider adding a threading.Lock for extra safety around shared mutable state."*
 
-That's correct but vague. Which line? What specifically is the risk? Can I check it?
+That's generic advice. It doesn't tell you whether there's an actual bug or just a theoretical concern. Two models said it's safe, two said it's not — the aggregator split the difference.
 
 Gemot finds the crux:
 
@@ -34,7 +34,26 @@ The aggregator would have gotten there eventually with enough prompting. Gemot g
 
 ## How it works
 
-After MoA collects reference responses, run disagreement analysis in parallel with aggregation — zero additional wall-clock time:
+Run disagreement analysis in parallel with aggregation. Gemot takes ~30s; MoA aggregation typically takes 15-30s. When they overlap, the additional wait is minimal or zero:
+
+```python
+# The integration point — two lines in the MoA flow:
+aggregated, crux_analysis = await asyncio.gather(
+    aggregate_with_model(aggregator_model, reference_responses, query),
+    analyze_disagreements(query, reference_responses),  # gemot
+)
+
+if crux_analysis and crux_analysis.get("relevant_cruxes"):
+    cruxes = crux_analysis["relevant_cruxes"]
+    logger.info(
+        "Models disagreed on %d point(s): %s",
+        len(cruxes), cruxes[0]["crux_claim"][:100]
+    )
+    # Optionally: feed cruxes back to the aggregator for focused re-synthesis
+```
+
+<details>
+<summary>Full implementation of <code>analyze_disagreements</code></summary>
 
 ```python
 from typing import Dict, Optional
@@ -104,22 +123,9 @@ async def analyze_disagreements(
     except Exception as e:
         logger.warning("Gemot analysis failed (non-fatal): %s", e)
         return None  # graceful degradation — MoA works fine without it
-
-
-# In the MoA flow — run both concurrently:
-aggregated, crux_analysis = await asyncio.gather(
-    aggregate_with_model(aggregator_model, reference_responses, query),
-    analyze_disagreements(query, reference_responses),
-)
-
-if crux_analysis and crux_analysis.get("relevant_cruxes"):
-    cruxes = crux_analysis["relevant_cruxes"]
-    logger.info(
-        "Models disagreed on %d point(s): %s",
-        len(cruxes), cruxes[0]["crux_claim"][:100]
-    )
-    # Optionally: feed cruxes back to the aggregator for focused re-synthesis
 ```
+
+</details>
 
 ## When is this worth it vs. prompting the aggregator?
 
@@ -147,7 +153,7 @@ cd gemot && go build -o gemot .
 GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http --addr :8080
 ```
 
-Analysis uses Sonnet by default (~$0.25 per run). Runs in ~30s.
+Analysis uses Sonnet by default (~$0.30 per run). Runs in ~30s.
 
 Alternatively, use the hosted version at `https://gemot.dev/a2a` (free sandbox, 48h retention) or connect via MCP:
 
