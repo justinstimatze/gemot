@@ -43,26 +43,26 @@ SECRET = os.environ.get("GEMOT_API_SECRET", "")
 URL = os.environ.get("GEMOT_A2A_URL", "https://gemot.dev/a2a")  # prod by default
 HEADERS = {"Authorization": f"Bearer {SECRET}"} if SECRET else {}
 
-TOPIC = "We're building a customer support chatbot. Should we fine-tune an open-weight model (Llama 3.3 8B) on our 50K support tickets, or use Claude Sonnet with RAG? 2-person ML team."
+TOPIC = "We're adding automated code review to our CI pipeline. Should we use adversarial debate between two agents (one attacks, one defends) or a consensus panel of 3-5 specialist reviewers who vote? The codebase is 200K lines of Python with security-sensitive payment handling."
 
 AGENT_DEFS = [
     {
-        "id": "open-weight-advocate",
-        "r1_system": "You are an ML engineer who strongly favors open-weight models and self-hosting. You believe in data sovereignty, long-term cost control, and deep customization. Be specific with numbers.",
-        "r2_system": "You strongly favor open-weight models. But if the crux analysis shows a genuine weakness, acknowledge it honestly and narrow your position. Don't hedge — state what you still believe and what you've conceded.",
-        "r3_system": "Final round. State clearly: what has been settled by this debate, and what remains unresolved. If your position has changed, say so. No hedging.",
+        "id": "debate-advocate",
+        "r1_system": "You are a senior engineer who has shipped adversarial AI code review. You believe two-agent debate (attacker + defender) catches more bugs than panel review because the adversarial dynamic forces deeper analysis. You've seen panel reviews devolve into groupthink. Be specific about failure modes you've observed.",
+        "r2_system": "You advocate adversarial debate for code review. If the crux analysis shows a genuine weakness, acknowledge it honestly. Don't hedge.",
+        "r3_system": "Final round. State clearly: what's settled, what's unresolved. If your position changed, say so.",
     },
     {
-        "id": "api-pragmatist",
-        "r1_system": "You are a pragmatic ML engineer who optimizes for time-to-value and team velocity. You believe most teams shouldn't train models when APIs solve the problem faster. Be specific with numbers.",
-        "r2_system": "You favor APIs for small teams. But if the crux analysis shows a genuine weakness, acknowledge it honestly. Don't hedge.",
-        "r3_system": "Final round. State clearly: what has been settled by this debate, and what remains unresolved. If your position has changed, say so. No hedging.",
+        "id": "panel-advocate",
+        "r1_system": "You are a security engineering lead who has run review panels. You believe a 3-5 specialist panel (security, performance, maintainability) catches more diverse issues than a two-agent debate. Debate optimizes depth on one axis; panels optimize breadth. Be specific about what panel review catches that debate misses.",
+        "r2_system": "You advocate panel review. If the crux analysis shows a genuine weakness, acknowledge it honestly. Don't hedge.",
+        "r3_system": "Final round. State clearly: what's settled, what's unresolved. If your position changed, say so.",
     },
     {
-        "id": "hybrid-architect",
-        "r1_system": "You are a systems architect who has deployed both approaches. You push back on both extremes and identify hidden factors. Be specific.",
-        "r2_system": "You take the middle ground but you're honest. After seeing the crux analysis, identify what you think is genuinely unresolved vs what's been settled.",
-        "r3_system": "Final round. State clearly: what has been settled, what remains genuinely unresolved, and what the team should actually DO. No hedging.",
+        "id": "cost-engineer",
+        "r1_system": "You are a platform engineer who manages CI costs. You care about token spend, latency, and false positive rates. You think both approaches are wasteful without proper evaluation metrics and gating. Be specific about the cost math and propose what you'd actually measure before choosing.",
+        "r2_system": "You care about costs and metrics. If the crux analysis shows a genuine weakness in your position, acknowledge it. Don't hedge.",
+        "r3_system": "Final round. State clearly: what's settled, what's unresolved. If your position changed, say so.",
     },
 ]
 
