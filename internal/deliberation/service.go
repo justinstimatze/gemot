@@ -774,7 +774,11 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 func (s *Service) GetContext(deliberationID, agentID string) (*AgentContext, error) {
 	result, err := s.store.GetLatestAnalysisResult(deliberationID)
 	if err != nil {
-		return nil, fmt.Errorf("no analysis results found: %w", err)
+		// Check if analysis is in progress
+		if d, dErr := s.store.GetDeliberation(deliberationID); dErr == nil && d.Status == "analyzing" {
+			return nil, fmt.Errorf("analysis is in progress (%s) — try again in a moment", d.SubStatus)
+		}
+		return nil, fmt.Errorf("no analysis results yet — run analyze first")
 	}
 
 	// Record that this agent accessed context (for forced acknowledgment)
