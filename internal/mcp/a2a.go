@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
-	"github.com/justinstimatze/gemot/internal/llm"
 	"github.com/justinstimatze/gemot/internal/payments"
 )
 
@@ -332,17 +331,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AError(w, req.ID, -32000, err.Error())
 				return
 			}
-			analyzeCtx, analyzeCancel := context.WithTimeout(context.Background(), 30*time.Minute)
-			if model := str("model"); model != "" {
-				analyzeCtx = context.WithValue(analyzeCtx, llm.ContextKeyModel{}, model)
-			}
-			go func() {
-				defer analyzeCancel()
-				_, err := svc.Analyze(analyzeCtx, deliberationID)
-				if err != nil {
-					refundCredits(creditCost)
-				}
-			}()
+			RunAnalysisAsync(svc, nil, creditStore, deliberationID, str("model"), keyID, creditCost)
 			writeA2AResult(w, req.ID, map[string]string{
 				"status":          "analysis started",
 				"deliberation_id": deliberationID,

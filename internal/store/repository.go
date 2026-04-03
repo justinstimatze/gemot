@@ -822,7 +822,7 @@ func (s *DB) GetAuditLog(deliberationID string, limit int) ([]map[string]string,
 		limit = 50
 	}
 	rows, err := s.db.Query(
-		`SELECT COALESCE(timestamp,''), COALESCE(key_id,''), method, COALESCE(agent_id,'') FROM audit_log WHERE deliberation_id = ? ORDER BY timestamp DESC LIMIT ?`,
+		`SELECT id, COALESCE(timestamp,''), COALESCE(key_id,''), method, COALESCE(agent_id,'') FROM audit_log WHERE deliberation_id = ? ORDER BY id ASC LIMIT ?`,
 		deliberationID, limit,
 	)
 	if err != nil {
@@ -831,12 +831,13 @@ func (s *DB) GetAuditLog(deliberationID string, limit int) ([]map[string]string,
 	defer rows.Close() //nolint:errcheck
 	var result []map[string]string
 	for rows.Next() {
+		var seq int
 		var ts, kid, method, aid string
-		if err := rows.Scan(&ts, &kid, &method, &aid); err != nil {
+		if err := rows.Scan(&seq, &ts, &kid, &method, &aid); err != nil {
 			return nil, err
 		}
 		result = append(result, map[string]string{
-			"timestamp": ts, "key_id": kid, "method": method, "agent_id": aid,
+			"sequence": fmt.Sprintf("%d", seq), "timestamp": ts, "key_id": kid, "method": method, "agent_id": aid,
 		})
 	}
 	return result, nil

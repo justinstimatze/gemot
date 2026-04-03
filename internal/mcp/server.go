@@ -27,6 +27,52 @@ type server struct {
 	shutdown context.Context // server lifetime context — cancelled on shutdown
 }
 
+// RunAnalysisAsync starts an analysis in a background goroutine with proper
+// context management, credit refunding on failure, and job tracking.
+// Shared between MCP and A2A handlers to avoid divergent code paths.
+func RunAnalysisAsync(svc *deliberation.Service, db *store.DB, credits *payments.CreditStore, deliberationID, model, apiKey string, creditCost int) {
+	analyzeCtx, analyzeCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	if model != "" {
+		analyzeCtx = context.WithValue(analyzeCtx, llm.ContextKeyModel{}, model)
+	}
+
+	// Create persistent job if DB available
+	var jobID string
+	if db != nil {
+		job := &store.Job{
+			DeliberationID: deliberationID,
+			Model:          model,
+			APIKey:         apiKey,
+			CreditCost:     creditCost,
+		}
+		if err := db.CreateJob(job); err != nil {
+			log.Printf("[gemot] failed to create job: %v", err)
+		} else {
+			jobID = job.ID
+		}
+	}
+
+	go func() {
+		defer analyzeCancel()
+		result, err := svc.Analyze(analyzeCtx, deliberationID)
+		if err != nil {
+			if apiKey != "" && creditCost > 0 && credits != nil {
+				_, _ = credits.AddCredits(apiKey, creditCost)
+			}
+			if db != nil && jobID != "" {
+				_ = db.CompleteJob(jobID, "failed", err.Error())
+			}
+			log.Printf("[gemot] async analysis failed for %s: %v", deliberationID, err)
+			return
+		}
+		if db != nil && jobID != "" {
+			_ = db.CompleteJob(jobID, "completed", "")
+		}
+		log.Printf("[gemot] async analysis complete for %s (%d cruxes, %d clusters)",
+			deliberationID, len(result.Cruxes), len(result.Clusters))
+	}()
+}
+
 // audit logs a write operation from an MCP tool handler.
 func (s *server) audit(ctx context.Context, method, deliberationID, agentID string) {
 	if s.db == nil {
@@ -489,16 +535,10 @@ func (s *server) handleAnalyze(ctx context.Context, _ *sdkmcp.CallToolRequest, a
 		return errResult(fmt.Errorf("deliberation_id is required"))
 	}
 	// Validate and attach model override if specified
-	// Use a detached context with a generous timeout — NOT the server shutdown context.
-	// Fly sends SIGTERM during suspend/stop which cancels s.shutdown, killing active analyses.
-	// Analyses should complete even during graceful shutdown (they take 3-8 minutes).
-	analyzeCtx, analyzeCancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	_ = analyzeCancel // cancelled by the service's activeAnalyses map or timeout
 	if args.Model != "" {
 		if !llm.AllowedModels[args.Model] {
 			return errResult(fmt.Errorf("unsupported model %q — allowed: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5", args.Model))
 		}
-		analyzeCtx = context.WithValue(analyzeCtx, llm.ContextKeyModel{}, args.Model)
 	}
 
 	// Sandbox users get 1 free analysis per deliberation
@@ -531,42 +571,8 @@ func (s *server) handleAnalyze(ctx context.Context, _ *sdkmcp.CallToolRequest, a
 		return errResult(fmt.Errorf("deliberation not found: %w", err))
 	}
 
-	// Create persistent job (survives machine restarts)
-	var jobID string
-	if s.db != nil {
-		job := &store.Job{
-			DeliberationID: args.DeliberationID,
-			Model:          args.Model,
-			APIKey:         apiKey,
-			CreditCost:     creditCost,
-		}
-		if err := s.db.CreateJob(job); err != nil {
-			log.Printf("[gemot] failed to create job: %v", err)
-		} else {
-			jobID = job.ID
-		}
-	}
-
-	// Run analysis asynchronously
-		s.audit(ctx, "analyze", args.DeliberationID, "")
-go func() {
-		result, err := s.svc.Analyze(analyzeCtx, args.DeliberationID)
-		if err != nil {
-			if apiKey != "" && creditCost > 0 && s.credits != nil {
-				_, _ = s.credits.AddCredits(apiKey, creditCost)
-			}
-			if s.db != nil && jobID != "" {
-				_ = s.db.CompleteJob(jobID, "failed", err.Error())
-			}
-			log.Printf("[gemot] async analysis failed for %s: %v", args.DeliberationID, err)
-			return
-		}
-		if s.db != nil && jobID != "" {
-			_ = s.db.CompleteJob(jobID, "completed", "")
-		}
-		log.Printf("[gemot] async analysis complete for %s (%d cruxes, %d clusters)",
-			args.DeliberationID, len(result.Cruxes), len(result.Clusters))
-	}()
+	s.audit(ctx, "analyze", args.DeliberationID, "")
+	RunAnalysisAsync(s.svc, s.db, s.credits, args.DeliberationID, args.Model, apiKey, creditCost)
 
 	return textResult(fmt.Sprintf(
 		"Analysis started for deliberation %s. Poll get_deliberation to track progress (sub_status will show: taxonomy → extracting → crux_detection → clustering). Results available via get_deliberation once status returns to 'open'.",
