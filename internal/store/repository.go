@@ -380,7 +380,7 @@ func (s *DB) GetLatestAnalysisResult(deliberationID string) (*deliberation.Analy
 // Returns the count of recovered deliberations.
 // GetStuckAnalyzing returns deliberation IDs stuck in "analyzing" for longer than maxAge.
 func (s *DB) GetStuckAnalyzing(maxAge time.Duration) ([]string, error) {
-	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
+	cutoff := time.Now().UTC().Add(-maxAge).Format("2006-01-02 15:04:05") // match SQLite datetime('now') format
 	rows, err := s.db.Query(
 		`SELECT id FROM deliberations WHERE status = 'analyzing' AND COALESCE(status_changed_at, created_at) < ?`,
 		cutoff,
@@ -401,7 +401,7 @@ func (s *DB) GetStuckAnalyzing(maxAge time.Duration) ([]string, error) {
 }
 
 func (s *DB) RecoverStuckAnalyzing(maxAge time.Duration) (int, error) {
-	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
+	cutoff := time.Now().UTC().Add(-maxAge).Format("2006-01-02 15:04:05") // match SQLite datetime('now') format
 	res, err := s.db.Exec(
 		`UPDATE deliberations SET status = 'open', sub_status = '', status_changed_at = datetime('now')
 		 WHERE status = 'analyzing' AND COALESCE(status_changed_at, created_at) < ?`,
@@ -719,7 +719,7 @@ func (s *DB) GetPendingJobs() (int, error) {
 }
 
 func (s *DB) RecoverStuckJobs(maxAge time.Duration) (int, error) {
-	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339)
+	cutoff := time.Now().UTC().Add(-maxAge).Format("2006-01-02 15:04:05")
 	res, err := s.db.Exec(
 		`UPDATE jobs SET status = 'pending' WHERE status = 'running' AND created_at < ?`,
 		cutoff,
