@@ -1916,16 +1916,23 @@ func (a *TextAnalyzer) findAgreementsLLM(ctx context.Context, topic string, posi
 			Content      string   `json:"content"`
 			Participants []string `json:"participants"`
 		} `json:"shared_ground"`
-		Compromises []struct {
-			Crux      string `json:"crux"`
-			Proposal  string `json:"proposal"`
-			Rationale string `json:"rationale"`
-		} `json:"compromises"`
+		Compromises json.RawMessage `json:"compromises"` // may be array or string from LLM
 	}
 
 	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
 		log.Printf("[gemot] LLM agreement detection failed: %v", err)
 		return nil, nil
+	}
+
+	// Parse compromises defensively — LLM sometimes returns a string instead of array
+	type compromise struct {
+		Crux      string `json:"crux"`
+		Proposal  string `json:"proposal"`
+		Rationale string `json:"rationale"`
+	}
+	var compromises []compromise
+	if len(result.Compromises) > 0 && result.Compromises[0] == '[' {
+		json.Unmarshal(result.Compromises, &compromises) //nolint:errcheck
 	}
 
 	// Convert shared ground to consensus statements
@@ -1940,7 +1947,7 @@ func (a *TextAnalyzer) findAgreementsLLM(ctx context.Context, topic string, posi
 
 	// Convert compromises to bridging statements
 	var bridging []deliberation.BridgingStatement
-	for _, c := range result.Compromises {
+	for _, c := range compromises {
 		bridging = append(bridging, deliberation.BridgingStatement{
 			Content:       c.Proposal,
 			BridgingScore: 0.6, // proposed compromise, not yet endorsed
