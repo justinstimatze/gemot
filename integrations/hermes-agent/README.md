@@ -1,117 +1,144 @@
-# Gemot x Hermes: Structured Disagreement for Mixture of Agents
+# Structured Disagreement Analysis for Mixture of Agents
 
-## The gap in MoA
+## What this is
 
-Hermes's `mixture_of_agents` is one of its showcase features — Claude Opus, GPT-5.4 Pro, Gemini 3 Pro, and DeepSeek V3.2 all tackle a hard problem, then an aggregator synthesizes the best answer. It's powerful, and it gets attention.
+An optional add-on for Hermes's `mixture_of_agents` that identifies exactly where models disagree, instead of blending responses blindly. Runs in parallel with aggregation — doesn't slow down the main flow.
 
-But when the models disagree on something specific — say, whether a mathematical proof holds, or whether a code approach has a race condition — the aggregator blends their outputs without knowing *what exactly* they disagree on. It sees four text blobs and produces a fifth. Wang et al. (arXiv:2406.04692) flags this as a known limitation.
+## The problem
 
-Gemot can tell you the crux: "Claude and GPT agree the proof is valid; Gemini and DeepSeek think step 3 has a gap in the induction hypothesis." That's actionable — you can check step 3 specifically, instead of re-reading four full responses.
+MoA queries 4 frontier models and an aggregator synthesizes the result. When models disagree on something specific — say, whether step 3 of a proof holds — the aggregator sees four text blobs and makes a judgment call. That works most of the time. But you don't know what it missed.
+
+The honest version: **for 4 responses on a straightforward question, a well-prompted aggregator is probably fine.** The gap shows up when:
+
+- Responses are long/complex and the disagreement is buried in paragraph 7
+- You need to **verify** the synthesis, not just trust it (code review, legal analysis, medical reasoning)
+- You want to **iterate** — refine the query based on what specifically was contested
+- You're aggregating **10+ perspectives** where prompted analysis degrades
 
 ## How it works
 
-After MoA collects 4 model responses:
+Gemot is a Go binary you run locally. No data leaves your machine.
+
+```bash
+# One-time setup
+go install github.com/justinstimatze/gemot@latest
+gemot http --addr :8080 &
+```
+
+Then, after MoA collects responses, submit them for structured analysis:
 
 ```python
-# Standard MoA flow gives you 4 responses...
-# Before aggregating, find what they actually disagree on:
+# Inside mixture_of_agents_tool.py, after collecting reference responses:
+# (This is real async Python using httpx — fits the MoA tool's existing patterns)
 
-delib = mcp_gemot_create_deliberation(
-    topic=user_query,
-    type="reasoning"
-)
+async def analyze_disagreements(query: str, responses: dict[str, str]) -> dict:
+    """Optional: find where models actually disagree."""
+    async with httpx.AsyncClient(base_url="http://localhost:8080") as c:
+        # Create deliberation
+        r = await c.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 1,
+            "method": "gemot/create_deliberation",
+            "params": {"topic": query[:200], "type": "reasoning"}
+        })
+        delib_id = r.json()["result"]["deliberation_id"]
 
-for model, response in moa_responses.items():
-    mcp_gemot_submit_position(
-        deliberation_id=delib.id,
-        agent_id=model,
-        content=response
-    )
+        # Each model's response becomes a position
+        for i, (model, text) in enumerate(responses.items()):
+            await c.post("/a2a", json={
+                "jsonrpc": "2.0", "id": i + 10,
+                "method": "gemot/submit_position",
+                "params": {
+                    "deliberation_id": delib_id,
+                    "agent_id": model,
+                    "content": text[:10000]  # gemot's position limit
+                }
+            })
 
-mcp_gemot_analyze(deliberation_id=delib.id)
+        # Analyze (runs ~30s in background)
+        await c.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 100,
+            "method": "gemot/analyze",
+            "params": {"deliberation_id": delib_id}
+        })
 
-context = mcp_gemot_get_context(
-    deliberation_id=delib.id,
-    agent_id="claude-opus"  # or whichever model
-)
+        # Poll until done (or run in parallel with aggregation)
+        for _ in range(60):
+            await asyncio.sleep(2)
+            r = await c.post("/a2a", json={
+                "jsonrpc": "2.0", "id": 101,
+                "method": "gemot/get_deliberation",
+                "params": {"deliberation_id": delib_id}
+            })
+            if r.json()["result"]["status"] == "open":
+                break
 
-# context.relevant_cruxes tells you exactly where models diverge
-# context.consensus_statements tells you what they all agree on
-# context.compromise_proposal offers a synthesis that addresses the crux
-
-# Pass the cruxes to the aggregator for focused synthesis:
-aggregator_prompt = f"""
-These models agree on: {context.consensus_statements}
-They disagree specifically on: {context.relevant_cruxes}
-Focus your synthesis on resolving the crux.
-"""
+        # Get structured analysis
+        r = await c.post("/a2a", json={
+            "jsonrpc": "2.0", "id": 102,
+            "method": "gemot/get_context",
+            "params": {"deliberation_id": delib_id, "agent_id": list(responses.keys())[0]}
+        })
+        return r.json()["result"]
 ```
 
-This turns "4 models gave different answers" into "they agree on X, disagree on Y, and the specific question is Z."
+The result gives you:
 
-## Same idea, different workflows
+- `relevant_cruxes`: the specific claims that divide the models, classified as factual or value-based
+- `consensus_statements`: what all models agree on
+- `topic_summaries`: a map of what was discussed
+- `compromise_proposal`: an LLM-generated synthesis that specifically addresses the crux
 
-The pattern applies anywhere Hermes uses multiple agents:
+You can pass the cruxes to the aggregator for focused synthesis, show them to the user alongside the MoA result, or just log them for debugging.
 
-### `delegate_task` batch mode
+## Why not just prompt the aggregator?
 
-3 subagents review a PR. Two say PASS, one says REQUEST_CHANGES about a SQL injection risk. Instead of the parent agent guessing, gemot finds the crux: "Does the ORM's parameterization cover the raw SQL on line 47?" That's a specific question someone can answer.
+You can. Adding "first identify where the models disagree, then synthesize" to the aggregator prompt is free and fast. For most MoA queries, that's sufficient.
 
-### Research paper writing (Phase 6: Self-Review)
+Gemot adds value when you need:
 
-The paper gets reviewed from multiple angles — statistical rigor, narrative clarity, related work coverage. When reviews conflict ("the related work section is too long" vs "it's missing key references"), gemot identifies whether the disagreement is about scope or completeness — a much more useful signal than "reviewers disagree."
+| Need | Prompted aggregator | Gemot |
+|------|-------------------|-------|
+| Quick disagreement summary | Good enough | Overkill |
+| Auditable claim-by-claim analysis | Single LLM's interpretation | Structured extraction with source tracing |
+| Consistent results across runs | Varies with sampling | Deterministic pipeline |
+| Multi-round refinement | Stateless | Tracks positions across rounds |
+| 10+ model responses | Degrades (context window) | Scales (per-position extraction) |
+| Debugging why synthesis was wrong | Re-read 4 responses | Check which crux the aggregator resolved incorrectly |
 
-### Any multi-perspective task
+The honest recommendation: start with prompted aggregation. Add gemot when you need auditability or when the simple approach isn't catching subtle disagreements.
 
-Whenever you'd dispatch multiple agents and merge their outputs, gemot can tell you what they agree on, what they disagree on, and why. The pattern is always:
+## Self-hosting
 
-1. Collect multiple agent outputs
-2. Submit each as a gemot position
-3. Analyze → get cruxes
-4. Use cruxes to focus the synthesis or escalate to the user
+Gemot is a single Go binary with no dependencies. All data stays local.
 
-## Setup
+```bash
+# Build from source
+git clone https://github.com/justinstimatze/gemot.git
+cd gemot && go build -o gemot .
+./gemot http --addr :8080
 
-4 lines in `~/.hermes/config.yaml`:
-
-```yaml
-mcp_servers:
-  gemot:
-    url: "https://gemot.dev/mcp"
-    timeout: 120
+# Or use the hosted version (data retained 48h for sandbox)
+# https://gemot.dev/a2a
 ```
 
-Hermes's MCP client auto-discovers gemot's 28 tools. They appear as `mcp_gemot_create_deliberation`, `mcp_gemot_submit_position`, etc.
+Requires an Anthropic API key for the analysis LLM calls (set `GEMOT_ANTHROPIC_KEY`). Analysis uses Sonnet by default (~$0.25 per run).
 
-For production, add an API key:
-```yaml
-mcp_servers:
-  gemot:
-    url: "https://gemot.dev/mcp"
-    headers:
-      Authorization: "Bearer gmt_your_key"
-    timeout: 120
-```
+## Same pattern, other workflows
 
-We tested Hermes v0.6.0 connecting to gemot via MCP Streamable HTTP — tool discovery and tool calls work.
+The disagreement analysis works anywhere Hermes uses multiple agents:
 
-## Voting strategies (Issue #412)
+- **`delegate_task` batch**: 3 subagent reviewers disagree on a PR → gemot finds the specific contested claim
+- **Research paper self-review**: Multiple review angles conflict → gemot identifies whether it's scope vs completeness
+- **Any multi-perspective task**: Collect N agent outputs → find what they agree/disagree on → focus synthesis on the crux
 
-If #412 goes forward, here's how gemot's templates map:
+## For Issue #412
 
-| Strategy | Gemot Template | Notes |
-|---|---|---|
-| Majority | `parliament` (51%) | |
-| Supermajority | `assembly` (67%) | |
-| Near-unanimous | `jury` (92%) | Good for code review |
-| Unanimous | `consensus` (100%) | Reservations act as vetoes |
-| Weighted | `conviction` param (0.0–1.0) | Time-weighted across rounds |
-| Quorum | `rules: {"min_participants": N}` | Enforced before analysis |
+If you're building a voting/consensus engine for Hermes, gemot's [governance templates](https://gemot.dev/docs) cover majority, supermajority, unanimous, jury, and consensus — with crux detection, liquid democracy, and integrity checks on top. Happy to discuss what the right integration surface would look like.
 
-Beyond vote counting, gemot adds crux detection, crux classification (factual vs value), clustering, bridging statements, compromise proposals, liquid democracy (delegated votes, transitive up to depth 5), sybil detection, and audit trails.
+## Next step
 
-## Try it
+We could submit a PR adding an optional `analyze_disagreements` flag to the MoA tool — ~50 lines, off by default, runs in parallel with aggregation. If the crux analysis improves MoA quality on hard problems, it earns its place. If not, it's easy to remove.
 
-Create a sandbox at [gemot.dev/try](https://gemot.dev/try) — no API key, no signup. Or call the A2A JSON-RPC endpoint directly at `https://gemot.dev/a2a` (any HTTP client, no MCP needed).
+We tested Hermes v0.6.0 connecting to gemot via MCP Streamable HTTP — tool discovery and calls work. But for MoA specifically, the direct A2A HTTP approach shown above is simpler and doesn't require MCP config.
 
-Source: [github.com/justinstimatze/gemot](https://github.com/justinstimatze/gemot)
+Gemot is open source (MIT): [github.com/justinstimatze/gemot](https://github.com/justinstimatze/gemot)
