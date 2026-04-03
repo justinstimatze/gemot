@@ -14,6 +14,8 @@ Each agent generated a position through Hermes's standard `AIAgent` interface:
 
 **hybrid-architect**: *"Use Claude Sonnet with RAG. Don't fine-tune. Fine-tuning Llama 3.3 8B is an operational trap: you'll spend 60-70% of engineering bandwidth on training pipelines and retraining cycles. Fine-tuning encodes past knowledge into weights — every policy update requires a new training run; RAG gives you that for free..."*
 
+All three agents used Sonnet with different system prompts — the same setup as a typical `delegate_task` batch. With MoA or multi-model configs, disagreements would be more fundamental.
+
 We submitted these positions to gemot and ran analysis. Here's what it found:
 
 ### Cruxes detected
@@ -44,11 +46,31 @@ We submitted these positions to gemot and ran analysis. Here's what it found:
 
 ### What this gives the parent agent
 
-Instead of hedging ("Both approaches have merit..."), the parent agent can tell the user:
+Instead of hedging ("Both approaches have merit..."), we had a Hermes parent agent read the crux data and synthesize for the user. This is its actual output:
 
-> "Your subagents agree that RAG is faster to deploy and easier to maintain. They disagree on whether fine-tuning encodes real reasoning or just style — **that's testable with an eval on your hardest support tickets.** They also disagree on the cost break-even point — **the open-weight advocate says $1.5K/month savings, the architect says you'd need $50K/month API spend to justify it. Check your actual projected volume.**"
+> **Agreed on:** The API route is cheaper until you hit ~$50K/month in API costs — so unless you're processing millions of tickets, self-hosted fine-tuning won't save you money.
+>
+> **Key disagreements:**
+> - **Does fine-tuning actually help?** open-weight-advocate says yes — 15–25% accuracy gains. api-pragmatist says no — it's mostly style adaptation. **This is your most important unknown to resolve.**
+> - **How much should vendor lock-in worry you?** This is a values call about your risk tolerance.
+>
+> **What you should check:**
+> 1. Run a quick benchmark — fine-tune on a slice of your tickets and test vs Claude + RAG on your actual support cases.
+> 2. Estimate your realistic API bill at expected volume — if it's well under $50K/month, start with Claude + RAG.
 
-That's three specific next steps, not a vague recommendation.
+That's a real Hermes agent producing actionable output from gemot's crux data. No hand-writing.
+
+### Round 2: agents refine after seeing cruxes
+
+This is what you can't do with prompted aggregation — iterative refinement across rounds.
+
+We fed the cruxes back to each agent. They acknowledged the other side's points and adjusted:
+
+- **open-weight-advocate** conceded the economics argument: *"I previously overstated the operational-risk argument — if a 2-person ML team is below $50K/month in API spend, the vendor lock-in risk is an edge case..."*
+- **api-pragmatist** conceded on quality: *"The crux cuts directly against my prior position — if fine-tuning genuinely produces 15–25% accuracy gains in intent classification, that's not just style..."*
+- **hybrid-architect** held ground on the threshold: *"The $50K/month threshold crux largely lands — for a 2-person team, the opportunity cost of building fine-tuning infrastructure dominates..."*
+
+After re-analysis, cruxes narrowed from 4 to 3. The remaining disagreements are sharper and more specific — exactly the questions the user needs to resolve with data, not debate.
 
 ## How it works
 
@@ -152,17 +174,19 @@ For 2-3 short subagent summaries, a human (or a well-prompted parent agent) can 
 | **Multi-round** | Stateless | Subagents can refine positions after seeing cruxes |
 | **5+ subagents** | Hard to track all disagreements | Scales with claim extraction |
 
-Start without gemot. Add it when you need structured crux analysis or when the parent agent keeps producing vague syntheses.
+Start without gemot. Add it when you need structured crux analysis or when the parent agent keeps producing vague syntheses. Same pattern works for `mixture_of_agents` — submit the 4 model responses as positions and find where the frontier models actually disagree.
 
 ## What we tested
 
 - Hermes v0.6.0, three `AIAgent` instances with different system prompts
 - Connected to gemot via MCP Streamable HTTP — tool discovery works automatically
-- Positions submitted to gemot via A2A JSON-RPC (simpler than MCP for this use case)
-- Full analysis pipeline: taxonomy (5 topics), claim extraction (15 claims), deduplication, crux detection (4 cruxes), classification
+- Positions submitted to gemot via A2A JSON-RPC
+- Full analysis pipeline: taxonomy (5 topics), claim extraction, deduplication, crux detection (4 cruxes round 1 → 3 cruxes round 2)
+- Parent agent synthesis from crux data — real output, not hand-written
+- Multi-round refinement: agents read cruxes, adjusted positions, re-analyzed. Cruxes narrowed.
 
-**What's verified**: agent position generation, MCP tool discovery, A2A position submission, full analysis producing real cruxes
-**What's proposed**: the `delegate_task` integration pattern and the parent-agent crux synthesis
+**What's verified**: full 2-round deliberation with real Hermes agents, parent synthesis, crux evolution
+**What's proposed**: wiring this into `delegate_task` (currently tested with direct `AIAgent` instantiation)
 
 ## Setup
 
