@@ -736,8 +736,13 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	// Register cancellable analysis context
 	analysisCtx, cancelAnalysis := context.WithCancel(analysisCtx)
 	s.analysisMu.Lock()
+	if prev, ok := s.activeAnalyses[deliberationID]; ok {
+		fmt.Fprintf(os.Stderr, "gemot: WARNING overwriting active analysis cancel for %s (previous analysis still registered)\n", deliberationID[:8])
+		prev() // cancel the previous one
+	}
 	s.activeAnalyses[deliberationID] = cancelAnalysis
 	s.analysisMu.Unlock()
+	fmt.Fprintf(os.Stderr, "gemot: registered analysis cancel for %s\n", deliberationID[:8])
 	defer func() {
 		s.analysisMu.Lock()
 		delete(s.activeAnalyses, deliberationID)
@@ -1436,11 +1441,16 @@ func (s *Service) RecoverStuck() (int, error) {
 	s.analysisMu.Lock()
 	for _, id := range stuck {
 		if cancel, ok := s.activeAnalyses[id]; ok {
+			fmt.Fprintf(os.Stderr, "gemot: cancelling active analysis for stuck deliberation %s\n", id[:8])
 			cancel()
 			delete(s.activeAnalyses, id)
 		}
 	}
+	activeCount := len(s.activeAnalyses)
 	s.analysisMu.Unlock()
+	if activeCount > 0 {
+		fmt.Fprintf(os.Stderr, "gemot: %d active analyses unaffected by stuck recovery\n", activeCount)
+	}
 
 	// Reset DB status
 	return s.store.RecoverStuckAnalyzing(30 * time.Minute)
