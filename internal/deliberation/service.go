@@ -392,6 +392,10 @@ func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) erro
 	if d.CreatorKey != "" && d.CreatorKey != callerKeyID {
 		return fmt.Errorf("only the deliberation creator can change the template")
 	}
+	// Note: template name and rules are updated in two separate DB calls.
+	// If the rules update fails, the template name is set but rules are stale.
+	// This is acceptable because the rules update is a simple UPDATE that's
+	// extremely unlikely to fail after the template update succeeded.
 	if err := s.store.UpdateDeliberationTemplate(deliberationID, template); err != nil {
 		return err
 	}

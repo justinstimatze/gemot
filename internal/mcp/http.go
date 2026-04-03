@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
@@ -60,6 +61,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 
 	// sseKeepalive wraps an http.Handler to send SSE comment keepalives every 10s.
 	// Prevents Fly.io proxy from killing idle SSE connections during long analyses.
+	// Uses a mutex to synchronize writes with the underlying SSE handler.
 	sseKeepalive := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
@@ -71,6 +73,9 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Wrap the writer with a mutex to prevent concurrent writes
+			// between the keepalive goroutine and the SSE handler.
+			sw := &syncWriter{w: w, f: flusher}
 			done := make(chan struct{})
 			go func() {
 				ticker := time.NewTicker(10 * time.Second)
@@ -78,9 +83,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 				for {
 					select {
 					case <-ticker.C:
-						// SSE comment line — ignored by clients, keeps connection alive
-						fmt.Fprintf(w, ": keepalive\n\n")
-						flusher.Flush()
+						sw.WriteAndFlush([]byte(": keepalive\n\n"))
 					case <-done:
 						return
 					case <-r.Context().Done():
@@ -88,7 +91,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 					}
 				}
 			}()
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(sw, r)
 			close(done)
 		})
 	}
@@ -716,6 +719,21 @@ Or if your agent supports MCP, add {"mcpServers":{"gemot":{"type":"sse","url":"h
 		return httpServer.Shutdown(shutdownCtx)
 	}
 }
+
+// syncWriter wraps an http.ResponseWriter with a mutex for safe concurrent writes.
+// Required because the SSE keepalive goroutine and the MCP SSE handler both
+// write to the same ResponseWriter from different goroutines.
+type syncWriter struct {
+	mu sync.Mutex
+	w  http.ResponseWriter
+	f  http.Flusher
+}
+
+func (s *syncWriter) Header() http.Header         { return s.w.Header() }
+func (s *syncWriter) WriteHeader(statusCode int)   { s.w.WriteHeader(statusCode) }
+func (s *syncWriter) Write(p []byte) (int, error)  { s.mu.Lock(); defer s.mu.Unlock(); return s.w.Write(p) }
+func (s *syncWriter) Flush()                       { s.mu.Lock(); defer s.mu.Unlock(); s.f.Flush() }
+func (s *syncWriter) WriteAndFlush(p []byte)       { s.mu.Lock(); defer s.mu.Unlock(); s.w.Write(p); s.f.Flush() } //nolint:errcheck
 
 // csvSafe escapes a string for safe CSV output.
 // Prevents CSV injection by prefixing formula-triggering characters with a single quote,

@@ -45,7 +45,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		var isAdmin bool
 		var keyID string
 		filterDelibID := r.URL.Query().Get("deliberation_id")
-		joinCodeAuth := false
+		preScopedAuth := false
 		var groupDelibIDs map[string]bool // for share token auth: set of deliberation IDs in the group
 
 		// Auth path 1: join_code query param (anonymous, scoped to one deliberation)
@@ -56,7 +56,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 				return
 			}
 			filterDelibID = d.ID
-			joinCodeAuth = true
+			preScopedAuth = true
 		} else if st := r.URL.Query().Get("share_token"); st != "" {
 			// Auth path 2: share_token query param (anonymous, scoped to a group of deliberations)
 			groupID, err := svc.LookupShareToken(st)
@@ -73,9 +73,9 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			for _, d := range delibs {
 				groupDelibIDs[d.ID] = true
 			}
-			joinCodeAuth = true // reuse the "pre-scoped" flag to skip per-event access checks
+			preScopedAuth = true // reuse the "pre-scoped" flag to skip per-event access checks
 		} else {
-			// Auth path 2: Bearer token from header or ?token= query param
+			// Auth path 3: Bearer token from header or ?token= query param
 			token := ""
 			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 				token = strings.TrimPrefix(auth, "Bearer ")
@@ -116,7 +116,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		}
 
 		// If filtering to a specific deliberation, verify access upfront (skip for join_code — already scoped)
-		if filterDelibID != "" && !isAdmin && !joinCodeAuth {
+		if filterDelibID != "" && !isAdmin && !preScopedAuth {
 			if err := svc.CheckAccess(filterDelibID, keyID); err != nil {
 				http.Error(w, "access denied", http.StatusForbidden)
 				return
@@ -128,7 +128,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		var accessCache map[string]bool
 		var accessCacheTime time.Time
 		checkAccess := func(delibID string) bool {
-			if isAdmin || joinCodeAuth || filterDelibID != "" {
+			if isAdmin || preScopedAuth || filterDelibID != "" {
 				return true // already verified at connection time
 			}
 			if time.Since(accessCacheTime) > 60*time.Second || accessCache == nil {
