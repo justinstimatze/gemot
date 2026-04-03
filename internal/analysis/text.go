@@ -1912,11 +1912,8 @@ func (a *TextAnalyzer) findAgreementsLLM(ctx context.Context, topic string, posi
 	}
 
 	var result struct {
-		SharedGround []struct {
-			Content      string   `json:"content"`
-			Participants []string `json:"participants"`
-		} `json:"shared_ground"`
-		Compromises json.RawMessage `json:"compromises"` // may be array or string from LLM
+		SharedGround json.RawMessage `json:"shared_ground"` // may be array or string from LLM
+		Compromises  json.RawMessage `json:"compromises"`   // may be array or string from LLM
 	}
 
 	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
@@ -1924,7 +1921,16 @@ func (a *TextAnalyzer) findAgreementsLLM(ctx context.Context, topic string, posi
 		return nil, nil
 	}
 
-	// Parse compromises defensively — LLM sometimes returns a string instead of array
+	// Parse both fields defensively — LLM sometimes returns a string instead of array
+	type sharedGroundItem struct {
+		Content      string   `json:"content"`
+		Participants []string `json:"participants"`
+	}
+	var sharedGround []sharedGroundItem
+	if len(result.SharedGround) > 0 && result.SharedGround[0] == '[' {
+		json.Unmarshal(result.SharedGround, &sharedGround) //nolint:errcheck
+	}
+
 	type compromise struct {
 		Crux      string `json:"crux"`
 		Proposal  string `json:"proposal"`
@@ -1937,7 +1943,7 @@ func (a *TextAnalyzer) findAgreementsLLM(ctx context.Context, topic string, posi
 
 	// Convert shared ground to consensus statements
 	var consensus []deliberation.ConsensusStatement
-	for _, sg := range result.SharedGround {
+	for _, sg := range sharedGround {
 		consensus = append(consensus, deliberation.ConsensusStatement{
 			Content:              sg.Content,
 			OverallAgreeRatio:    0.7, // LLM-inferred, not vote-verified
