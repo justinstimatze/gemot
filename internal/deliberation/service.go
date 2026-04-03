@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/sanitize"
@@ -76,6 +77,7 @@ type Store interface {
 	GetAnalysisResult(deliberationID string, round int) (*AnalysisResult, error)
 	GetLatestAnalysisResult(deliberationID string) (*AnalysisResult, error)
 
+	GetStuckAnalyzing(maxAge time.Duration) ([]string, error)
 	RecoverStuckAnalyzing(maxAge time.Duration) (int, error)
 
 	CreateShareToken(token, groupID string, expiresAt time.Time) error
@@ -163,10 +165,15 @@ type Service struct {
 	reframer         Reframer
 	contentClassifier sanitize.Classifier
 	events           *EventBus // nil = no event emission
+
+	// Active analysis cancellation: deliberation_id → cancel func.
+	// Used by stuck recovery to kill zombie analysis goroutines.
+	analysisMu      sync.Mutex
+	activeAnalyses  map[string]context.CancelFunc
 }
 
 func NewService(store Store, analyzer Analyzer) *Service {
-	return &Service{store: store, analyzer: analyzer}
+	return &Service{store: store, analyzer: analyzer, activeAnalyses: make(map[string]context.CancelFunc)}
 }
 
 // SetContentClassifier sets the LLM content screening function.
@@ -726,12 +733,19 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		}
 	}
 
+	// Register cancellable analysis context
+	analysisCtx, cancelAnalysis := context.WithCancel(analysisCtx)
+	s.analysisMu.Lock()
+	s.activeAnalyses[deliberationID] = cancelAnalysis
+	s.analysisMu.Unlock()
+	defer func() {
+		s.analysisMu.Lock()
+		delete(s.activeAnalyses, deliberationID)
+		s.analysisMu.Unlock()
+	}()
+
 	s.emit("analysis_started", deliberationID, "", "")
 	progressFn := ProgressFunc(func(subStatus string) {
-		// Check if stuck recovery killed us (status reset to "open" while we're still running)
-		if d, err := s.store.GetDeliberation(deliberationID); err == nil && d.Status != "analyzing" {
-			return // silently stop updating — our analysis was killed
-		}
 		_ = s.store.UpdateSubStatus(deliberationID, subStatus)
 		s.emit("analysis_progress", deliberationID, "", subStatus)
 	})
@@ -1405,8 +1419,30 @@ func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction str
 }
 
 // RecoverStuck resets deliberations stuck in "analyzing" status back to "open"
-// if they have been in that state for more than 10 minutes.
+// if they have been in that state for more than 30 minutes.
+// Also cancels any active analysis goroutines for recovered deliberations.
 func (s *Service) RecoverStuck() (int, error) {
+	// Get the list of stuck deliberations before recovery (so we can cancel their goroutines)
+	stuck, err := s.store.GetStuckAnalyzing(30 * time.Minute)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(stuck) == 0 {
+		return 0, nil
+	}
+
+	// Cancel active analysis goroutines for stuck deliberations
+	s.analysisMu.Lock()
+	for _, id := range stuck {
+		if cancel, ok := s.activeAnalyses[id]; ok {
+			cancel()
+			delete(s.activeAnalyses, id)
+		}
+	}
+	s.analysisMu.Unlock()
+
+	// Reset DB status
 	return s.store.RecoverStuckAnalyzing(30 * time.Minute)
 }
 
