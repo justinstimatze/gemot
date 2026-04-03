@@ -1,110 +1,91 @@
 # Structured Disagreement Analysis for Hermes Subagents
 
-## Real test: 3 Hermes agents deliberate on open-weight vs API
+Vote counting is easy (#412 Phase 1 is ~200 LOC and should be built natively). The hard part is what happens when votes reveal a split but don't explain why. That's what this addresses.
 
-We gave 3 Hermes v0.6.0 agents different expert personas and asked them the kind of question a Hermes user might delegate to subagents:
+## Test: 3 Hermes agents, open-weight vs API
 
-> *"We're building a customer support chatbot. Should we fine-tune an open-weight model (Llama 3.3 8B) on our support tickets, or use a closed API (Claude Sonnet) with RAG over our knowledge base? We have 50K support tickets and a 2-person ML team."*
+3 Hermes v0.6.0 agents with different expert personas. Standard `AIAgent` interface, Sonnet, different system prompts — same setup as a `delegate_task` batch.
 
-Each agent generated a position through Hermes's standard `AIAgent` interface:
+> *"We're building a customer support chatbot. Should we fine-tune Llama 3.3 8B on our 50K support tickets, or use Claude Sonnet with RAG? 2-person ML team."*
 
-**open-weight-advocate**: *"Fine-tune the open-weight model. With 50K tickets, you'll bake support tone, escalation patterns, and product-specific terminology directly into weights. Inference via vLLM runs at ~$0.0001/token versus Claude Sonnet's $3-15/MTok — at 10M tokens/month that's a $1,500-3,000/month delta that compounds forever..."*
+**open-weight-advocate**: *"Fine-tune. Inference via vLLM at ~$0.0001/token vs Sonnet's $3-15/MTok — at 10M tokens/month that's a $1,500-3,000/month delta that compounds forever..."*
 
-**api-pragmatist**: *"Use Claude Sonnet with RAG. Don't fine-tune. With a 2-person ML team, fine-tuning will consume 4-8 weeks of engineering time before you've shipped a single feature. Claude with a well-structured RAG pipeline can be production-ready in 1-2 weeks..."*
+**api-pragmatist**: *"Claude + RAG. Fine-tuning will consume 4-8 weeks before you've shipped a single feature. Claude with RAG can be production-ready in 1-2 weeks..."*
 
-**hybrid-architect**: *"Use Claude Sonnet with RAG. Don't fine-tune. Fine-tuning Llama 3.3 8B is an operational trap: you'll spend 60-70% of engineering bandwidth on training pipelines and retraining cycles. Fine-tuning encodes past knowledge into weights — every policy update requires a new training run; RAG gives you that for free..."*
+**hybrid-architect**: *"Claude + RAG. Fine-tuning is an operational trap: 60-70% of engineering bandwidth on training pipelines. Every policy update requires a new training run; RAG gives you that for free..."*
 
-All three agents used Sonnet with different system prompts — the same setup as a typical `delegate_task` batch. With MoA or multi-model configs, disagreements would be more fundamental.
+Submitted to gemot, analyzed. 4 cruxes:
 
-We submitted these positions to gemot and ran analysis. Here's what it found:
+**1. "Fine-tuning on 50K tickets primarily encodes style, not reasoning"**
+- 67% controversy. AGREE: api-pragmatist, hybrid-architect. DISAGREE: open-weight-advocate.
+- Testable: eval fine-tuned 8B on reasoning-heavy cases vs Claude+RAG.
 
-### Cruxes detected
+**2. "50K tickets meaningfully improve domain reasoning beyond style"**
+- 100%. AGREE: open-weight-advocate. DISAGREE: hybrid-architect.
+- Measurable: compare fine-tuned edge-case performance vs base model.
 
-**1. "Fine-tuning on 50K support tickets primarily encodes style, not reasoning"**
-- Controversy: 67%
-- AGREE: api-pragmatist, hybrid-architect
-- DISAGREE: open-weight-advocate
-- *The core technical disagreement. Testable: run an eval comparing fine-tuned 8B on reasoning-heavy support cases vs Claude+RAG on the same cases.*
+**3. "At ~10M tokens/month, self-hosted savings justify leaving the API"**
+- 100%. AGREE: open-weight-advocate. DISAGREE: hybrid-architect.
+- Calculable. The advocates disagree on the break-even: $1.5K/month vs $50K/month.
 
-**2. "50K tickets meaningfully improve domain reasoning beyond surface-level style"**
-- Controversy: 100%
-- AGREE: open-weight-advocate
-- DISAGREE: hybrid-architect
-- *Factual — measurable by comparing fine-tuned performance on edge cases vs base model.*
+**4. "Vendor lock-in risk > self-hosting risk for a small team"**
+- 100%. AGREE: open-weight-advocate. DISAGREE: hybrid-architect.
+- Value judgment. Not resolvable with evidence.
 
-**3. "At ~10M tokens/month, self-hosted inference savings justify switching from a closed API"**
-- Controversy: 100%
-- AGREE: open-weight-advocate
-- DISAGREE: hybrid-architect
-- *Factual — calculable. The open-weight advocate says the delta is $1,500-3,000/month; the hybrid architect says the threshold is ~$50K/month.*
+### Parent agent synthesis
 
-**4. "Vendor lock-in risk outweighs self-hosting operational risk for a small team"**
-- Controversy: 100%
-- AGREE: open-weight-advocate
-- DISAGREE: hybrid-architect
-- *Value judgment — depends on risk tolerance. Not resolvable with evidence.*
+A Hermes parent agent read the crux JSON and produced this (unedited):
 
-### What this gives the parent agent
-
-Instead of hedging ("Both approaches have merit..."), we had a Hermes parent agent read the crux data and synthesize for the user. This is its actual output:
-
-> **Agreed on:** The API route is cheaper until you hit ~$50K/month in API costs — so unless you're processing millions of tickets, self-hosted fine-tuning won't save you money.
+> **Agreed on:** The API route is cheaper until ~$50K/month — so unless you're processing millions of tickets, self-hosted fine-tuning won't save money.
 >
 > **Key disagreements:**
-> - **Does fine-tuning actually help?** open-weight-advocate says yes — 15–25% accuracy gains. api-pragmatist says no — it's mostly style adaptation. **This is your most important unknown to resolve.**
-> - **How much should vendor lock-in worry you?** This is a values call about your risk tolerance.
+> - **Does fine-tuning actually help?** open-weight-advocate says 15–25% accuracy gains. api-pragmatist says it's mostly style. **Most important unknown to resolve.**
+> - **Vendor lock-in?** Values call about risk tolerance.
 >
-> **What you should check:**
-> 1. Run a quick benchmark — fine-tune on a slice of your tickets and test vs Claude + RAG on your actual support cases.
-> 2. Estimate your realistic API bill at expected volume — if it's well under $50K/month, start with Claude + RAG.
+> **Check:**
+> 1. Fine-tune on a slice of tickets, test vs Claude+RAG on your hardest cases.
+> 2. Estimate realistic API bill — if well under $50K/month, start with Claude+RAG.
 
-That's a real Hermes agent producing actionable output from gemot's crux data. No hand-writing.
+### Round 2: refinement after cruxes
 
-### Round 2: agents refine after seeing cruxes
+Fed cruxes back to each agent. Positions shifted:
 
-This is what you can't do with prompted aggregation — iterative refinement across rounds.
+- **open-weight-advocate** conceded economics: *"I overstated the operational-risk argument — if below $50K/month API spend, vendor lock-in is an edge case..."*
+- **api-pragmatist** conceded quality: *"If fine-tuning produces 15–25% accuracy gains in intent classification, that's not just style..."*
+- **hybrid-architect** held on threshold: *"The $50K/month threshold lands — opportunity cost of fine-tuning infra dominates for a 2-person team..."*
 
-We fed the cruxes back to each agent. They acknowledged the other side's points and adjusted:
+Re-analyzed. Cruxes narrowed from 4 to 3. Remaining disagreements are more specific. Prompted aggregation can't do this — it's stateless.
 
-- **open-weight-advocate** conceded the economics argument: *"I previously overstated the operational-risk argument — if a 2-person ML team is below $50K/month in API spend, the vendor lock-in risk is an edge case..."*
-- **api-pragmatist** conceded on quality: *"The crux cuts directly against my prior position — if fine-tuning genuinely produces 15–25% accuracy gains in intent classification, that's not just style..."*
-- **hybrid-architect** held ground on the threshold: *"The $50K/month threshold crux largely lands — for a 2-person team, the opportunity cost of building fine-tuning infrastructure dominates..."*
+## Integration
 
-After re-analysis, cruxes narrowed from 4 to 3. The remaining disagreements are sharper and more specific — exactly the questions the user needs to resolve with data, not debate.
-
-## How it works
-
-After `delegate_task` returns conflicting subagent summaries, the parent agent submits them to gemot for structured analysis. Runs in parallel with any other post-processing:
+After `delegate_task` returns conflicting summaries:
 
 ```python
-# The integration point — after delegate_task returns:
 aggregated, crux_analysis = await asyncio.gather(
-    synthesize_subagent_results(summaries),  # existing Hermes flow
-    analyze_disagreements(query, summaries),  # gemot
+    synthesize_subagent_results(summaries),
+    analyze_disagreements(query, summaries),  # gemot, ~90s
 )
 
 if crux_analysis and crux_analysis.get("relevant_cruxes"):
     cruxes = crux_analysis["relevant_cruxes"]
-    # Surface to user: "Subagents disagreed on 4 points. The key question is..."
+    # "Subagents disagreed on 4 points. The key question is..."
 ```
 
 <details>
-<summary>Full implementation of <code>analyze_disagreements</code></summary>
+<summary><code>analyze_disagreements</code> implementation</summary>
 
 ```python
 from typing import Dict, Optional
 import asyncio
 import httpx
 
-GEMOT_URL = "http://localhost:8080/a2a"  # self-hosted, see setup below
+GEMOT_URL = "http://localhost:8080/a2a"
 
 async def analyze_disagreements(
     query: str, responses: Dict[str, str]
 ) -> Optional[Dict]:
-    """Find where subagents actually disagree. Non-blocking, graceful degradation."""
     try:
         async with httpx.AsyncClient() as c:
-            # Create deliberation
             r = await c.post(GEMOT_URL, json={
                 "jsonrpc": "2.0", "id": 1,
                 "method": "gemot/create_deliberation",
@@ -112,7 +93,6 @@ async def analyze_disagreements(
             })
             delib_id = r.json()["result"]["deliberation_id"]
 
-            # Each subagent's response becomes a position
             for i, (agent_id, text) in enumerate(responses.items()):
                 await c.post(GEMOT_URL, json={
                     "jsonrpc": "2.0", "id": i + 10,
@@ -124,14 +104,12 @@ async def analyze_disagreements(
                     }
                 })
 
-            # Trigger analysis
             await c.post(GEMOT_URL, json={
                 "jsonrpc": "2.0", "id": 100,
                 "method": "gemot/analyze",
                 "params": {"deliberation_id": delib_id}
             })
 
-            # Poll until done
             for _ in range(60):
                 await asyncio.sleep(3)
                 r = await c.post(GEMOT_URL, json={
@@ -139,67 +117,57 @@ async def analyze_disagreements(
                     "method": "gemot/get_deliberation",
                     "params": {"deliberation_id": delib_id}
                 })
-                status = r.json()["result"]["status"]
-                if status == "open":
+                if r.json()["result"]["status"] == "open":
                     break
-                if status != "analyzing":
-                    return None
 
-            first_agent = next(iter(responses))
             r = await c.post(GEMOT_URL, json={
                 "jsonrpc": "2.0", "id": 102,
                 "method": "gemot/get_context",
                 "params": {
                     "deliberation_id": delib_id,
-                    "agent_id": first_agent
+                    "agent_id": next(iter(responses))
                 }
             })
             return r.json()["result"]
-    except Exception as e:
-        logger.warning("Gemot analysis failed (non-fatal): %s", e)
-        return None
+    except Exception:
+        return None  # non-fatal, delegate_task works without it
 ```
 
 </details>
 
-## When is this worth it vs. just reading the summaries?
+## When to use this
 
-For 2-3 short subagent summaries, a human (or a well-prompted parent agent) can spot the disagreements. Gemot adds value when:
+For 2-3 short summaries, just read them. Gemot helps when:
 
-| Situation | Reading summaries | Gemot |
-|-----------|-------------------|-------|
-| **Debugging wrong synthesis** | Re-read all summaries | Check which crux the parent resolved incorrectly |
-| **Consistent structure** | Depends on the parent agent | Same crux format every time |
-| **Classifying disagreements** | Manual judgment | Automatic: factual (testable) vs value (preference) |
-| **Multi-round** | Stateless | Subagents can refine positions after seeing cruxes |
-| **5+ subagents** | Hard to track all disagreements | Scales with claim extraction |
+| | Reading summaries | Gemot |
+|-|-------------------|-------|
+| **Debugging wrong synthesis** | Re-read everything | Check which crux was resolved wrong |
+| **Factual vs value** | Manual judgment | Automatic classification |
+| **Multi-round** | Stateless | Agents refine after seeing cruxes |
+| **5+ subagents** | Hard to track | Scales with extraction |
 
-Start without gemot. Add it when you need structured crux analysis or when the parent agent keeps producing vague syntheses. Same pattern works for `mixture_of_agents` — submit the 4 model responses as positions and find where the frontier models actually disagree.
+Same pattern works for `mixture_of_agents` — submit model responses as positions, find where they diverge.
 
 ## What we tested
 
-- Hermes v0.6.0, three `AIAgent` instances with different system prompts
-- Connected to gemot via MCP Streamable HTTP — tool discovery works automatically
-- Positions submitted to gemot via A2A JSON-RPC
-- Full analysis pipeline: taxonomy (5 topics), claim extraction, deduplication, crux detection (4 cruxes round 1 → 3 cruxes round 2)
-- Parent agent synthesis from crux data — real output, not hand-written
-- Multi-round refinement: agents read cruxes, adjusted positions, re-analyzed. Cruxes narrowed.
+- Hermes v0.6.0 `AIAgent`, MCP Streamable HTTP tool discovery, A2A position submission
+- Full 2-round deliberation: 4 cruxes → 3 after refinement
+- Parent agent synthesis from crux data (unedited output above)
+- Test scripts: [`run_finetuning_test.py`](scripts/hermes-test/run_finetuning_test.py), [`run_round2.py`](scripts/hermes-test/run_round2.py)
 
-**What's verified**: full 2-round deliberation with real Hermes agents, parent synthesis, crux evolution
-**What's proposed**: wiring this into `delegate_task` (currently tested with direct `AIAgent` instantiation)
+**Verified**: deliberation, analysis, parent synthesis, multi-round.
+**Proposed**: wiring into `delegate_task` (tested with direct `AIAgent`).
 
 ## Setup
 
-Self-hosted (single Go binary, data stays between your machine and your LLM provider):
+Self-hosted (single binary, data stays with your LLM provider):
 
 ```bash
-git clone https://github.com/justinstimatze/gemot.git
-cd gemot && go build -o gemot .
-GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http --addr :8080
+git clone https://github.com/justinstimatze/gemot.git && cd gemot
+go build -o gemot . && GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http --addr :8080
 ```
 
-Or connect via MCP (Hermes auto-discovers all tools):
-
+Or MCP:
 ```yaml
 # ~/.hermes/config.yaml
 mcp_servers:
@@ -208,14 +176,23 @@ mcp_servers:
     timeout: 120
 ```
 
-Analysis uses Sonnet (~$0.30 per run, ~90s).
+Sonnet, ~$0.30/run, ~90s.
 
-## For Issue #412
+## On #412's open questions
 
-Gemot's analysis pipeline — claim extraction, deduplication, multi-candidate crux generation, factual/value classification, integrity checks — has a fair number of edge cases. If #412 goes forward, happy to share what we've learned. Governance templates (majority, supermajority, unanimous, jury, consensus) with liquid democracy and sybil detection are also available — [details in the docs](https://gemot.dev/docs).
+**"Tiebreaking is hard — what happens when 2 of 4 vote A and 2 vote B?"**
+Gemot finds the crux. Instead of adding a 5th voter, you get: "the disagreement is whether 10K rows is enough for full fine-tuning" — resolve that and the tie breaks itself.
 
-## Next step
+**"Voting quality depends on judge quality"**
+Gemot extracts claims from the work itself, not from judge opinions. No judge prompt to get wrong.
 
-We'd like to submit a PR adding optional disagreement analysis to `delegate_task` batch results. Off by default, runs in parallel. The test above is reproducible — [test script](scripts/hermes-test/run_finetuning_test.py).
+**"Should judges be separate agents or the same agents?"**
+Neither. The producing agents submit their work as positions. Gemot finds where they disagree from the content. No separate judge step.
 
-Source: [github.com/justinstimatze/gemot](https://github.com/justinstimatze/gemot) (MIT)
+Phase 1-2 of #412 (vote counting, quorum, strategies) should be native Python — it's fast, deterministic, no external deps. Gemot is for Phase 3 territory: convergence detection, multi-round refinement, and the cases where voting says "it's a tie" and you need to know why. [Docs](https://gemot.dev/docs).
+
+## Next
+
+PR to add optional disagreement analysis to `delegate_task` batch results. Off by default, parallel.
+
+[github.com/justinstimatze/gemot](https://github.com/justinstimatze/gemot) (MIT)
