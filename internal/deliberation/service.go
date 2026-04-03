@@ -728,6 +728,10 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 
 	s.emit("analysis_started", deliberationID, "", "")
 	progressFn := ProgressFunc(func(subStatus string) {
+		// Check if stuck recovery killed us (status reset to "open" while we're still running)
+		if d, err := s.store.GetDeliberation(deliberationID); err == nil && d.Status != "analyzing" {
+			return // silently stop updating — our analysis was killed
+		}
 		_ = s.store.UpdateSubStatus(deliberationID, subStatus)
 		s.emit("analysis_progress", deliberationID, "", subStatus)
 	})
