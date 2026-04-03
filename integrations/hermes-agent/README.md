@@ -169,7 +169,7 @@ Anywhere Hermes aggregates multiple agent outputs:
 
 ## For Issue #412
 
-Gemot's analysis pipeline — claim extraction, deduplication, multi-candidate crux generation, factual/value classification, integrity checks — has 160+ tests and a fair number of edge cases we've already hit. If #412 goes forward, happy to share what we've learned. Governance templates (majority, supermajority, unanimous, jury, consensus) with liquid democracy and sybil detection are also available — [details in the docs](https://gemot.dev/docs).
+Gemot's analysis pipeline — claim extraction, deduplication, multi-candidate crux generation, factual/value classification, integrity checks — has a fair number of edge cases. If #412 goes forward, happy to share what we've learned. Governance templates (majority, supermajority, unanimous, jury, consensus) with liquid democracy and sybil detection are also available — [details in the docs](https://gemot.dev/docs).
 
 ## Next step
 
