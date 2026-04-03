@@ -48,7 +48,8 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	}
 	paymentMiddleware := payments.Middleware(ctx, mppCfg, apiSecret, creditStore)
 
-	mcpHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
+	mcpSSEHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
+	mcpStreamHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
 
 	baseURL := os.Getenv("GEMOT_BASE_URL")
 	if baseURL == "" {
@@ -57,9 +58,13 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 
 	mux := http.NewServeMux()
 
-	// MCP endpoint — requires bearer token (API key or admin secret) or MPP payment
-	mux.Handle("/mcp/", paymentMiddleware(mcpHandler))
-	mux.Handle("/mcp", paymentMiddleware(mcpHandler))
+	// MCP endpoints — Streamable HTTP (modern, POST+GET) and SSE (legacy, GET only)
+	// Both require bearer token (API key or admin secret) or MPP payment
+	// /mcp serves streamable HTTP for modern clients (Hermes, Claude Code, etc.)
+	// /mcp/sse serves legacy SSE for older clients (Claude Desktop, Cursor, etc.)
+	mux.Handle("/mcp", paymentMiddleware(mcpStreamHandler))
+	mux.Handle("/mcp/sse/", paymentMiddleware(mcpSSEHandler))
+	mux.Handle("/mcp/sse", paymentMiddleware(mcpSSEHandler))
 
 	// Join page — content-negotiated landing for join codes
 	mux.HandleFunc("/join/", func(w http.ResponseWriter, r *http.Request) {
