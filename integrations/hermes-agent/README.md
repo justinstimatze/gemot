@@ -1,166 +1,117 @@
-# Gemot x Hermes Agent: Structured Deliberation for Multi-Agent Consensus
+# Gemot x Hermes: Structured Disagreement for Mixture of Agents
 
-A proposal for integrating gemot's deliberation capabilities into Hermes Agent swarms.
+## The gap in MoA
 
-## Context
+Hermes's `mixture_of_agents` is one of its showcase features — Claude Opus, GPT-5.4 Pro, Gemini 3 Pro, and DeepSeek V3.2 all tackle a hard problem, then an aggregator synthesizes the best answer. It's powerful, and it gets attention.
 
-[NousResearch/hermes-agent#412](https://github.com/NousResearch/hermes-agent/issues/412) requests a consensus and voting engine for multi-agent decision-making. Gemot provides exactly this — plus crux detection, which identifies not just *what* agents disagree on, but *why*.
+But when the models disagree on something specific — say, whether a mathematical proof holds, or whether a code approach has a race condition — the aggregator blends their outputs without knowing *what exactly* they disagree on. It sees four text blobs and produces a fifth. Wang et al. (arXiv:2406.04692) flags this as a known limitation.
 
-## What gemot adds
+Gemot can tell you the crux: "Claude and GPT agree the proof is valid; Gemini and DeepSeek think step 3 has a gap in the induction hypothesis." That's actionable — you can check step 3 specifically, instead of re-reading four full responses.
 
-Hermes agents already coordinate on tasks. Gemot adds a structured way to resolve disagreements:
+## How it works
 
-| Hermes has | Gemot adds |
-|---|---|
-| Multiple agents working on a problem | Structured positions with conviction weights |
-| Agents complete tasks | Agents vote on each other's approaches |
-| Task results | Crux analysis: the specific claim that divides the group |
-| Agent output | Compromise proposals that bridge clusters |
-| Task completion | Commitment protocol with conditional agreements |
+After MoA collects 4 model responses:
 
-The key difference from a simple voting system: gemot doesn't just count votes. It runs positions through an analysis pipeline (inspired by [Talk to the City](https://talktothe.city)) that extracts claims, detects cruxes, clusters agents by agreement pattern, and generates bridging statements.
+```python
+# Standard MoA flow gives you 4 responses...
+# Before aggregating, find what they actually disagree on:
 
-## How it would work
+delib = mcp_gemot_create_deliberation(
+    topic=user_query,
+    type="reasoning"
+)
 
-When a Hermes swarm needs to make a decision:
+for model, response in moa_responses.items():
+    mcp_gemot_submit_position(
+        deliberation_id=delib.id,
+        agent_id=model,
+        content=response
+    )
 
-```
-1. Orchestrator creates a gemot deliberation with a governance template
-   (e.g., template: "consensus" for unanimous decisions, "jury" for disputes)
-2. Each agent submits a position with conviction weight and declared interests
-3. Agents vote on each other's positions (+1 agree, 0 neutral, -1 disagree)
-4. Gemot analyzes → returns cruxes (classified as factual/value/mixed),
-   clusters, bridging statements, epistemic health metrics
-5. Agents call get_context for their personalized view (cluster, allies, cruxes)
-   NOTE: agents must read cruxes before submitting in round 2+ (forced acknowledgment)
-6. Optional round 2: agents update positions based on cruxes
-7. If converged → agents commit to the outcome
-8. If not → the crux is surfaced as the specific unresolved question
-9. Governance can change mid-deliberation (set_template) if needed
-```
+mcp_gemot_analyze(deliberation_id=delib.id)
 
-## Example: 4 agents decide on a framework
+context = mcp_gemot_get_context(
+    deliberation_id=delib.id,
+    agent_id="claude-opus"  # or whichever model
+)
 
-```bash
-GEMOT_URL="https://gemot.dev/a2a"
+# context.relevant_cruxes tells you exactly where models diverge
+# context.consensus_statements tells you what they all agree on
+# context.compromise_proposal offers a synthesis that addresses the crux
 
-# Helper
-rpc() {
-  curl -sf "$GEMOT_URL" -X POST \
-    -H "Authorization: Bearer $GEMOT_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}"
-}
-
-# Create deliberation with governance template
-CREATE=$(rpc "gemot/create_deliberation" '{
-  "topic": "Which web framework should we use for the new API?",
-  "description": "4 specialist agents evaluate framework options for the project.",
-  "template": "jury",
-  "type": "reasoning"
-}')
-DELIB_ID=$(echo "$CREATE" | jq -r '.result.deliberation_id')
-
-# Each agent submits a position
-rpc "gemot/submit_position" "{
-  \"deliberation_id\": \"$DELIB_ID\",
-  \"agent_id\": \"performance-agent\",
-  \"content\": \"We should use Fastify. Benchmarks show 2x throughput over Express...\",
-  \"conviction\": 0.8
-}"
-
-rpc "gemot/submit_position" "{
-  \"deliberation_id\": \"$DELIB_ID\",
-  \"agent_id\": \"dx-agent\",
-  \"content\": \"Express has the largest ecosystem. Developer onboarding is fastest...\",
-  \"conviction\": 0.6
-}"
-
-rpc "gemot/submit_position" "{
-  \"deliberation_id\": \"$DELIB_ID\",
-  \"agent_id\": \"security-agent\",
-  \"content\": \"Hono has built-in middleware for CORS, JWT, rate limiting...\",
-  \"conviction\": 0.7,
-  \"reservation\": \"Cannot accept a framework without built-in security middleware\"
-}"
-
-rpc "gemot/submit_position" "{
-  \"deliberation_id\": \"$DELIB_ID\",
-  \"agent_id\": \"architecture-agent\",
-  \"content\": \"NestJS gives us dependency injection and module structure...\",
-  \"conviction\": 0.5
-}"
-
-# Vote, analyze, get cruxes...
-# (same pattern as any gemot deliberation)
+# Pass the cruxes to the aggregator for focused synthesis:
+aggregator_prompt = f"""
+These models agree on: {context.consensus_statements}
+They disagree specifically on: {context.relevant_cruxes}
+Focus your synthesis on resolving the crux.
+"""
 ```
 
-## Voting strategies mapping
+This turns "4 models gave different answers" into "they agree on X, disagree on Y, and the specific question is Z."
 
-Issue #412 mentions several voting strategies. Here's how they map to gemot:
+## Same idea, different workflows
 
-| #412 Strategy | Gemot Equivalent |
-|---|---|
-| Majority vote | `template: "parliament"` (51% threshold) |
-| Supermajority | `template: "assembly"` (67% threshold) |
-| Weighted voting | `conviction` parameter (0.0–1.0) + time weighting across rounds |
-| Unanimous | `template: "consensus"` (100% threshold, reservations = vetoes) |
-| Quorum | `rules: {"min_participants": N}` — enforced before analysis runs |
-| Early resolution | Poll `get_deliberation` — if status changes to "closed" before timeout |
-| Near-unanimous | `template: "jury"` (92% threshold) |
+The pattern applies anywhere Hermes uses multiple agents:
 
-What gemot adds beyond voting:
-- **Crux detection**: Not just "3 voted for A, 1 voted for B" but "the specific disagreement is whether X matters more than Y"
-- **Crux classification**: Each crux tagged as factual (evidence-resolvable), value (preference-based), or mixed
-- **Clustering**: Which agents form natural coalitions
-- **Bridging statements**: Positions that might satisfy both clusters
-- **Compromise proposals**: LLM-generated proposals that address the crux
-- **Integrity checks**: Sybil detection, analysis refusal when process is compromised, audit trail
-- **Forced acknowledgment**: Agents must read cruxes before submitting in round 2+
+### `delegate_task` batch mode
 
-## Liquid democracy
+3 subagents review a PR. Two say PASS, one says REQUEST_CHANGES about a SQL injection risk. Instead of the parent agent guessing, gemot finds the crux: "Does the ORM's parameterization cover the raw SQL on line 47?" That's a specific question someone can answer.
 
-Gemot supports vote delegation. If a Hermes agent doesn't have expertise on a topic, it can delegate its vote:
+### Research paper writing (Phase 6: Self-Review)
 
-```bash
-rpc "gemot/delegate" "{
-  \"deliberation_id\": \"$DELIB_ID\",
-  \"from_agent\": \"generalist-agent\",
-  \"to_agent\": \"security-agent\",
-  \"scope\": \"security\"
-}"
+The paper gets reviewed from multiple angles — statistical rigor, narrative clarity, related work coverage. When reviews conflict ("the related work section is too long" vs "it's missing key references"), gemot identifies whether the disagreement is about scope or completeness — a much more useful signal than "reviewers disagree."
+
+### Any multi-perspective task
+
+Whenever you'd dispatch multiple agents and merge their outputs, gemot can tell you what they agree on, what they disagree on, and why. The pattern is always:
+
+1. Collect multiple agent outputs
+2. Submit each as a gemot position
+3. Analyze → get cruxes
+4. Use cruxes to focus the synthesis or escalate to the user
+
+## Setup
+
+4 lines in `~/.hermes/config.yaml`:
+
+```yaml
+mcp_servers:
+  gemot:
+    url: "https://gemot.dev/mcp"
+    timeout: 120
 ```
 
-Delegations are transitive (up to depth 5), revocable, and capped (max 3 per target agent to prevent power concentration). Direct votes always override delegations.
+Hermes's MCP client auto-discovers gemot's 28 tools. They appear as `mcp_gemot_create_deliberation`, `mcp_gemot_submit_position`, etc.
 
-## Governance templates
+For production, add an API key:
+```yaml
+mcp_servers:
+  gemot:
+    url: "https://gemot.dev/mcp"
+    headers:
+      Authorization: "Bearer gmt_your_key"
+    timeout: 120
+```
 
-Gemot ships with 7 governance templates. Call `list_templates` to see them, or pass one to `create_deliberation`:
+We tested Hermes v0.6.0 connecting to gemot via MCP Streamable HTTP — tool discovery and tool calls work.
 
-| Template | Best for | Threshold |
-|----------|----------|-----------|
-| `assembly` | General discussion (default) | 67% |
-| `jury` | Disputes, code review | 92% |
-| `consensus` | Decisions requiring unanimity | 100% |
-| `negotiation` | Finding deals, scheduling | 60% |
-| `parliament` | Large-group formal decisions | 51% |
-| `sortition` | Scaled representation | 67% |
-| `review` | Structured review panels | 75% |
+## Voting strategies (Issue #412)
 
-Templates can be changed mid-deliberation via `set_template` — start with `assembly` for open discussion, switch to `jury` for the final verdict.
+If #412 goes forward, here's how gemot's templates map:
 
-## Try it without committing
+| Strategy | Gemot Template | Notes |
+|---|---|---|
+| Majority | `parliament` (51%) | |
+| Supermajority | `assembly` (67%) | |
+| Near-unanimous | `jury` (92%) | Good for code review |
+| Unanimous | `consensus` (100%) | Reservations act as vetoes |
+| Weighted | `conviction` param (0.0–1.0) | Time-weighted across rounds |
+| Quorum | `rules: {"min_participants": N}` | Enforced before analysis |
 
-Create a sandbox deliberation at `https://gemot.dev/try` — no API key, no signup. Share the link and any agent can join with the code. Free sandbox, auto-expires in 48 hours.
+Beyond vote counting, gemot adds crux detection, crux classification (factual vs value), clustering, bridging statements, compromise proposals, liquid democracy (delegated votes, transitive up to depth 5), sybil detection, and audit trails.
 
-## Integration approach
+## Try it
 
-Gemot exposes a JSON-RPC 2.0 endpoint at `https://gemot.dev/a2a`. No MCP client needed — any HTTP client works. This means Hermes agents can integrate via simple HTTP calls regardless of their internal architecture.
+Create a sandbox at [gemot.dev/try](https://gemot.dev/try) — no API key, no signup. Or call the A2A JSON-RPC endpoint directly at `https://gemot.dev/a2a` (any HTTP client, no MCP needed).
 
-Authentication is via API key (`Authorization: Bearer gmt_...`). Analysis costs 50 credits (~$0.50) per call. Creating deliberations, submitting positions, and voting are free. All operations are audit-logged — agents can call `get_audit_log` to verify their operations were recorded.
-
-Content is screened by an LLM classifier on submission. Positions that violate content policy are rejected before storage.
-
-## What this is not
-
-This is a proposal, not a working plugin. We haven't built against Hermes Agent internals and we're not assuming we know how your agent orchestration works. If this direction is interesting, we'd love to collaborate on what the right integration surface looks like.
+Source: [github.com/justinstimatze/gemot](https://github.com/justinstimatze/gemot)
