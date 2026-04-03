@@ -489,7 +489,11 @@ func (s *server) handleAnalyze(ctx context.Context, _ *sdkmcp.CallToolRequest, a
 		return errResult(fmt.Errorf("deliberation_id is required"))
 	}
 	// Validate and attach model override if specified
-	analyzeCtx := s.shutdown // use server lifetime context, not request context
+	// Use a detached context with a generous timeout — NOT the server shutdown context.
+	// Fly sends SIGTERM during suspend/stop which cancels s.shutdown, killing active analyses.
+	// Analyses should complete even during graceful shutdown (they take 3-8 minutes).
+	analyzeCtx, analyzeCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	_ = analyzeCancel // cancelled by the service's activeAnalyses map or timeout
 	if args.Model != "" {
 		if !llm.AllowedModels[args.Model] {
 			return errResult(fmt.Errorf("unsupported model %q — allowed: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5", args.Model))
