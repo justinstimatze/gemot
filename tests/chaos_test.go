@@ -48,7 +48,7 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// 5. Ensure status_changed_at is clearly recent (same clock as recovery check — UTC)
-	recentTime := time.Now().UTC().Format(time.RFC3339)
+	recentTime := time.Now().UTC().Format("2006-01-02 15:04:05")
 	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = ? WHERE id = ?`, recentTime, d.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// 6. Manually set status_changed_at to 15 minutes ago (simulates stuck-for-15-min)
-	oldTime := time.Now().UTC().Add(-35 * time.Minute).Format(time.RFC3339)
+	oldTime := time.Now().UTC().Add(-35 * time.Minute).Format("2006-01-02 15:04:05")
 	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = ? WHERE id = ?`, oldTime, d.ID); err != nil {
 		t.Fatal(err)
 	}
