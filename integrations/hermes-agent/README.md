@@ -1,55 +1,69 @@
-# Structured Disagreement Analysis for Mixture of Agents
+# Structured Disagreement Analysis for Hermes Subagents
 
-## A concrete example
+## Real test: 3 Hermes agents deliberate on open-weight vs API
 
-MoA asks 4 frontier models: *"Is this Python code thread-safe?"*
+We gave 3 Hermes v0.6.0 agents different expert personas and asked them the kind of question a Hermes user might delegate to subagents:
 
-```python
-# The code under review
-def increment(counters: dict, key: str):
-    counters[key] = counters.get(key, 0) + 1
-```
+> *"We're building a customer support chatbot. Should we fine-tune an open-weight model (Llama 3.3 8B) on our support tickets, or use a closed API (Claude Sonnet) with RAG over our knowledge base? We have 50K support tickets and a 2-person ML team."*
 
-The models disagree:
-- **Claude Opus**: "Safe — dict operations are atomic under the GIL"
-- **GPT-5.4**: "Safe — `dict.__setitem__` is a single bytecode operation"
-- **Gemini 3 Pro**: "Unsafe — `get` then `setitem` is two operations; another thread can modify between them"
-- **DeepSeek V3.2**: "Unsafe — the GIL doesn't make multi-step read-modify-write atomic"
+Each agent generated a position through Hermes's standard `AIAgent` interface:
 
-The MoA aggregator synthesizes: *"The code should be generally thread-safe due to CPython's GIL, which ensures only one thread executes Python bytecode at a time. However, for production use, consider adding a threading.Lock for extra safety around shared mutable state."*
+**open-weight-advocate**: *"Fine-tune the open-weight model. With 50K tickets, you'll bake support tone, escalation patterns, and product-specific terminology directly into weights. Inference via vLLM runs at ~$0.0001/token versus Claude Sonnet's $3-15/MTok — at 10M tokens/month that's a $1,500-3,000/month delta that compounds forever..."*
 
-That's generic advice. It doesn't tell you whether there's an actual bug or just a theoretical concern. Two models said it's safe, two said it's not — the aggregator split the difference.
+**api-pragmatist**: *"Use Claude Sonnet with RAG. Don't fine-tune. With a 2-person ML team, fine-tuning will consume 4-8 weeks of engineering time before you've shipped a single feature. Claude with a well-structured RAG pipeline can be production-ready in 1-2 weeks..."*
 
-Gemot finds the crux:
+**hybrid-architect**: *"Use Claude Sonnet with RAG. Don't fine-tune. Fine-tuning Llama 3.3 8B is an operational trap: you'll spend 60-70% of engineering bandwidth on training pipelines and retraining cycles. Fine-tuning encodes past knowledge into weights — every policy update requires a new training run; RAG gives you that for free..."*
 
-> **"The read-modify-write pattern `d[key] = d.get(key, 0) + 1` is atomic under CPython's GIL"**
->
-> AGREE (safe): claude-opus, gpt-5.4-pro
-> DISAGREE (unsafe): gemini-3-pro, deepseek-v3.2
-> Type: **factual** — checkable by reading CPython bytecode
+We submitted these positions to gemot and ran analysis. Here's what it found:
 
-That's actionable. You can `dis.dis(increment)` and see it compiles to `LOAD_ATTR (get)` → `CALL` → `BINARY_OP (add)` → `STORE_SUBSCR` — four bytecodes, not one. The GIL can release between any of them. Gemini and DeepSeek are right.
+### Cruxes detected
 
-The aggregator would have gotten there eventually with enough prompting. Gemot gets there structurally, every time, and tells you it's a factual question you can verify.
+**1. "Fine-tuning on 50K support tickets primarily encodes style, not reasoning"**
+- Controversy: 67%
+- AGREE: api-pragmatist, hybrid-architect
+- DISAGREE: open-weight-advocate
+- *The core technical disagreement. Testable: run an eval comparing fine-tuned 8B on reasoning-heavy support cases vs Claude+RAG on the same cases.*
+
+**2. "50K tickets meaningfully improve domain reasoning beyond surface-level style"**
+- Controversy: 100%
+- AGREE: open-weight-advocate
+- DISAGREE: hybrid-architect
+- *Factual — measurable by comparing fine-tuned performance on edge cases vs base model.*
+
+**3. "At ~10M tokens/month, self-hosted inference savings justify switching from a closed API"**
+- Controversy: 100%
+- AGREE: open-weight-advocate
+- DISAGREE: hybrid-architect
+- *Factual — calculable. The open-weight advocate says the delta is $1,500-3,000/month; the hybrid architect says the threshold is ~$50K/month.*
+
+**4. "Vendor lock-in risk outweighs self-hosting operational risk for a small team"**
+- Controversy: 100%
+- AGREE: open-weight-advocate
+- DISAGREE: hybrid-architect
+- *Value judgment — depends on risk tolerance. Not resolvable with evidence.*
+
+### What this gives the parent agent
+
+Instead of hedging ("Both approaches have merit..."), the parent agent can tell the user:
+
+> "Your subagents agree that RAG is faster to deploy and easier to maintain. They disagree on whether fine-tuning encodes real reasoning or just style — **that's testable with an eval on your hardest support tickets.** They also disagree on the cost break-even point — **the open-weight advocate says $1.5K/month savings, the architect says you'd need $50K/month API spend to justify it. Check your actual projected volume.**"
+
+That's three specific next steps, not a vague recommendation.
 
 ## How it works
 
-Run disagreement analysis in parallel with aggregation. Gemot takes ~30s; MoA aggregation typically takes 15-30s. When they overlap, the additional wait is minimal or zero:
+After `delegate_task` returns conflicting subagent summaries, the parent agent submits them to gemot for structured analysis. Runs in parallel with any other post-processing:
 
 ```python
-# The integration point — two lines in the MoA flow:
+# The integration point — after delegate_task returns:
 aggregated, crux_analysis = await asyncio.gather(
-    aggregate_with_model(aggregator_model, reference_responses, query),
-    analyze_disagreements(query, reference_responses),  # gemot
+    synthesize_subagent_results(summaries),  # existing Hermes flow
+    analyze_disagreements(query, summaries),  # gemot
 )
 
 if crux_analysis and crux_analysis.get("relevant_cruxes"):
     cruxes = crux_analysis["relevant_cruxes"]
-    logger.info(
-        "Models disagreed on %d point(s): %s",
-        len(cruxes), cruxes[0]["crux_claim"][:100]
-    )
-    # Optionally: feed cruxes back to the aggregator for focused re-synthesis
+    # Surface to user: "Subagents disagreed on 4 points. The key question is..."
 ```
 
 <details>
@@ -65,7 +79,7 @@ GEMOT_URL = "http://localhost:8080/a2a"  # self-hosted, see setup below
 async def analyze_disagreements(
     query: str, responses: Dict[str, str]
 ) -> Optional[Dict]:
-    """Find where models actually disagree. Runs in parallel with aggregation."""
+    """Find where subagents actually disagree. Non-blocking, graceful degradation."""
     try:
         async with httpx.AsyncClient() as c:
             # Create deliberation
@@ -76,14 +90,14 @@ async def analyze_disagreements(
             })
             delib_id = r.json()["result"]["deliberation_id"]
 
-            # Each model's response becomes a position
-            for i, (model, text) in enumerate(responses.items()):
+            # Each subagent's response becomes a position
+            for i, (agent_id, text) in enumerate(responses.items()):
                 await c.post(GEMOT_URL, json={
                     "jsonrpc": "2.0", "id": i + 10,
                     "method": "gemot/submit_position",
                     "params": {
                         "deliberation_id": delib_id,
-                        "agent_id": model,
+                        "agent_id": agent_id,
                         "content": text
                     }
                 })
@@ -97,55 +111,62 @@ async def analyze_disagreements(
 
             # Poll until done
             for _ in range(60):
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 r = await c.post(GEMOT_URL, json={
                     "jsonrpc": "2.0", "id": 101,
                     "method": "gemot/get_deliberation",
                     "params": {"deliberation_id": delib_id}
                 })
                 status = r.json()["result"]["status"]
-                if status == "open":  # analysis complete, round advanced
+                if status == "open":
                     break
                 if status != "analyzing":
-                    return None  # unexpected state
+                    return None
 
-            # Get structured results
-            first_model = next(iter(responses))
+            first_agent = next(iter(responses))
             r = await c.post(GEMOT_URL, json={
                 "jsonrpc": "2.0", "id": 102,
                 "method": "gemot/get_context",
                 "params": {
                     "deliberation_id": delib_id,
-                    "agent_id": first_model
+                    "agent_id": first_agent
                 }
             })
             return r.json()["result"]
     except Exception as e:
         logger.warning("Gemot analysis failed (non-fatal): %s", e)
-        return None  # graceful degradation — MoA works fine without it
+        return None
 ```
 
 </details>
 
-## When is this worth it vs. prompting the aggregator?
+## When is this worth it vs. just reading the summaries?
 
-You can add "identify where the models disagree, then synthesize" to the aggregator prompt for free. For most MoA queries, that's sufficient.
+For 2-3 short subagent summaries, a human (or a well-prompted parent agent) can spot the disagreements. Gemot adds value when:
 
-Gemot adds value when:
-
-| Situation | Prompted aggregator | Gemot |
+| Situation | Reading summaries | Gemot |
 |-----------|-------------------|-------|
-| **Debugging wrong synthesis** | Re-read 4 responses manually | Check which crux the aggregator resolved incorrectly |
-| **Consistent results** | Varies with sampling temperature | Deterministic pipeline, same structure every time |
-| **Multi-round refinement** | Stateless — start over | Tracks positions across rounds, conviction time-weighting |
-| **10+ model responses** | Degrades (context window pressure) | Scales (per-position extraction) |
-| **Audit trail needed** | Single LLM's interpretation | Structured claims with source tracing |
+| **Debugging wrong synthesis** | Re-read all summaries | Check which crux the parent resolved incorrectly |
+| **Consistent structure** | Depends on the parent agent | Same crux format every time |
+| **Classifying disagreements** | Manual judgment | Automatic: factual (testable) vs value (preference) |
+| **Multi-round** | Stateless | Subagents can refine positions after seeing cruxes |
+| **5+ subagents** | Hard to track all disagreements | Scales with claim extraction |
 
-Start with prompted aggregation. Add gemot when the simple approach isn't catching subtle disagreements, or when you need to debug why a synthesis was wrong.
+Start without gemot. Add it when you need structured crux analysis or when the parent agent keeps producing vague syntheses.
+
+## What we tested
+
+- Hermes v0.6.0, three `AIAgent` instances with different system prompts
+- Connected to gemot via MCP Streamable HTTP — tool discovery works automatically
+- Positions submitted to gemot via A2A JSON-RPC (simpler than MCP for this use case)
+- Full analysis pipeline: taxonomy (5 topics), claim extraction (15 claims), deduplication, crux detection (4 cruxes), classification
+
+**What's verified**: agent position generation, MCP tool discovery, A2A position submission, full analysis producing real cruxes
+**What's proposed**: the `delegate_task` integration pattern and the parent-agent crux synthesis
 
 ## Setup
 
-Gemot is a single Go binary. Self-hosted, data stays between your machine and your LLM provider (Anthropic by default — same privacy model as Hermes itself).
+Self-hosted (single Go binary, data stays between your machine and your LLM provider):
 
 ```bash
 git clone https://github.com/justinstimatze/gemot.git
@@ -153,9 +174,7 @@ cd gemot && go build -o gemot .
 GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http --addr :8080
 ```
 
-Analysis uses Sonnet by default (~$0.30 per run). Runs in ~30s.
-
-Alternatively, use the hosted version at `https://gemot.dev/a2a` (free sandbox, 48h retention) or connect via MCP:
+Or connect via MCP (Hermes auto-discovers all tools):
 
 ```yaml
 # ~/.hermes/config.yaml
@@ -165,13 +184,7 @@ mcp_servers:
     timeout: 120
 ```
 
-## Same pattern, other workflows
-
-Anywhere Hermes aggregates multiple agent outputs:
-
-- **`delegate_task` batch**: 3 subagent reviewers disagree → gemot finds the specific contested claim, not just "reviewers disagree"
-- **Research paper self-review**: Review angles conflict → gemot identifies whether it's a scope disagreement or a completeness gap
-- **Any multi-perspective task**: N agent outputs → structured agreement/disagreement map → focused synthesis
+Analysis uses Sonnet (~$0.30 per run, ~90s).
 
 ## For Issue #412
 
@@ -179,8 +192,6 @@ Gemot's analysis pipeline — claim extraction, deduplication, multi-candidate c
 
 ## Next step
 
-We'd like to submit a PR adding an optional `analyze_disagreements` flag to the MoA tool. ~50 lines, off by default, runs in parallel with aggregation. If crux analysis improves MoA quality on hard problems, it earns its place. If not, easy to revert.
-
-We tested Hermes v0.6.0 connecting to gemot via MCP Streamable HTTP — tool discovery and calls work. For MoA specifically, the direct HTTP approach above is simpler.
+We'd like to submit a PR adding optional disagreement analysis to `delegate_task` batch results. Off by default, runs in parallel. The test above is reproducible — [test script](scripts/hermes-test/run_finetuning_test.py).
 
 Source: [github.com/justinstimatze/gemot](https://github.com/justinstimatze/gemot) (MIT)
