@@ -58,12 +58,24 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 
 	mux := http.NewServeMux()
 
-	// MCP endpoints — Streamable HTTP (modern, POST+GET) and SSE (legacy, GET only)
-	// Both require bearer token (API key or admin secret) or MPP payment
-	// /mcp serves streamable HTTP for modern clients (Hermes, Claude Code, etc.)
-	// /mcp/sse serves legacy SSE for older clients (Claude Desktop, Cursor, etc.)
-	mux.Handle("/mcp", paymentMiddleware(mcpStreamHandler))
-	mux.Handle("/mcp/", paymentMiddleware(mcpStreamHandler))
+	// MCP endpoint — auto-negotiates between Streamable HTTP and SSE.
+	// POST requests and GET with Mcp-Session-Id → streamable HTTP (modern clients)
+	// GET without Mcp-Session-Id → SSE (Claude Code, Claude Desktop, Cursor)
+	// /mcp/sse is an explicit SSE fallback.
+	mcpAutoHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// SSE transport: GET without session header, or any request with ?sessionid= (SSE session param)
+		if r.URL.Query().Get("sessionid") != "" {
+			mcpSSEHandler.ServeHTTP(w, r)
+			return
+		}
+		if r.Method == http.MethodGet && r.Header.Get("Mcp-Session-Id") == "" {
+			mcpSSEHandler.ServeHTTP(w, r)
+			return
+		}
+		mcpStreamHandler.ServeHTTP(w, r)
+	})
+	mux.Handle("/mcp", paymentMiddleware(mcpAutoHandler))
+	mux.Handle("/mcp/", paymentMiddleware(mcpAutoHandler))
 	mux.Handle("/mcp/sse/", paymentMiddleware(mcpSSEHandler))
 	mux.Handle("/mcp/sse", paymentMiddleware(mcpSSEHandler))
 
