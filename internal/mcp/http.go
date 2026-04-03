@@ -58,26 +58,62 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 
 	mux := http.NewServeMux()
 
+	// sseKeepalive wraps an http.Handler to send SSE comment keepalives every 10s.
+	// Prevents Fly.io proxy from killing idle SSE connections during long analyses.
+	sseKeepalive := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				next.ServeHTTP(w, r)
+				return
+			}
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				next.ServeHTTP(w, r)
+				return
+			}
+			done := make(chan struct{})
+			go func() {
+				ticker := time.NewTicker(10 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						// SSE comment line — ignored by clients, keeps connection alive
+						fmt.Fprintf(w, ": keepalive\n\n")
+						flusher.Flush()
+					case <-done:
+						return
+					case <-r.Context().Done():
+						return
+					}
+				}
+			}()
+			next.ServeHTTP(w, r)
+			close(done)
+		})
+	}
+
 	// MCP endpoint — auto-negotiates between Streamable HTTP and SSE.
 	// POST requests and GET with Mcp-Session-Id → streamable HTTP (modern clients)
 	// GET without Mcp-Session-Id → SSE (Claude Code, Claude Desktop, Cursor)
 	// /mcp/sse is an explicit SSE fallback.
+	mcpSSEWithKeepalive := sseKeepalive(mcpSSEHandler)
 	mcpAutoHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// SSE transport: GET without session header, or any request with ?sessionid= (SSE session param)
 		if r.URL.Query().Get("sessionid") != "" {
-			mcpSSEHandler.ServeHTTP(w, r)
+			mcpSSEWithKeepalive.ServeHTTP(w, r)
 			return
 		}
 		if r.Method == http.MethodGet && r.Header.Get("Mcp-Session-Id") == "" {
-			mcpSSEHandler.ServeHTTP(w, r)
+			mcpSSEWithKeepalive.ServeHTTP(w, r)
 			return
 		}
 		mcpStreamHandler.ServeHTTP(w, r)
 	})
 	mux.Handle("/mcp", paymentMiddleware(mcpAutoHandler))
 	mux.Handle("/mcp/", paymentMiddleware(mcpAutoHandler))
-	mux.Handle("/mcp/sse/", paymentMiddleware(mcpSSEHandler))
-	mux.Handle("/mcp/sse", paymentMiddleware(mcpSSEHandler))
+	mux.Handle("/mcp/sse/", paymentMiddleware(mcpSSEWithKeepalive))
+	mux.Handle("/mcp/sse", paymentMiddleware(mcpSSEWithKeepalive))
 
 	// Join page — content-negotiated landing for join codes
 	mux.HandleFunc("/join/", func(w http.ResponseWriter, r *http.Request) {
