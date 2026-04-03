@@ -617,8 +617,8 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	var bridging []deliberation.BridgingStatement
 	if refused {
 		warnings = append(warnings, "ANALYSIS_REFUSED: integrity too compromised to produce reliable consensus/bridging. Cruxes and warnings are still available. Fix the underlying issues and re-analyze.")
-	} else if len(votes) == 0 || !hasVotesForCurrentPositions(votes, positions) {
-		// No votes on current positions (e.g. bilateral negotiations, or multi-round
+	} else if len(votes) == 0 || !hasVotesForLatestPositions(votes, positions) {
+		// No votes on latest-round positions (e.g. bilateral negotiations, or multi-round
 		// where new positions were submitted without voting): use LLM agreement detection
 		consensus, bridging = a.findAgreementsLLM(ctx, deliberationTopic, positions, cruxes)
 	} else {
@@ -1541,16 +1541,29 @@ func consensusThreshold(ctx context.Context) float64 {
 	return 0.67 // default supermajority
 }
 
-// hasVotesForCurrentPositions checks whether any votes reference the current
-// set of positions. In multi-round deliberations, old votes on previous-round
-// positions shouldn't prevent LLM agreement detection on new positions.
-func hasVotesForCurrentPositions(votes []deliberation.Vote, positions []deliberation.Position) bool {
-	posIDs := make(map[string]bool, len(positions))
+// hasVotesForLatestPositions checks whether any votes reference positions from
+// the latest round. In multi-round deliberations, old votes on round 1 positions
+// shouldn't prevent LLM agreement detection on round 2+ positions that have no votes.
+func hasVotesForLatestPositions(votes []deliberation.Vote, positions []deliberation.Position) bool {
+	// Find the latest round
+	maxRound := 0
 	for _, p := range positions {
-		posIDs[p.ID] = true
+		if p.Round > maxRound {
+			maxRound = p.Round
+		}
 	}
+
+	// Collect position IDs from the latest round only
+	latestIDs := make(map[string]bool)
+	for _, p := range positions {
+		if p.Round == maxRound {
+			latestIDs[p.ID] = true
+		}
+	}
+
+	// Check if any votes target latest-round positions
 	for _, v := range votes {
-		if posIDs[v.PositionID] {
+		if latestIDs[v.PositionID] {
 			return true
 		}
 	}
