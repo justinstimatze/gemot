@@ -13,7 +13,9 @@ $ hermes --query "Review this payment code from 3 specialist perspectives,
   ┊ 📋 plan      4 task(s)
   ┊ ⚡ delegate_task  [3 specialist reviews in parallel]
   ┊ ⚡ mcp_gemot_create_deliberation
-  ┊ ⚡ mcp_gemot_submit_position  ×3
+  ┊ ⚡ mcp_gemot_submit_position  (security)
+  ┊ ⚡ mcp_gemot_submit_position  (reliability)
+  ┊ ⚡ mcp_gemot_submit_position  (performance)
   ┊ ⚡ mcp_gemot_analyze
   ┊ ⚡ mcp_gemot_get_deliberation  [polling...]
   ┊ ⚡ mcp_gemot_get_context
@@ -66,7 +68,7 @@ mcp_servers:
     timeout: 180
 ```
 
-A [`deliberated-review` skill](integrations/hermes-agent/skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit positions → analyze → report cruxes.
+A [`deliberated-review` skill](https://github.com/justinstimatze/gemot/blob/main/integrations/hermes-agent/skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit positions → analyze → report cruxes.
 
 The full flow takes 3-5 minutes (delegate_task ~1 min, gemot analysis ~2-3 min, polling ~1 min). Best for architecture decisions and thorny PRs, not every commit. Set `max_iterations` to 40+ to leave room for the polling loop. Analysis costs ~$0.30 per run (Sonnet).
 
@@ -79,6 +81,8 @@ go build -o gemot . && GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http --addr :8080
 ## On #412
 
 Build the voting engine natively — it's ~200 LOC. Gemot is for what voting can't tell you: *why* the vote split, and what question would resolve it.
+
+The demo was single-round — 4 useful cruxes without iteration. Gemot supports multi-round refinement (agents read cruxes, adjust positions, re-analyze) for deeper architecture discussions.
 
 **Next:** PR to `delegate_task` adding optional disagreement analysis. Off by default.
 
