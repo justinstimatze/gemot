@@ -226,7 +226,7 @@ func callToolText(t *testing.T, session *sdkmcp.ClientSession, name string, args
 	return result.Content[0].(*sdkmcp.TextContent).Text
 }
 
-// TestDataPersistsAcrossRequests verifies that SQLite data on the Fly volume
+// TestDataPersistsAcrossRequests verifies that Postgres data
 // persists across MCP connections: create data, disconnect, reconnect, verify.
 //
 // Requires GEMOT_LIVE_URL and GEMOT_API_SECRET env vars.

@@ -7,7 +7,7 @@ import (
 )
 
 type Config struct {
-	DBPath       string
+	DatabaseURL  string
 	AnthropicKey string
 	Model        string
 }
@@ -16,7 +16,7 @@ func Load() *Config {
 	loadDotenv(".env")
 
 	return &Config{
-		DBPath:       envOr("GEMOT_DB", ".gemot/gemot.db"),
+		DatabaseURL:  envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
 		AnthropicKey: os.Getenv("GEMOT_ANTHROPIC_KEY"),
 		Model:        envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
 	}

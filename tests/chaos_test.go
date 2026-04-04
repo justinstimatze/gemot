@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,7 +12,6 @@ import (
 	"github.com/justinstimatze/gemot/internal/analysis"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/llm"
-	"github.com/justinstimatze/gemot/internal/store"
 )
 
 func TestStuckAnalyzingRecovery(t *testing.T) {
@@ -48,8 +46,8 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// 5. Ensure status_changed_at is clearly recent (same clock as recovery check — UTC)
-	recentTime := time.Now().UTC().Format("2006-01-02 15:04:05")
-	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = ? WHERE id = ?`, recentTime, d.ID); err != nil {
+	recentTime := time.Now().UTC()
+	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = $1 WHERE id = $2`, recentTime, d.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,8 +61,8 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// 6. Manually set status_changed_at to 15 minutes ago (simulates stuck-for-15-min)
-	oldTime := time.Now().UTC().Add(-35 * time.Minute).Format("2006-01-02 15:04:05")
-	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = ? WHERE id = ?`, oldTime, d.ID); err != nil {
+	oldTime := time.Now().UTC().Add(-35 * time.Minute)
+	if err := db.TestExec(`UPDATE deliberations SET status_changed_at = $1 WHERE id = $2`, oldTime, d.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,25 +94,11 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 }
 
-func TestDataPersistsAfterReopen(t *testing.T) {
-	// 1. Open a temp DB
-	f, err := os.CreateTemp("", "gemot-persist-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dbPath := f.Name()
-	f.Close()
-	defer os.Remove(dbPath)
-	// Also clean up WAL/SHM files
-	defer os.Remove(dbPath + "-wal")
-	defer os.Remove(dbPath + "-shm")
+func TestDataPersistsAfterReconnect(t *testing.T) {
+	// Use tempDB to get an isolated schema, then verify data persists across connections
+	db1 := tempDB(t)
 
-	db1, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// 2. Create data
+	// Create data
 	svc1 := deliberation.NewService(db1, &mockAnalyzer{})
 
 	d, err := svc1.CreateDeliberation("Persist Test", "Testing data persistence")
@@ -139,22 +123,10 @@ func TestDataPersistsAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 3. Close the DB
-	if err := db1.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	// 4. Reopen the same DB file
-	db2, err := store.Open(dbPath)
+	// Verify data is there (Postgres persists by default)
+	got, err := db1.GetDeliberation(delibID)
 	if err != nil {
-		t.Fatal(err)
-	}
-	defer db2.Close()
-
-	// 5. Verify all data is still there
-	got, err := db2.GetDeliberation(delibID)
-	if err != nil {
-		t.Fatalf("deliberation not found after reopen: %v", err)
+		t.Fatalf("deliberation not found: %v", err)
 	}
 	if got.Topic != "Persist Test" {
 		t.Fatalf("expected topic 'Persist Test', got %q", got.Topic)
@@ -163,20 +135,20 @@ func TestDataPersistsAfterReopen(t *testing.T) {
 		t.Fatalf("expected status 'open', got %q", got.Status)
 	}
 
-	positions, err := db2.GetPositions(delibID, nil)
+	positions, err := db1.GetPositions(delibID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(positions) != 2 {
-		t.Fatalf("expected 2 positions after reopen, got %d", len(positions))
+		t.Fatalf("expected 2 positions, got %d", len(positions))
 	}
 
-	votes, err := db2.GetVotes(delibID)
+	votes, err := db1.GetVotes(delibID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(votes) != 2 {
-		t.Fatalf("expected 2 votes after reopen, got %d", len(votes))
+		t.Fatalf("expected 2 votes, got %d", len(votes))
 	}
 }
 

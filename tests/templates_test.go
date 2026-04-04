@@ -298,7 +298,7 @@ func TestCoolingPeriodEnforcement(t *testing.T) {
 	}
 
 	// Manually set status_changed_at to 5 minutes ago (within the 60-min cooling period)
-	db.RawDB().Exec(`UPDATE deliberations SET status_changed_at = datetime('now', '-5 minutes'), status = 'open', round_number = 2 WHERE id = ?`, d.ID)
+	db.RawDB().Exec(`UPDATE deliberations SET status_changed_at = NOW() - INTERVAL '5 minutes', status = 'open', round_number = 2 WHERE id = $1`, d.ID)
 
 	// Submit more positions for round 2
 	svc.SubmitPosition(d.ID, "agent1", "Position C round 2")
