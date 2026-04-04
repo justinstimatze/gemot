@@ -309,7 +309,7 @@ func TestForcedAcknowledgment(t *testing.T) {
 	}
 
 	// Simulate advancing to round 2
-	db.TestExec("UPDATE deliberations SET round_number = 2 WHERE id = ?", d.ID)
+	db.TestExec("UPDATE deliberations SET round_number = 2 WHERE id = $1", d.ID)
 
 	// Round 2: submit without calling get_context should fail
 	_, err = svc.SubmitPosition(d.ID, "agent1", "Updated position")

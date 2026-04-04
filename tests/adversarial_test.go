@@ -200,7 +200,8 @@ func TestUnicodeAndSpecialChars(t *testing.T) {
 		"Position with SQL injection attempt: '; DROP TABLE positions; --",
 		"Position with HTML: <script>alert('xss')</script>",
 		"Position with newlines:\n\nParagraph 1\n\nParagraph 2",
-		"Position with null bytes: \x00\x00\x00",
+		// Note: Postgres TEXT columns do not support null bytes (\x00).
+		// This is by design — null bytes are stripped/rejected at the protocol level.
 	}
 
 	for i, content := range positions {
@@ -217,7 +218,7 @@ func TestUnicodeAndSpecialChars(t *testing.T) {
 		for _, g := range got {
 			if g.ID == p.ID {
 				found = true
-				// Don't check exact match for null bytes (SQLite may handle them differently)
+				// Don't check exact match for null bytes (DB may handle them differently)
 				break
 			}
 		}

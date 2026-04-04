@@ -42,7 +42,7 @@ func main() {
 func cmdServe(httpMode bool, addr string) {
 	cfg := config.Load()
 
-	db, err := store.Open(cfg.DBPath)
+	db, err := store.Open(cfg.DatabaseURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 		os.Exit(1)

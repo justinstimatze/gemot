@@ -1,20 +1,12 @@
 package tests
 
 import (
-	"os"
 	"testing"
 
 	"github.com/justinstimatze/gemot/internal/payments"
 )
 
 func TestCreditStoreBasics(t *testing.T) {
-	f, err := os.CreateTemp("", "gemot-billing-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	defer os.Remove(f.Name())
-
 	db := tempDB(t)
 	store, err := payments.NewCreditStore(db.RawDB())
 	if err != nil {

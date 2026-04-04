@@ -29,7 +29,7 @@ var staticFS embed.FS
 func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr string) error {
 	apiSecret := os.Getenv("GEMOT_API_SECRET")
 
-	// Initialize credit store (uses the same SQLite DB)
+	// Initialize credit store (uses the same Postgres DB)
 	creditStore, err := payments.NewCreditStore(db)
 	if err != nil {
 		return fmt.Errorf("initializing credit store: %w", err)
