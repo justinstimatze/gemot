@@ -3,13 +3,6 @@ primary_region = "sjc"
 
 [build]
 
-[env]
-  GEMOT_DB = "/data/gemot.db"
-
-[mounts]
-  source = "gemot_data"
-  destination = "/data"
-
 [http_service]
   internal_port = 8080
   force_https = true
@@ -18,7 +11,7 @@ primary_region = "sjc"
   min_machines_running = 0
 
 [deploy]
-  strategy = "rolling"
+  strategy = "bluegreen"
 
   [http_service.concurrency]
     type = "connections"

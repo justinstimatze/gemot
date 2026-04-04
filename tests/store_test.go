@@ -1,27 +1,84 @@
 package tests
 
 import (
+	"database/sql"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/store"
 )
 
+// testDSN returns the Postgres DSN for tests.
+// Uses DATABASE_URL env var, falling back to a local default.
+func testDSN() string {
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		return dsn
+	}
+	return "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
+}
+
+// tempDB creates an isolated Postgres schema for each test and returns a store.DB.
+// The schema is dropped on test cleanup, giving each test a clean slate.
 func tempDB(t *testing.T) *store.DB {
 	t.Helper()
-	f, err := os.CreateTemp("", "gemot-test-*.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-	t.Cleanup(func() { os.Remove(f.Name()) })
 
-	db, err := store.Open(f.Name())
+	// Create a unique schema name from the test name
+	schemaName := "test_" + strings.ReplaceAll(
+		strings.ReplaceAll(t.Name(), "/", "_"),
+		"-", "_",
+	)
+	// Postgres identifiers max 63 chars; truncate if needed and add uniqueness
+	if len(schemaName) > 50 {
+		schemaName = schemaName[:50]
+	}
+	// Add a short unique suffix to avoid collisions from truncation
+	schemaName = fmt.Sprintf("%s_%d", schemaName, os.Getpid()%10000)
+
+	dsn := testDSN()
+
+	// Connect to create/drop the schema
+	rawDB, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+
+	// Create schema and set search_path
+	if _, err := rawDB.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName)); err != nil {
+		rawDB.Close()
+		t.Fatal(err)
+	}
+	if _, err := rawDB.Exec(fmt.Sprintf("CREATE SCHEMA %s", schemaName)); err != nil {
+		rawDB.Close()
+		t.Fatal(err)
+	}
+	rawDB.Close()
+
+	// Build DSN with search_path set to the test schema
+	schemaDSN := dsn
+	if strings.Contains(schemaDSN, "?") {
+		schemaDSN += "&search_path=" + schemaName
+	} else {
+		schemaDSN += "?search_path=" + schemaName
+	}
+
+	db, err := store.Open(schemaDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		db.Close()
+		// Drop the schema
+		cleanDB, err := sql.Open("pgx", dsn)
+		if err == nil {
+			cleanDB.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName)) //nolint:errcheck
+			cleanDB.Close()
+		}
+	})
 	return db
 }
 

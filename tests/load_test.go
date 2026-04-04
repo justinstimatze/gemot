@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// TestConcurrentToolCalls verifies SQLite concurrency under realistic load.
+// TestConcurrentToolCalls verifies database concurrency under realistic load.
 // Uses a local test service with mockAnalyzer, not the live server.
 func TestConcurrentToolCalls(t *testing.T) {
 	svc, db := newTestService(t)

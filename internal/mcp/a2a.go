@@ -23,9 +23,9 @@ func sanitizeError(err error) string {
 	if errors.Is(err, sql.ErrNoRows) || strings.Contains(msg, "no rows") {
 		return "not found"
 	}
-	// Don't leak internal SQLite/DB errors
-	if strings.Contains(msg, "SQLITE") || strings.Contains(msg, "database") ||
-		strings.Contains(msg, "disk") || strings.Contains(msg, "locked") {
+	// Don't leak internal DB errors
+	if strings.Contains(msg, "SQLITE") || strings.Contains(msg, "pq:") || strings.Contains(msg, "database") ||
+		strings.Contains(msg, "disk") || strings.Contains(msg, "locked") || strings.Contains(msg, "pgx") {
 		log.Printf("[gemot] internal error (sanitized): %v", err)
 		return "internal error"
 	}

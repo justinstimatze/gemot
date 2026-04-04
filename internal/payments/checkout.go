@@ -167,7 +167,7 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 			if email != "" && credits > 0 {
 				// Check idempotency — skip if this session was already processed
 				var existingKey string
-				err := store.db.QueryRow("SELECT key FROM api_keys WHERE stripe_session_id = ?", sess.ID).Scan(&existingKey)
+				err := store.db.QueryRow("SELECT key FROM api_keys WHERE stripe_session_id = $1", sess.ID).Scan(&existingKey)
 				if err == nil {
 					// Already processed
 					keyPreview := existingKey
@@ -245,7 +245,7 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
 		var key string
 		var balance int
 		err = store.db.QueryRow(
-			`SELECT key, credits_remaining FROM api_keys WHERE email = ? ORDER BY created_at DESC LIMIT 1`,
+			`SELECT key, credits_remaining FROM api_keys WHERE email = $1 ORDER BY created_at DESC LIMIT 1`,
 			email,
 		).Scan(&key, &balance)
 

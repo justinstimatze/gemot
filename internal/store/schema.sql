@@ -5,12 +5,15 @@ CREATE TABLE IF NOT EXISTS deliberations (
     round_number INTEGER DEFAULT 1,
     status TEXT DEFAULT 'open',
     sub_status TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now')),
-    status_changed_at TEXT DEFAULT (datetime('now')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    status_changed_at TIMESTAMPTZ DEFAULT NOW(),
     type TEXT DEFAULT '',
     visibility TEXT DEFAULT 'open',
     creator_key TEXT DEFAULT '',
-    max_participants INTEGER DEFAULT 0
+    max_participants INTEGER DEFAULT 0,
+    template TEXT DEFAULT '',
+    rules TEXT DEFAULT '{}',
+    group_id TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS positions (
@@ -20,12 +23,13 @@ CREATE TABLE IF NOT EXISTS positions (
     content TEXT NOT NULL,
     model_family TEXT DEFAULT '',
     group_name TEXT DEFAULT '',
-    conviction REAL DEFAULT 0.5,
+    conviction DOUBLE PRECISION DEFAULT 0.5,
     reservation TEXT DEFAULT '',
     on_behalf_of TEXT DEFAULT '',
+    interests TEXT DEFAULT '',
     draft INTEGER DEFAULT 0,
     round_number INTEGER DEFAULT 1,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS votes (
@@ -35,7 +39,7 @@ CREATE TABLE IF NOT EXISTS votes (
     position_id TEXT NOT NULL REFERENCES positions(id),
     value INTEGER NOT NULL CHECK (value IN (-1, 0, 1)),
     criterion_id TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(deliberation_id, agent_id, position_id, criterion_id)
 );
 
@@ -44,13 +48,9 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     deliberation_id TEXT NOT NULL REFERENCES deliberations(id),
     round_number INTEGER NOT NULL,
     result_json TEXT NOT NULL,
-    analyzed_at TEXT DEFAULT (datetime('now')),
+    analyzed_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(deliberation_id, round_number)
 );
-
--- Migration: add sub_status column if missing (safe to run multiple times)
--- SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we use a pragma check
--- This is handled in Go code instead.
 
 CREATE TABLE IF NOT EXISTS delegations (
     id TEXT PRIMARY KEY,
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS delegations (
     to_agent TEXT NOT NULL,
     scope TEXT DEFAULT '',
     active INTEGER DEFAULT 1,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(deliberation_id, from_agent)
 );
 
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS commitments (
     statement TEXT NOT NULL,
     conditional TEXT DEFAULT '',
     status TEXT DEFAULT 'pending',
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_commitments_delib ON commitments(deliberation_id);
@@ -82,16 +82,18 @@ CREATE TABLE IF NOT EXISTS join_codes (
     code TEXT PRIMARY KEY,
     deliberation_id TEXT NOT NULL REFERENCES deliberations(id),
     role TEXT DEFAULT '',
-    expires_at TEXT NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
     used INTEGER DEFAULT 0,
     used_by TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now'))
+    max_uses INTEGER DEFAULT 1,
+    use_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS deliberation_acl (
     deliberation_id TEXT NOT NULL REFERENCES deliberations(id),
     key_id TEXT NOT NULL,
-    added_at TEXT DEFAULT (datetime('now')),
+    added_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (deliberation_id, key_id)
 );
 
@@ -103,7 +105,7 @@ CREATE TABLE IF NOT EXISTS invitations (
     role TEXT DEFAULT '',
     reason TEXT NOT NULL,
     status TEXT DEFAULT 'pending',
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_invitations_delib ON invitations(deliberation_id);
@@ -114,7 +116,7 @@ CREATE TABLE IF NOT EXISTS disputes (
     agent_id TEXT NOT NULL,
     crux_claim TEXT NOT NULL,
     correction TEXT NOT NULL,
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_disputes_delib ON disputes(deliberation_id);
@@ -127,8 +129,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     api_key TEXT DEFAULT '',
     credit_cost INTEGER DEFAULT 0,
     error TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now')),
-    completed_at TEXT DEFAULT ''
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
@@ -137,8 +139,55 @@ CREATE TABLE IF NOT EXISTS llm_cache (
     cache_key TEXT PRIMARY KEY,
     response_json TEXT NOT NULL,
     model TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now'))
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS abuse_reports (
+    id TEXT PRIMARY KEY,
+    deliberation_id TEXT NOT NULL,
+    reporter_key TEXT DEFAULT '',
+    reason TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ DEFAULT NOW(),
+    key_id TEXT DEFAULT '',
+    ip TEXT DEFAULT '',
+    method TEXT NOT NULL,
+    deliberation_id TEXT DEFAULT '',
+    agent_id TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS context_access (
+    deliberation_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    round INTEGER NOT NULL,
+    accessed_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (deliberation_id, agent_id, round)
+);
+
+CREATE TABLE IF NOT EXISTS share_tokens (
+    token TEXT PRIMARY KEY,
+    group_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS api_keys (
+    key TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    credits_remaining INTEGER DEFAULT 0,
+    stripe_customer_id TEXT DEFAULT '',
+    stripe_session_id TEXT DEFAULT '',
+    suspended INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
+CREATE INDEX IF NOT EXISTS idx_api_keys_stripe ON api_keys(stripe_customer_id);
 
 CREATE INDEX IF NOT EXISTS idx_positions_delib ON positions(deliberation_id, round_number);
 CREATE INDEX IF NOT EXISTS idx_votes_delib ON votes(deliberation_id);
