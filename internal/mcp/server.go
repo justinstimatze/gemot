@@ -264,6 +264,16 @@ func newServer(s *server) *sdkmcp.Server {
 		Description: "Get an agent's commitment track record: fulfilled, broken, pending counts and trust score. Optionally scoped to a group_id for cross-deliberation reputation within an experiment.",
 	}, s.handleAgentReputation)
 
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "cancel_analysis",
+		Description: "Cancel an in-progress analysis. Resets the deliberation from 'analyzing' back to 'open' so new positions/votes can be submitted.",
+	}, s.handleCancelAnalysis)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "withdraw",
+		Description: "Withdraw an agent from a deliberation. Hides their positions, deletes their votes, and revokes their delegations. The agent can rejoin later by submitting a new position.",
+	}, s.handleWithdraw)
+
 	return srv
 }
 
@@ -285,6 +295,7 @@ type createDeliberationParams struct {
 	Template        string         `json:"template,omitempty"`         // optional: governance template (assembly, jury, etc.)
 	Rules           map[string]any `json:"rules,omitempty"`           // optional: governance rules (min_participants, cooling_period_minutes, position_cost)
 	GroupID         string         `json:"group_id,omitempty"`        // optional: links related deliberations (experiment, workflow, session)
+	DeadlineMinutes int            `json:"deadline_minutes,omitempty"` // optional: minutes until deliberation deadline
 }
 
 type proposeCompromiseParams struct {
@@ -413,6 +424,15 @@ type getContextParams struct {
 	AgentID        string `json:"agent_id"`
 }
 
+type cancelAnalysisParams struct {
+	DeliberationID string `json:"deliberation_id"`
+}
+
+type withdrawParams struct {
+	DeliberationID string `json:"deliberation_id"`
+	AgentID        string `json:"agent_id"`
+}
+
 // --- Handlers ---
 
 func (s *server) handleCreateDeliberation(ctx context.Context, _ *sdkmcp.CallToolRequest, args createDeliberationParams) (*sdkmcp.CallToolResult, any, error) {
@@ -438,6 +458,10 @@ func (s *server) handleCreateDeliberation(ctx context.Context, _ *sdkmcp.CallToo
 	}
 	if args.GroupID != "" {
 		dopts = append(dopts, deliberation.WithGroupID(args.GroupID))
+	}
+	if args.DeadlineMinutes > 0 {
+		deadline := time.Now().Add(time.Duration(args.DeadlineMinutes) * time.Minute)
+		dopts = append(dopts, deliberation.WithDeadline(deadline))
 	}
 	// Set creator key for access control
 	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
@@ -1017,6 +1041,31 @@ func (s *server) handleAgentReputation(ctx context.Context, _ *sdkmcp.CallToolRe
 		return errResult(err)
 	}
 	return jsonResult(rep)
+}
+
+func (s *server) handleCancelAnalysis(ctx context.Context, _ *sdkmcp.CallToolRequest, args cancelAnalysisParams) (*sdkmcp.CallToolResult, any, error) {
+	if args.DeliberationID == "" {
+		return errResult(fmt.Errorf("deliberation_id is required"))
+	}
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := CoreCancelAnalysis(s.svc, args.DeliberationID, keyID); err != nil {
+		return errResult(err)
+	}
+	s.audit(ctx, "cancel_analysis", args.DeliberationID, "")
+	return textResult("analysis cancelled — deliberation is open again"), nil, nil
+}
+
+func (s *server) handleWithdraw(ctx context.Context, _ *sdkmcp.CallToolRequest, args withdrawParams) (*sdkmcp.CallToolResult, any, error) {
+	if args.DeliberationID == "" || args.AgentID == "" {
+		return errResult(fmt.Errorf("deliberation_id and agent_id are required"))
+	}
+	args.AgentID = scopeAgentID(ctx, args.AgentID)
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	if err := CoreWithdraw(s.svc, args.DeliberationID, args.AgentID, keyID); err != nil {
+		return errResult(err)
+	}
+	s.audit(ctx, "withdraw", args.DeliberationID, args.AgentID)
+	return textResult("agent withdrawn from deliberation"), nil, nil
 }
 
 // coerceVoteValue accepts int, float64, or string representations of a vote value.

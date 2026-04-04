@@ -791,12 +791,35 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		PerspectiveDiversity: perspectiveDiversity(len(clusters), len(agents)),
 		ParetoEfficient:     paretoEfficient,
 		DominatedProposals:  dominatedProposals,
+		AnalyzedAt:          time.Now().UTC(),
 	}
+	result.RecommendedAction = recommendAction(result)
 
 	log.Printf("[gemot] analysis complete: deliberation=%s round=%d agents=%d positions=%d cruxes=%d clusters=%d duration=%s",
 		result.DeliberationID, result.Round, result.AgentCount, result.PositionCount, len(result.Cruxes), len(result.Clusters), time.Since(startTime))
 
 	return result, nil
+}
+
+// recommendAction provides a machine-readable next step based on analysis results.
+// This is a heuristic, not an LLM call — agents can override with their own logic.
+func recommendAction(r *deliberation.AnalysisResult) string {
+	if r.Confidence == "refused" {
+		return "resolve_integrity_issues"
+	}
+	if len(r.ConsensusStatements) > 0 && len(r.Cruxes) == 0 {
+		return "consensus_reached"
+	}
+	if len(r.Cruxes) > 0 && r.CompromiseProposal != "" {
+		return "vote_on_compromise"
+	}
+	if len(r.Cruxes) > 0 {
+		return "submit_position_on_cruxes"
+	}
+	if len(r.Clusters) >= 2 && len(r.BridgingStatements) == 0 {
+		return "propose_compromise"
+	}
+	return "continue_deliberation"
 }
 
 // --- LLM call methods ---

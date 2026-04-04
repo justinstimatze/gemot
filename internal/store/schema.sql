@@ -198,8 +198,14 @@ CREATE INDEX IF NOT EXISTS idx_positions_delib ON positions(deliberation_id, rou
 CREATE INDEX IF NOT EXISTS idx_votes_delib ON votes(deliberation_id);
 CREATE INDEX IF NOT EXISTS idx_votes_position ON votes(position_id);
 
+-- Migration: resolution field for vote-based decisions
+ALTER TABLE deliberations ADD COLUMN IF NOT EXISTS resolution_json TEXT DEFAULT '';
+
 -- Migration: commitment accountability audit trail
 ALTER TABLE commitments ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ;
 ALTER TABLE commitments ADD COLUMN IF NOT EXISTS broken_at TIMESTAMPTZ;
 ALTER TABLE commitments ADD COLUMN IF NOT EXISTS broken_reason TEXT DEFAULT '';
 ALTER TABLE commitments ADD COLUMN IF NOT EXISTS verified_by TEXT DEFAULT '';
+
+-- Migration: deliberation deadline
+ALTER TABLE deliberations ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
