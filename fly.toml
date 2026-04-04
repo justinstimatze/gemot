@@ -18,7 +18,7 @@ primary_region = "sjc"
   min_machines_running = 0
 
 [deploy]
-  strategy = "bluegreen"
+  strategy = "rolling"
 
   [http_service.concurrency]
     type = "connections"
