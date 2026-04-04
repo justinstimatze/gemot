@@ -167,6 +167,11 @@ func WithDraft() PositionOption {
 	return func(p *Position) { p.Draft = true }
 }
 
+// WithParentPosition marks this position as an amendment to an existing motion.
+func WithParentPosition(id string) PositionOption {
+	return func(p *Position) { p.ParentPositionID = id }
+}
+
 // Service orchestrates deliberation operations.
 type Service struct {
 	store            Store
@@ -339,6 +344,21 @@ func RuleInt(d *Deliberation, key string, defaultVal int) int {
 		return int(n)
 	case int:
 		return n
+	}
+	return defaultVal
+}
+
+// RuleBool reads a boolean rule from a deliberation, returning the default if not set.
+func RuleBool(d *Deliberation, key string, defaultVal bool) bool {
+	if d.Rules == nil {
+		return defaultVal
+	}
+	v, ok := d.Rules[key]
+	if !ok {
+		return defaultVal
+	}
+	if b, ok := v.(bool); ok {
+		return b
 	}
 	return defaultVal
 }
@@ -566,6 +586,17 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 	for _, opt := range opts {
 		opt(p)
 	}
+
+	// Enforce speaking_time_limit rule (max chars per position)
+	if limit := RuleInt(d, "speaking_time_limit", 0); limit > 0 && len(content) > limit {
+		return nil, fmt.Errorf("position exceeds speaking time limit of %d characters", limit)
+	}
+
+	// Enforce require_second rule: new motions start as drafts until seconded
+	if RuleBool(d, "require_second", false) {
+		p.Draft = true
+	}
+
 	if err := s.store.CreatePosition(p); err != nil {
 		return nil, err
 	}
@@ -638,6 +669,15 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 		"position_id": positionID,
 		"value":       value,
 	})
+
+	// Seconding: a +1 vote from a different agent publishes a draft motion
+	if value == 1 && RuleBool(d, "require_second", false) && pos.Draft && pos.AgentID != agentID {
+		if err := s.store.PublishPosition(positionID); err != nil {
+			log.Printf("[gemot] failed to publish seconded position %s: %v", positionID, err)
+		} else {
+			s.emit("position_seconded", deliberationID, agentID, positionID)
+		}
+	}
 
 	// Recalculate resolution after every vote.
 	// Resolution is informational, not a status change — deliberation stays "open"

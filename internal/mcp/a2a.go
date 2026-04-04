@@ -71,6 +71,7 @@ var a2aMethods = []string{
 	"gemot/lookup_share",
 	"gemot/cancel_analysis",
 	"gemot/withdraw",
+	"gemot/export_deliberation",
 }
 
 // A2ARequest is an A2A JSON-RPC 2.0 request.
@@ -531,12 +532,27 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			})
 
 		case "gemot/get_analysis_result":
-			result, err := CoreGetAnalysisResult(svc, str("deliberation_id"), keyID)
+			var round *int
+			if v, ok := req.Params["round"]; ok {
+				if f, ok := v.(float64); ok {
+					r := int(f)
+					round = &r
+				}
+			}
+			result, err := CoreGetAnalysisResult(svc, str("deliberation_id"), keyID, round)
 			if err != nil {
 				writeA2AError(w, req.ID, -32000, sanitizeError(err))
 				return
 			}
 			writeA2AResult(w, req.ID, result)
+
+		case "gemot/export_deliberation":
+			export, err := CoreExportDeliberation(svc, str("deliberation_id"), keyID)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, export)
 
 		case "gemot/get_votes":
 			votes, err := CoreGetVotes(svc, str("deliberation_id"), keyID)

@@ -56,8 +56,9 @@ type Position struct {
 	Reservation    string  `json:"reservation,omitempty"`   // what outcome is unacceptable to this agent
 	OnBehalfOf     string  `json:"on_behalf_of,omitempty"`  // principal this agent represents
 	Interests      string  `json:"interests,omitempty"`     // what this agent optimizes for (transparent objectives)
-	Draft          bool    `json:"draft,omitempty"`         // if true, not yet visible to others
-	Round          int     `json:"round_number"`
+	Draft            bool    `json:"draft,omitempty"`             // if true, not yet visible to others
+	ParentPositionID string  `json:"parent_position_id,omitempty"` // amendment to this position
+	Round            int     `json:"round_number"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 

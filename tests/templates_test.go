@@ -10,8 +10,8 @@ import (
 
 func TestListTemplates(t *testing.T) {
 	templates := deliberation.ListTemplates()
-	if len(templates) != 7 {
-		t.Fatalf("expected 7 templates, got %d", len(templates))
+	if len(templates) != 8 {
+		t.Fatalf("expected 8 templates, got %d", len(templates))
 	}
 	// Verify sorted alphabetically
 	for i := 1; i < len(templates); i++ {
@@ -22,7 +22,7 @@ func TestListTemplates(t *testing.T) {
 }
 
 func TestGetTemplate(t *testing.T) {
-	for _, name := range []string{"assembly", "sortition", "parliament", "jury", "consensus", "negotiation", "review"} {
+	for _, name := range []string{"assembly", "sortition", "parliament", "jury", "consensus", "negotiation", "review", "roberts_rules"} {
 		tmpl, ok := deliberation.GetTemplate(name)
 		if !ok {
 			t.Fatalf("template %q not found", name)
