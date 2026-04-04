@@ -107,4 +107,6 @@ All gemot MCP tools use the `mcp_gemot_` prefix:
 - `mcp_gemot_get_analysis_result`
 - `mcp_gemot_get_context`
 - `mcp_gemot_commit`
+- `mcp_gemot_fulfill_commitment`
+- `mcp_gemot_break_commitment`
 - `mcp_gemot_agent_reputation`
