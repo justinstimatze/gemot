@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -18,10 +19,17 @@ import (
 
 // sanitizeError maps known internal errors to user-friendly messages.
 func sanitizeError(err error) string {
-	if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no rows") {
+	msg := err.Error()
+	if errors.Is(err, sql.ErrNoRows) || strings.Contains(msg, "no rows") {
 		return "not found"
 	}
-	return err.Error()
+	// Don't leak internal SQLite/DB errors
+	if strings.Contains(msg, "SQLITE") || strings.Contains(msg, "database") ||
+		strings.Contains(msg, "disk") || strings.Contains(msg, "locked") {
+		log.Printf("[gemot] internal error (sanitized): %v", err)
+		return "internal error"
+	}
+	return msg
 }
 
 // a2aMethods is the canonical list of supported A2A methods.
@@ -162,10 +170,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				"gemot/join_deliberation": true,
 			}
 			if writeOps[req.Method] {
-				ip := r.RemoteAddr
-				if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-					ip = strings.Split(fwd, ",")[0]
-				}
+				ip := ClientIP(r)
 				did, _ := req.Params["deliberation_id"].(string)
 				aid, _ := req.Params["agent_id"].(string)
 				auditLog.LogAuditEvent(keyID, strings.TrimSpace(ip), req.Method, did, aid)

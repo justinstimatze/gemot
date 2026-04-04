@@ -54,19 +54,31 @@ func RunAnalysisAsync(svc *deliberation.Service, db *store.DB, credits *payments
 
 	go func() {
 		defer analyzeCancel()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[gemot] PANIC in analysis for %s: %v", deliberationID, r)
+				if apiKey != "" && creditCost > 0 && credits != nil {
+					_, _ = credits.AddCredits(apiKey, creditCost)
+				}
+			}
+		}()
 		result, err := svc.Analyze(analyzeCtx, deliberationID)
 		if err != nil {
 			if apiKey != "" && creditCost > 0 && credits != nil {
 				_, _ = credits.AddCredits(apiKey, creditCost)
 			}
 			if db != nil && jobID != "" {
-				_ = db.CompleteJob(jobID, "failed", err.Error())
+				if jerr := db.CompleteJob(jobID, "failed", err.Error()); jerr != nil {
+					log.Printf("[gemot] failed to mark job failed: %v", jerr)
+				}
 			}
 			log.Printf("[gemot] async analysis failed for %s: %v", deliberationID, err)
 			return
 		}
 		if db != nil && jobID != "" {
-			_ = db.CompleteJob(jobID, "completed", "")
+			if jerr := db.CompleteJob(jobID, "completed", ""); jerr != nil {
+				log.Printf("[gemot] failed to mark job completed: %v", jerr)
+			}
 		}
 		log.Printf("[gemot] async analysis complete for %s (%d cruxes, %d clusters)",
 			deliberationID, len(result.Cruxes), len(result.Clusters))

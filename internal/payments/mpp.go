@@ -95,11 +95,8 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				}
 				// Allow unauthenticated MCP connections for sandbox mode
 				// Rate-limit by IP to prevent abuse (10 req/min for sandbox)
-				ip := r.RemoteAddr
-				if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-					ip = strings.Split(fwd, ",")[0]
-				}
-				if !limiter.Allow("sandbox:" + strings.TrimSpace(ip)) {
+				ip := clientIP(r)
+				if !limiter.Allow("sandbox:" + ip) {
 					http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)
 					return
 				}
@@ -331,4 +328,15 @@ func verifyCredential(ctx context.Context, cfg Config, credB64 string) (*receipt
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Reference: pi.ID,
 	}, nil
+}
+
+// clientIP extracts the real client IP, preferring Fly-Client-IP (unforgeable).
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("Fly-Client-IP"); ip != "" {
+		return strings.TrimSpace(ip)
+	}
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		return strings.TrimSpace(strings.Split(fwd, ",")[0])
+	}
+	return r.RemoteAddr
 }

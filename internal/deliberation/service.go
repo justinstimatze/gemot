@@ -373,7 +373,9 @@ func (s *Service) CreateDeliberation(topic, description string, opts ...Delibera
 
 	// Auto-add creator to ACL for private deliberations
 	if d.Visibility == "private" && d.CreatorKey != "" {
-		_ = s.store.AddToACL(d.ID, d.CreatorKey)
+		if err := s.store.AddToACL(d.ID, d.CreatorKey); err != nil {
+			fmt.Fprintf(os.Stderr, "gemot: warning: failed to add creator to ACL: %v\n", err)
+		}
 	}
 
 	s.emit("deliberation_created", d.ID, "", d.Topic)
