@@ -4,22 +4,24 @@ When `delegate_task` subagents disagree, the parent agent guesses. Gemot finds t
 
 ## Verified Demo: Hermes CLI + real gemot MCP
 
-One parent agent, run via `hermes --query`. It called `delegate_task` to spawn 3 specialist reviewers, then used gemot MCP tools to analyze where they disagreed. Full session recorded at [scripts/hermes-test/run_authentic.sh](../../scripts/hermes-test/run_authentic.sh).
+One parent agent, run via `hermes --query`. It called `delegate_task` to spawn 3 specialist reviewers, then used gemot MCP tools to analyze where they disagreed. Reviewers cross-voted on each other's positions before analysis. Full session recorded — 3 verified end-to-end runs on April 4, 2026.
 
 ```
 $ hermes --query "Review this payment code from 3 specialist perspectives,
   then use gemot to find where the reviewers disagree..."
 
-  ┊ 🔀 delegate  3 parallel tasks  45.6s
-  ✓ [1/3] security review   (43.86s)
-  ✓ [3/3] performance review (44.08s)
-  ✓ [2/3] reliability review (45.51s)
-  ┊ ⚡ mcp_gemot_create_deliberation
+  ┊ 🔀 delegate  3 parallel tasks  31s
+  ✓ [1/3] security review
+  ✓ [2/3] reliability review
+  ✓ [3/3] performance review
+  ┊ ⚡ mcp_gemot_create_deliberation  (template: review)
   ┊ ⚡ mcp_gemot_submit_position  ×3
+  ┊ ⚡ mcp_gemot_get_positions
+  ┊ ⚡ mcp_gemot_vote  ×6  (cross-voting)
   ┊ ⚡ mcp_gemot_analyze
-  ┊ ⚡ mcp_gemot_get_deliberation  [polling ~28 calls, ~3 min]
+  ┊ ⚡ mcp_gemot_get_deliberation  [polling ~25 calls, ~2 min]
   ┊ ⚡ mcp_gemot_get_analysis_result
-  ┊ ⚡ mcp_gemot_get_context  ×3
+  ┊ ⚡ mcp_gemot_get_context
 ```
 
 The code under review:
@@ -37,29 +39,33 @@ async def process_payment(user_id: str, amount: float, db: AsyncSession):
 
 ### What gemot returned (from `get_analysis_result` + `get_context`)
 
-**6 consensus items** — all 3 reviewers independently flagged these:
-1. TOCTOU race condition on balance check/deduct (CRITICAL)
-2. Input validation: negative amounts, NaN bypass, zero amounts
-3. Float arithmetic for money (salami-slicing, ledger drift)
-4. Commit/notify split creates partial-failure scenario
-5. No authorization check (any caller can charge any user_id)
-6. No idempotency key
+26 claims extracted across 3 positions. 5 topics identified. 4 cruxes detected (controversy 0.67–1.0). All 3 reviewers in separate clusters — maximum perspective diversity.
+
+**Consensus** — all 3 reviewers independently flagged:
+- TOCTOU race condition on balance check/deduct (CRITICAL)
+- `commit()` before `notify_payment_service()` breaks atomicity
+- No idempotency key (network retries cause double charges)
+- `float` for monetary values (rounding exploits, ledger drift)
+- No audit trail / payment transaction record
+- No authorization check on `user_id`
 
 **4 cruxes** — where reviewers genuinely disagree:
 
-**Crux 1 — Locking strategy.** Reliability wants `SELECT FOR UPDATE` (correctness over throughput). Performance wants optimistic locking with retry (better throughput for low-conflict workloads). Both technically correct; depends on load profile.
+**Crux 1 (0.67) — How to fix deduct+notify atomicity.** Reliability wants transactional outbox. Performance says fire-and-forget async with timeout is sufficient. Security wants both in same transaction.
 
-**Crux 2 — Async vs synchronous notify (sharpest disagreement).** Performance wants `asyncio.create_task()` to unblock the hot path. Reliability says that makes things worse — fire-and-forget loses all delivery guarantees after commit. Resolution: transactional outbox (write intent in same transaction, background worker delivers).
+**Crux 2 (1.0) — Where to enforce idempotency.** Reliability says DB-level unique constraint on idempotency key. Performance says Redis cache with TTL. Real trade-off: durability vs latency.
 
-**Crux 3 — Authentication urgency.** Security: unconditional blocker, ship nothing without it. Performance: adds per-request latency that must be designed carefully. Not actually a disagreement about *whether* — only about *how*.
+**Crux 3 (1.0) — notify_payment_service() hardening.** Reliability says move it outside the DB session entirely. Performance says `asyncio.wait_for` with timeout is pragmatic enough.
 
-**Crux 4 — Idempotency priority.** Reliability: hard deploy blocker. Security: HIGH but potentially shippable with documented mitigation.
+**Crux 4 (1.0) — Audit logging vs payment ledger.** Security frames it as PCI-DSS compliance. Reliability frames it as operational (dispute resolution, incident investigation). Same fix, different urgency framing.
+
+The engine correctly refused to synthesize consensus — the reviewers agree on *what's wrong*, they only disagree on *how to fix it*.
 
 ### Rough edges observed
 
-- **Tool name auto-repair**: Hermes MCP tools get a `mcp_` prefix. The agent kept calling `gemot_create_deliberation` and Hermes auto-repaired to `mcp_gemot_create_deliberation`. Every single gemot call was auto-repaired. The included skill file uses the correct `mcp_gemot_` prefix to avoid this.
-- **Polling loop**: Analysis takes ~3 minutes. The agent polled `get_deliberation` 28 times. One poll timed out at 300s during the extracting phase (the analysis itself continued server-side and completed fine on the next poll). A webhook/callback mechanism would be better.
-- **First-call errors**: `create_deliberation` and `submit_position` each failed once before the tool name auto-repair kicked in.
+- **Tool name auto-repair**: Hermes MCP tools get a `mcp_` prefix. The LLM keeps generating `gemot_vote` instead of `mcp_gemot_vote`. Hermes auto-repairs every call (~80 repairs per run). Functionally correct but noisy.
+- **Polling loop**: Analysis takes ~2 minutes. The agent polled `get_deliberation` ~25 times. A webhook/callback mechanism would be better.
+- **Vote type coercion**: Hermes sends vote values as strings (`"1"`) not integers. We added coercion to handle both — fixed in this version.
 
 ## How it works
 
@@ -73,9 +79,9 @@ mcp_servers:
     timeout: 300
 ```
 
-A [`deliberated-review` skill](skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit positions → analyze → report cruxes. The skill uses the `review` template, which configures the analysis for structured review panels.
+A [`deliberated-review` skill](skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit → vote → analyze → report cruxes. The skill uses the `review` template, which configures the analysis for structured review panels.
 
-The full flow takes 3-5 minutes (delegate_task ~1 min, gemot analysis ~2-3 min, polling ~1 min). Best for architecture decisions and thorny PRs, not every commit. Analysis costs ~$0.30 per run (Sonnet).
+The full flow takes 3-5 minutes (delegate_task ~30s, cross-voting ~5s, gemot analysis ~2 min, polling ~1 min). Best for architecture decisions and thorny PRs, not every commit. Analysis costs ~$0.30 per run (Sonnet).
 
 Self-hosted (single Go binary):
 ```bash
