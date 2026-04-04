@@ -37,7 +37,8 @@ delegate_task([
 
 Call `mcp_gemot_create_deliberation` with:
 - topic: a one-line summary of what's being reviewed (e.g., "Payment processing code review")
-- type: "reasoning"
+- template: "review"
+- group_id: a consistent identifier for the project or workflow (e.g., "myproject-reviews")
 
 ### Step 3: Submit each reviewer's findings
 

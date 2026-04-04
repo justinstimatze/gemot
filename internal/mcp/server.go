@@ -372,7 +372,7 @@ type voteParams struct {
 	DeliberationID string `json:"deliberation_id"`
 	AgentID        string `json:"agent_id"`
 	PositionID     string `json:"position_id"`
-	Value          int    `json:"value"`
+	Value          any    `json:"value"`                   // 1=agree, 0=pass, -1=disagree (accepts int or string)
 	CriterionID    string `json:"criterion_id,omitempty"` // optional: which criterion this vote is for
 }
 
@@ -512,7 +512,11 @@ func (s *server) handleVote(ctx context.Context, _ *sdkmcp.CallToolRequest, args
 	if err := s.svc.CheckAccess(args.DeliberationID, keyID2); err != nil {
 		return errResult(err)
 	}
-	if err := s.svc.Vote(args.DeliberationID, args.AgentID, args.PositionID, args.Value, args.CriterionID); err != nil {
+	value, err := coerceVoteValue(args.Value)
+	if err != nil {
+		return errResult(err)
+	}
+	if err := s.svc.Vote(args.DeliberationID, args.AgentID, args.PositionID, value, args.CriterionID); err != nil {
 		return errResult(err)
 	}
 		s.audit(ctx, "vote", args.DeliberationID, args.AgentID)
@@ -948,6 +952,32 @@ func (s *server) handleListByAgent(ctx context.Context, _ *sdkmcp.CallToolReques
 		return errResult(err)
 	}
 	return jsonResult(delibs)
+}
+
+// coerceVoteValue accepts int, float64, or string representations of a vote value.
+// MCP clients may send "1" (string) instead of 1 (integer).
+func coerceVoteValue(v any) (int, error) {
+	switch val := v.(type) {
+	case float64:
+		return int(val), nil
+	case int:
+		return val, nil
+	case string:
+		switch val {
+		case "1", "+1":
+			return 1, nil
+		case "0":
+			return 0, nil
+		case "-1":
+			return -1, nil
+		default:
+			return 0, fmt.Errorf("invalid vote value %q: must be -1, 0, or 1", val)
+		}
+	case nil:
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("invalid vote value type: %T", v)
+	}
 }
 
 // --- Helpers ---
