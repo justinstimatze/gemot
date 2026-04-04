@@ -739,12 +739,10 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	analysisCtx, cancelAnalysis := context.WithCancel(analysisCtx)
 	s.analysisMu.Lock()
 	if prev, ok := s.activeAnalyses[deliberationID]; ok {
-		fmt.Fprintf(os.Stderr, "gemot: WARNING overwriting active analysis cancel for %s (previous analysis still registered)\n", deliberationID[:8])
 		prev() // cancel the previous one
 	}
 	s.activeAnalyses[deliberationID] = cancelAnalysis
 	s.analysisMu.Unlock()
-	fmt.Fprintf(os.Stderr, "gemot: registered analysis cancel for %s\n", deliberationID[:8])
 	defer func() {
 		s.analysisMu.Lock()
 		delete(s.activeAnalyses, deliberationID)
@@ -1425,6 +1423,14 @@ func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction str
 	return d, nil
 }
 
+// ResetAnalyzingStatus resets a specific deliberation from "analyzing" back to "open".
+// Used by the panic recovery handler in RunAnalysisAsync.
+func (s *Service) ResetAnalyzingStatus(deliberationID string) {
+	if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
+		fmt.Fprintf(os.Stderr, "gemot: warning: failed to reset status after panic: %v\n", err)
+	}
+}
+
 // RecoverStuck resets deliberations stuck in "analyzing" status back to "open"
 // if they have been in that state for more than 30 minutes.
 // Also cancels any active analysis goroutines for recovered deliberations.
@@ -1443,16 +1449,11 @@ func (s *Service) RecoverStuck() (int, error) {
 	s.analysisMu.Lock()
 	for _, id := range stuck {
 		if cancel, ok := s.activeAnalyses[id]; ok {
-			fmt.Fprintf(os.Stderr, "gemot: cancelling active analysis for stuck deliberation %s\n", id[:8])
 			cancel()
 			delete(s.activeAnalyses, id)
 		}
 	}
-	activeCount := len(s.activeAnalyses)
 	s.analysisMu.Unlock()
-	if activeCount > 0 {
-		fmt.Fprintf(os.Stderr, "gemot: %d active analyses unaffected by stuck recovery\n", activeCount)
-	}
 
 	// Reset DB status
 	return s.store.RecoverStuckAnalyzing(30 * time.Minute)

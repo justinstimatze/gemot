@@ -57,8 +57,13 @@ func RunAnalysisAsync(svc *deliberation.Service, db *store.DB, credits *payments
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[gemot] PANIC in analysis for %s: %v", deliberationID, r)
+				// Reset status so deliberation isn't stuck in "analyzing"
+				svc.ResetAnalyzingStatus(deliberationID)
 				if apiKey != "" && creditCost > 0 && credits != nil {
 					_, _ = credits.AddCredits(apiKey, creditCost)
+				}
+				if db != nil && jobID != "" {
+					_ = db.CompleteJob(jobID, "failed", fmt.Sprintf("panic: %v", r))
 				}
 			}
 		}()
