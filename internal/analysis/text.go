@@ -80,7 +80,7 @@ func (a *TextAnalyzer) GenerateCompromise(ctx context.Context, topic string, res
 		clusterText = "No clusters detected."
 	}
 
-	prompt := fmt.Sprintf(compromisePrompt, topic, cruxesText, bridgingText, clusterText)
+	prompt := strings.NewReplacer("{{TOPIC}}", topic, "{{CRUXES}}", cruxesText, "{{BRIDGING}}", bridgingText, "{{CLUSTERS}}", clusterText).Replace(compromisePrompt)
 
 	schema := map[string]any{
 		"type": "object",
@@ -106,7 +106,7 @@ func (a *TextAnalyzer) GenerateCompromise(ctx context.Context, topic string, res
 
 // Reframe restates a position emphasizing common ground with other agents.
 func (a *TextAnalyzer) Reframe(ctx context.Context, position string, otherPositions string, cruxes string) (string, error) {
-	prompt := fmt.Sprintf(reframePrompt, position, otherPositions, cruxes)
+	prompt := strings.NewReplacer("{{POSITION}}", position, "{{OTHER_POSITIONS}}", otherPositions, "{{CRUXES}}", cruxes).Replace(reframePrompt)
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -831,7 +831,7 @@ func (a *TextAnalyzer) getTaxonomy(ctx context.Context, deliberationTopic, posit
 		"required": []string{"topics"},
 	}
 
-	prompt := fmt.Sprintf(taxonomyPrompt, deliberationTopic, positionText)
+	prompt := strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{POSITIONS}}", positionText).Replace(taxonomyPrompt)
 	var result taxonomyResult
 	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
 		return nil, err
@@ -886,7 +886,7 @@ func buildConstrainedClaimSchema(taxonomy *taxonomyResult) map[string]any {
 }
 
 func (a *TextAnalyzer) extractClaimsConstrained(ctx context.Context, agentNum, deliberationTopic, content, taxonomyText string, schema map[string]any, preamble string) ([]extractedClaim, error) {
-	prompt := preamble + fmt.Sprintf(claimExtractionPrompt, agentNum, deliberationTopic, taxonomyText, content)
+	prompt := preamble + strings.NewReplacer("{{AGENT_NUM}}", agentNum, "{{TOPIC}}", deliberationTopic, "{{TAXONOMY}}", taxonomyText, "{{CONTENT}}", content).Replace(claimExtractionPrompt)
 
 	// Check cache (T3C pattern: cache per-comment LLM responses)
 	if a.cache != nil {
@@ -948,7 +948,7 @@ func (a *TextAnalyzer) deduplicateClaims(ctx context.Context, deliberationTopic,
 		fmt.Fprintf(&sb, "<claim id=\"%d\" participant=\"%s\">%s</claim>\n", i, c.AgentNum, c.Claim)
 	}
 
-	prompt := fmt.Sprintf(claimDeduplicationPrompt, deliberationTopic, subtopicName, sb.String())
+	prompt := strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{SUBTOPIC}}", subtopicName, "{{CLAIMS}}", sb.String()).Replace(claimDeduplicationPrompt)
 	var result claimDeduplicationResult
 	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
 		return nil, err
@@ -1038,7 +1038,7 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 			differentiation = fmt.Sprintf("\nCandidate %d of 3: try to find a DIFFERENT crux than previous attempts. Look for an alternative dividing line among these participants.\n\n", attempt)
 		}
 
-		prompt := differentiation + fmt.Sprintf(cruxPrompt, deliberationTopic, topicName, subtopicName, subtopicDesc, claimsText)
+		prompt := differentiation + strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{TOPIC_NAME}}", topicName, "{{SUBTOPIC}}", subtopicName, "{{SUBTOPIC_DESC}}", subtopicDesc, "{{CLAIMS}}", claimsText).Replace(cruxPrompt)
 		var result cruxResult
 		if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
 			continue
@@ -1097,7 +1097,7 @@ func (a *TextAnalyzer) getSummary(ctx context.Context, deliberationTopic, topicN
 		"required": []string{"summary"},
 	}
 
-	prompt := fmt.Sprintf(summaryPrompt, deliberationTopic, topicName, positions)
+	prompt := strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{TOPIC_NAME}}", topicName, "{{POSITIONS}}", positions).Replace(summaryPrompt)
 	var result summaryResult
 	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
 		return "", err
@@ -1422,7 +1422,7 @@ func (a *TextAnalyzer) classifyCruxes(ctx context.Context, topic string, cruxes 
 	if err != nil {
 		return
 	}
-	prompt := fmt.Sprintf(cruxClassificationPrompt, topic, string(claimsJSON))
+	prompt := strings.NewReplacer("{{TOPIC}}", topic, "{{CLAIMS}}", string(claimsJSON)).Replace(cruxClassificationPrompt)
 	schema := map[string]any{
 		"type": "array",
 		"items": map[string]any{
@@ -1832,7 +1832,7 @@ func (a *TextAnalyzer) analyzeParetoSurface(ctx context.Context, topic string, c
 	}
 
 	proposalsText := strings.Join(proposals, "\n\n")
-	prompt := fmt.Sprintf(paretoPrompt, topic, proposalsText, criteriaText)
+	prompt := strings.NewReplacer("{{TOPIC}}", topic, "{{PROPOSALS}}", proposalsText, "{{CRITERIA}}", criteriaText).Replace(paretoPrompt)
 
 	schema := map[string]any{
 		"type": "object",
@@ -1877,7 +1877,7 @@ func (a *TextAnalyzer) findAgreementsLLM(ctx context.Context, topic string, posi
 		cruxText = "(no cruxes detected)"
 	}
 
-	prompt := fmt.Sprintf(agreementPrompt, topic, posText, cruxText)
+	prompt := strings.NewReplacer("{{TOPIC}}", topic, "{{POSITIONS}}", posText, "{{CRUX_TEXT}}", cruxText).Replace(agreementPrompt)
 
 	schema := map[string]any{
 		"type": "object",
