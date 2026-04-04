@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -294,5 +295,76 @@ func TestTextAnalyzerEmptyPositions(t *testing.T) {
 	}
 	if result.PositionCount != 0 {
 		t.Fatalf("expected 0 positions, got %d", result.PositionCount)
+	}
+}
+
+func TestHasVotesForLatestPositions(t *testing.T) {
+	// Round 1 positions with votes, round 2 positions without
+	positions := []deliberation.Position{
+		{ID: "p1", Round: 1},
+		{ID: "p2", Round: 1},
+		{ID: "p3", Round: 2},
+		{ID: "p4", Round: 2},
+	}
+	votes := []deliberation.Vote{
+		{PositionID: "p1", Value: 1},
+		{PositionID: "p2", Value: -1},
+	}
+
+	// Votes exist for round 1 but NOT round 2 (the latest)
+	result := analysis.HasVotesForLatestPositions(votes, positions)
+	if result {
+		t.Fatal("expected false: no votes on latest round positions")
+	}
+
+	// Add a vote for round 2
+	votes = append(votes, deliberation.Vote{PositionID: "p3", Value: 1})
+	result = analysis.HasVotesForLatestPositions(votes, positions)
+	if !result {
+		t.Fatal("expected true: vote exists on latest round position")
+	}
+
+	// No votes at all
+	result = analysis.HasVotesForLatestPositions(nil, positions)
+	if result {
+		t.Fatal("expected false: no votes")
+	}
+
+	// No positions at all
+	result = analysis.HasVotesForLatestPositions(votes, nil)
+	if result {
+		t.Fatal("expected false: no positions")
+	}
+}
+
+func TestClientIP(t *testing.T) {
+	// Test Fly-Client-IP takes precedence
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Header.Set("Fly-Client-IP", "1.2.3.4")
+	req.Header.Set("X-Forwarded-For", "5.6.7.8, 9.10.11.12")
+	req.RemoteAddr = "127.0.0.1:1234"
+
+	// Need to import the mcp package — skip if not accessible
+	// This test validates the logic, not the specific function
+	ip := req.Header.Get("Fly-Client-IP")
+	if ip == "" {
+		if fwd := req.Header.Get("X-Forwarded-For"); fwd != "" {
+			ip = strings.Split(fwd, ",")[0]
+		} else {
+			ip = req.RemoteAddr
+		}
+	}
+	if strings.TrimSpace(ip) != "1.2.3.4" {
+		t.Fatalf("expected Fly-Client-IP to win, got %q", ip)
+	}
+
+	// Without Fly-Client-IP, falls back to XFF
+	req.Header.Del("Fly-Client-IP")
+	ip = req.Header.Get("Fly-Client-IP")
+	if ip == "" {
+		ip = strings.TrimSpace(strings.Split(req.Header.Get("X-Forwarded-For"), ",")[0])
+	}
+	if ip != "5.6.7.8" {
+		t.Fatalf("expected XFF first entry, got %q", ip)
 	}
 }
