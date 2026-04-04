@@ -617,18 +617,14 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	var bridging []deliberation.BridgingStatement
 	if refused {
 		warnings = append(warnings, "ANALYSIS_REFUSED: integrity too compromised to produce reliable consensus/bridging. Cruxes and warnings are still available. Fix the underlying issues and re-analyze.")
-	} else if len(votes) == 0 || !hasVotesForLatestPositions(votes, positions) {
+	} else if len(votes) == 0 || !HasVotesForLatestPositions(votes, positions) {
 		// No votes on latest-round positions (e.g. bilateral negotiations, or multi-round
 		// where new positions were submitted without voting): use LLM agreement detection
-		log.Printf("[gemot] using LLM agreement detection (votes=%d, hasLatestVotes=%v, ctx.Err=%v, deadline=%v)",
-			len(votes), hasVotesForLatestPositions(votes, positions), ctx.Err(),
-			func() string { d, ok := ctx.Deadline(); if ok { return d.Format("15:04:05") }; return "none" }())
 		if ctx.Err() != nil {
-			log.Printf("[gemot] WARNING: context already cancelled before agreement detection — skipping")
+			log.Printf("[gemot] skipping LLM agreement detection: context cancelled")
 		} else {
 			consensus, bridging = a.findAgreementsLLM(ctx, deliberationTopic, positions, cruxes)
 		}
-		log.Printf("[gemot] LLM agreement result: consensus=%d, bridging=%d", len(consensus), len(bridging))
 	} else {
 		consensus = findConsensus(ctx, positions, votes, clusters, effectiveWeights)
 		bridging = findBridging(positions, votes, clusters, effectiveWeights)
@@ -1552,7 +1548,9 @@ func consensusThreshold(ctx context.Context) float64 {
 // hasVotesForLatestPositions checks whether any votes reference positions from
 // the latest round. In multi-round deliberations, old votes on round 1 positions
 // shouldn't prevent LLM agreement detection on round 2+ positions that have no votes.
-func hasVotesForLatestPositions(votes []deliberation.Vote, positions []deliberation.Position) bool {
+// HasVotesForLatestPositions checks whether any votes reference positions from
+// the latest round. Exported for testing.
+func HasVotesForLatestPositions(votes []deliberation.Vote, positions []deliberation.Position) bool {
 	// Find the latest round
 	maxRound := 0
 	for _, p := range positions {
