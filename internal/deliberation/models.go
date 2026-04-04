@@ -61,14 +61,27 @@ type Delegation struct {
 }
 
 type Commitment struct {
-	ID             string    `json:"commitment_id"`
-	DeliberationID string    `json:"deliberation_id"`
-	AgentID        string    `json:"agent_id"`
-	AnalysisRound  int       `json:"analysis_round"` // which round's results they're committing to
-	Statement      string    `json:"statement"`       // what specifically they commit to
-	Conditional    string    `json:"conditional,omitempty"` // "if agents X,Y also commit"
-	Status         string    `json:"status"`          // pending | active | fulfilled | broken
-	CreatedAt      time.Time `json:"created_at"`
+	ID             string     `json:"commitment_id"`
+	DeliberationID string     `json:"deliberation_id"`
+	AgentID        string     `json:"agent_id"`
+	AnalysisRound  int        `json:"analysis_round"`                // which round's results they're committing to
+	Statement      string     `json:"statement"`                     // what specifically they commit to
+	Conditional    string     `json:"conditional,omitempty"`         // "if agents X,Y also commit"
+	Status         string     `json:"status"`                        // pending | active | fulfilled | broken
+	CreatedAt      time.Time  `json:"created_at"`
+	FulfilledAt    *time.Time `json:"fulfilled_at,omitempty"`
+	BrokenAt       *time.Time `json:"broken_at,omitempty"`
+	BrokenReason   string     `json:"broken_reason,omitempty"`
+	VerifiedBy     string     `json:"verified_by,omitempty"`
+}
+
+// ReputationSummary aggregates an agent's commitment track record.
+type ReputationSummary struct {
+	TotalCommitments int     `json:"total_commitments"`
+	Fulfilled        int     `json:"fulfilled"`
+	Broken           int     `json:"broken"`
+	Pending          int     `json:"pending"`
+	TrustScore       float64 `json:"trust_score"` // fulfilled / (fulfilled + broken), 0 if none
 }
 
 type Invitation struct {

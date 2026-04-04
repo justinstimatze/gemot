@@ -144,6 +144,30 @@ func CoreListByAgent(svc *deliberation.Service, agentID, keyID string, isAdmin b
 	return filterVisible(all, keyID, isAdmin), nil
 }
 
+// CoreFulfillCommitment marks a commitment as fulfilled.
+func CoreFulfillCommitment(svc *deliberation.Service, commitmentID, verifiedBy string) error {
+	if commitmentID == "" {
+		return fmt.Errorf("commitment_id is required")
+	}
+	return svc.FulfillCommitment(commitmentID, verifiedBy)
+}
+
+// CoreBreakCommitment marks a commitment as broken with a reason.
+func CoreBreakCommitment(svc *deliberation.Service, commitmentID, reason, verifiedBy string) error {
+	if commitmentID == "" || reason == "" {
+		return fmt.Errorf("commitment_id and reason are required")
+	}
+	return svc.BreakCommitment(commitmentID, reason, verifiedBy)
+}
+
+// CoreAgentReputation returns an agent's commitment track record.
+func CoreAgentReputation(svc *deliberation.Service, agentID, groupID string) (deliberation.ReputationSummary, error) {
+	if agentID == "" {
+		return deliberation.ReputationSummary{}, fmt.Errorf("agent_id is required")
+	}
+	return svc.AgentReputation(agentID, groupID)
+}
+
 // filterVisible removes private deliberations not owned by the caller.
 func filterVisible(all []deliberation.Deliberation, keyID string, isAdmin bool) []deliberation.Deliberation {
 	result := make([]deliberation.Deliberation, 0, len(all))

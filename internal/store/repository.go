@@ -500,10 +500,28 @@ func (s *DB) CreateCommitment(c *deliberation.Commitment) error {
 }
 
 func (s *DB) GetCommitments(deliberationID string) ([]deliberation.Commitment, error) {
-	rows, err := s.db.Query(
-		`SELECT id, deliberation_id, agent_id, analysis_round, statement, COALESCE(conditional, ''), status, created_at FROM commitments WHERE deliberation_id = $1 ORDER BY created_at`,
+	return s.scanCommitments(
+		`SELECT id, deliberation_id, agent_id, analysis_round, statement, COALESCE(conditional, ''), status, created_at, fulfilled_at, broken_at, COALESCE(broken_reason, ''), COALESCE(verified_by, '') FROM commitments WHERE deliberation_id = $1 ORDER BY created_at`,
 		deliberationID,
 	)
+}
+
+func (s *DB) GetCommitmentsByAgent(agentID string) ([]deliberation.Commitment, error) {
+	return s.scanCommitments(
+		`SELECT id, deliberation_id, agent_id, analysis_round, statement, COALESCE(conditional, ''), status, created_at, fulfilled_at, broken_at, COALESCE(broken_reason, ''), COALESCE(verified_by, '') FROM commitments WHERE agent_id = $1 ORDER BY created_at`,
+		agentID,
+	)
+}
+
+func (s *DB) GetCommitmentsByGroup(groupID string) ([]deliberation.Commitment, error) {
+	return s.scanCommitments(
+		`SELECT c.id, c.deliberation_id, c.agent_id, c.analysis_round, c.statement, COALESCE(c.conditional, ''), c.status, c.created_at, c.fulfilled_at, c.broken_at, COALESCE(c.broken_reason, ''), COALESCE(c.verified_by, '') FROM commitments c JOIN deliberations d ON c.deliberation_id = d.id WHERE d.group_id = $1 ORDER BY c.created_at`,
+		groupID,
+	)
+}
+
+func (s *DB) scanCommitments(query string, args ...any) ([]deliberation.Commitment, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -511,11 +529,9 @@ func (s *DB) GetCommitments(deliberationID string) ([]deliberation.Commitment, e
 	var result []deliberation.Commitment
 	for rows.Next() {
 		var c deliberation.Commitment
-		var createdAt time.Time
-		if err := rows.Scan(&c.ID, &c.DeliberationID, &c.AgentID, &c.AnalysisRound, &c.Statement, &c.Conditional, &c.Status, &createdAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.DeliberationID, &c.AgentID, &c.AnalysisRound, &c.Statement, &c.Conditional, &c.Status, &c.CreatedAt, &c.FulfilledAt, &c.BrokenAt, &c.BrokenReason, &c.VerifiedBy); err != nil {
 			return nil, err
 		}
-		c.CreatedAt = createdAt
 		result = append(result, c)
 	}
 	return result, rows.Err()
@@ -523,6 +539,22 @@ func (s *DB) GetCommitments(deliberationID string) ([]deliberation.Commitment, e
 
 func (s *DB) UpdateCommitmentStatus(id, status string) error {
 	_, err := s.db.Exec(`UPDATE commitments SET status = $1 WHERE id = $2`, status, id)
+	return err
+}
+
+func (s *DB) FulfillCommitment(id, verifiedBy string) error {
+	_, err := s.db.Exec(
+		`UPDATE commitments SET status = 'fulfilled', fulfilled_at = NOW(), verified_by = $1 WHERE id = $2`,
+		verifiedBy, id,
+	)
+	return err
+}
+
+func (s *DB) BreakCommitment(id, reason, verifiedBy string) error {
+	_, err := s.db.Exec(
+		`UPDATE commitments SET status = 'broken', broken_at = NOW(), broken_reason = $1, verified_by = $2 WHERE id = $3`,
+		reason, verifiedBy, id,
+	)
 	return err
 }
 

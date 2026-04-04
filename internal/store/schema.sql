@@ -73,10 +73,15 @@ CREATE TABLE IF NOT EXISTS commitments (
     statement TEXT NOT NULL,
     conditional TEXT DEFAULT '',
     status TEXT DEFAULT 'pending',
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    fulfilled_at TIMESTAMPTZ,
+    broken_at TIMESTAMPTZ,
+    broken_reason TEXT DEFAULT '',
+    verified_by TEXT DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_commitments_delib ON commitments(deliberation_id);
+CREATE INDEX IF NOT EXISTS idx_commitments_agent ON commitments(agent_id);
 
 CREATE TABLE IF NOT EXISTS join_codes (
     code TEXT PRIMARY KEY,
@@ -192,3 +197,9 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_stripe ON api_keys(stripe_customer_id);
 CREATE INDEX IF NOT EXISTS idx_positions_delib ON positions(deliberation_id, round_number);
 CREATE INDEX IF NOT EXISTS idx_votes_delib ON votes(deliberation_id);
 CREATE INDEX IF NOT EXISTS idx_votes_position ON votes(position_id);
+
+-- Migration: commitment accountability audit trail
+ALTER TABLE commitments ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ;
+ALTER TABLE commitments ADD COLUMN IF NOT EXISTS broken_at TIMESTAMPTZ;
+ALTER TABLE commitments ADD COLUMN IF NOT EXISTS broken_reason TEXT DEFAULT '';
+ALTER TABLE commitments ADD COLUMN IF NOT EXISTS verified_by TEXT DEFAULT '';

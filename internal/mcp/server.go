@@ -249,6 +249,21 @@ func newServer(s *server) *sdkmcp.Server {
 		Description: "List deliberations an agent has participated in (submitted positions or voted).",
 	}, s.handleListByAgent)
 
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "fulfill_commitment",
+		Description: "Mark a commitment as fulfilled. Records who verified it and when.",
+	}, s.handleFulfillCommitment)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "break_commitment",
+		Description: "Mark a commitment as broken. Records the reason, who verified it, and when.",
+	}, s.handleBreakCommitment)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "agent_reputation",
+		Description: "Get an agent's commitment track record: fulfilled, broken, pending counts and trust score. Optionally scoped to a group_id for cross-deliberation reputation within an experiment.",
+	}, s.handleAgentReputation)
+
 	return srv
 }
 
@@ -952,6 +967,56 @@ func (s *server) handleListByAgent(ctx context.Context, _ *sdkmcp.CallToolReques
 		return errResult(err)
 	}
 	return jsonResult(delibs)
+}
+
+type fulfillCommitmentParams struct {
+	CommitmentID string `json:"commitment_id"`
+	VerifiedBy   string `json:"verified_by,omitempty"`
+}
+
+func (s *server) handleFulfillCommitment(ctx context.Context, _ *sdkmcp.CallToolRequest, args fulfillCommitmentParams) (*sdkmcp.CallToolResult, any, error) {
+	verifiedBy := args.VerifiedBy
+	if verifiedBy == "" {
+		if keyID, ok := ctx.Value(payments.ContextKeyKeyID{}).(string); ok && keyID != "" {
+			verifiedBy = keyID
+		}
+	}
+	if err := CoreFulfillCommitment(s.svc, args.CommitmentID, verifiedBy); err != nil {
+		return errResult(err)
+	}
+	return textResult("commitment fulfilled"), nil, nil
+}
+
+type breakCommitmentParams struct {
+	CommitmentID string `json:"commitment_id"`
+	Reason       string `json:"reason"`
+	VerifiedBy   string `json:"verified_by,omitempty"`
+}
+
+func (s *server) handleBreakCommitment(ctx context.Context, _ *sdkmcp.CallToolRequest, args breakCommitmentParams) (*sdkmcp.CallToolResult, any, error) {
+	verifiedBy := args.VerifiedBy
+	if verifiedBy == "" {
+		if keyID, ok := ctx.Value(payments.ContextKeyKeyID{}).(string); ok && keyID != "" {
+			verifiedBy = keyID
+		}
+	}
+	if err := CoreBreakCommitment(s.svc, args.CommitmentID, args.Reason, verifiedBy); err != nil {
+		return errResult(err)
+	}
+	return textResult("commitment marked as broken"), nil, nil
+}
+
+type agentReputationParams struct {
+	AgentID string `json:"agent_id"`
+	GroupID string `json:"group_id,omitempty"`
+}
+
+func (s *server) handleAgentReputation(ctx context.Context, _ *sdkmcp.CallToolRequest, args agentReputationParams) (*sdkmcp.CallToolResult, any, error) {
+	rep, err := CoreAgentReputation(s.svc, args.AgentID, args.GroupID)
+	if err != nil {
+		return errResult(err)
+	}
+	return jsonResult(rep)
 }
 
 // coerceVoteValue accepts int, float64, or string representations of a vote value.

@@ -57,7 +57,11 @@ type Store interface {
 
 	CreateCommitment(c *Commitment) error
 	GetCommitments(deliberationID string) ([]Commitment, error)
+	GetCommitmentsByAgent(agentID string) ([]Commitment, error)
+	GetCommitmentsByGroup(groupID string) ([]Commitment, error)
 	UpdateCommitmentStatus(id, status string) error
+	FulfillCommitment(id, verifiedBy string) error
+	BreakCommitment(id, reason, verifiedBy string) error
 
 	CreateJoinCode(jc *JoinCode) error
 	ClaimJoinCode(code, agentID string) (*JoinCode, error)
@@ -1284,6 +1288,46 @@ func (s *Service) Commit(deliberationID, agentID, statement, conditional string)
 
 func (s *Service) GetCommitments(deliberationID string) ([]Commitment, error) {
 	return s.store.GetCommitments(deliberationID)
+}
+
+func (s *Service) FulfillCommitment(commitmentID, verifiedBy string) error {
+	return s.store.FulfillCommitment(commitmentID, verifiedBy)
+}
+
+func (s *Service) BreakCommitment(commitmentID, reason, verifiedBy string) error {
+	return s.store.BreakCommitment(commitmentID, reason, verifiedBy)
+}
+
+func (s *Service) AgentReputation(agentID, groupID string) (ReputationSummary, error) {
+	var commitments []Commitment
+	var err error
+	if groupID != "" {
+		commitments, err = s.store.GetCommitmentsByGroup(groupID)
+	} else {
+		commitments, err = s.store.GetCommitmentsByAgent(agentID)
+	}
+	if err != nil {
+		return ReputationSummary{}, err
+	}
+	var summary ReputationSummary
+	for _, c := range commitments {
+		if c.AgentID != agentID {
+			continue
+		}
+		summary.TotalCommitments++
+		switch c.Status {
+		case "fulfilled":
+			summary.Fulfilled++
+		case "broken":
+			summary.Broken++
+		case "pending", "active":
+			summary.Pending++
+		}
+	}
+	if summary.Fulfilled+summary.Broken > 0 {
+		summary.TrustScore = float64(summary.Fulfilled) / float64(summary.Fulfilled+summary.Broken)
+	}
+	return summary, nil
 }
 
 // GenerateJoinCode creates a join code for a deliberation.
