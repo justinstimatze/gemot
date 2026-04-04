@@ -8,7 +8,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/stripe/stripe-go/v82 v82.5.1
 	gonum.org/v1/gonum v0.17.0
-	modernc.org/sqlite v1.47.0
+	modernc.org/sqlite v1.48.1
 )
 
 require (
