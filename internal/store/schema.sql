@@ -209,3 +209,6 @@ ALTER TABLE commitments ADD COLUMN IF NOT EXISTS verified_by TEXT DEFAULT '';
 
 -- Migration: deliberation deadline
 ALTER TABLE deliberations ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
+
+-- Migration: parent_position_id for Roberts Rules amendments
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS parent_position_id TEXT DEFAULT '';

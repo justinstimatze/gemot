@@ -98,15 +98,86 @@ func CoreReframe(svc *deliberation.Service, credits *payments.CreditStore, delib
 	}, nil
 }
 
-// CoreGetAnalysisResult returns the latest analysis result for a deliberation.
-func CoreGetAnalysisResult(svc *deliberation.Service, deliberationID, keyID string) (*deliberation.AnalysisResult, error) {
+// CoreGetAnalysisResult returns an analysis result for a deliberation.
+// If round is non-nil, returns that specific round; otherwise returns the latest.
+func CoreGetAnalysisResult(svc *deliberation.Service, deliberationID, keyID string, round *int) (*deliberation.AnalysisResult, error) {
 	if deliberationID == "" {
 		return nil, fmt.Errorf("deliberation_id is required")
 	}
 	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
 		return nil, err
 	}
+	if round != nil {
+		return svc.GetAnalysisResult(deliberationID, *round)
+	}
 	return svc.GetLatestAnalysisResult(deliberationID)
+}
+
+// CoreExportDeliberation returns the complete multi-round history of a deliberation.
+func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID string) (map[string]any, error) {
+	if deliberationID == "" {
+		return nil, fmt.Errorf("deliberation_id is required")
+	}
+	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+		return nil, err
+	}
+
+	d, err := svc.GetDeliberation(deliberationID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get all positions (no round filter)
+	positions, err := svc.GetPositions(deliberationID, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting positions: %w", err)
+	}
+
+	// Group positions by round
+	positionsByRound := make(map[int][]deliberation.Position)
+	for _, p := range positions {
+		positionsByRound[p.Round] = append(positionsByRound[p.Round], p)
+	}
+
+	// Build rounds array
+	rounds := make([]map[string]any, 0, d.Round)
+	for r := 1; r <= d.Round; r++ {
+		roundData := map[string]any{
+			"round":     r,
+			"positions": positionsByRound[r],
+		}
+		// Get analysis for this round (may not exist)
+		analysis, err := svc.GetAnalysisResult(deliberationID, r)
+		if err == nil && analysis != nil {
+			roundData["analysis"] = analysis
+		} else {
+			roundData["analysis"] = nil
+		}
+		rounds = append(rounds, roundData)
+	}
+
+	// Votes are not per-round — attach to first round for backwards compat
+	votes, err := svc.GetVotes(deliberationID)
+	if err != nil {
+		return nil, fmt.Errorf("getting votes: %w", err)
+	}
+	if len(rounds) > 0 {
+		rounds[0]["votes"] = votes
+	}
+
+	// Commitments
+	commitments, err := svc.GetCommitments(deliberationID)
+	if err != nil {
+		return nil, fmt.Errorf("getting commitments: %w", err)
+	}
+
+	export := map[string]any{
+		"deliberation": d,
+		"rounds":       rounds,
+		"commitments":  commitments,
+		"resolution":   d.Resolution,
+	}
+	return export, nil
 }
 
 // CoreGetVotes returns all votes for a deliberation.

@@ -231,8 +231,13 @@ func newServer(s *server) *sdkmcp.Server {
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name:        "get_analysis_result",
-		Description: "Get the latest analysis result for a deliberation. Returns cruxes, clusters, consensus statements, and integrity warnings.",
+		Description: "Get the analysis result for a deliberation. Returns cruxes, clusters, consensus statements, and integrity warnings. Pass 'round' to get a specific round's analysis; omit for the latest.",
 	}, s.handleGetAnalysisResult)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "export_deliberation",
+		Description: "Export the complete multi-round history of a deliberation. Returns the deliberation, all rounds with their positions and analysis results, votes, commitments, and resolution. Useful for replay and visualization.",
+	}, s.handleExportDeliberation)
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name:        "get_votes",
@@ -934,11 +939,12 @@ return textResult("abuse report filed — thank you"), nil, nil
 
 type getAnalysisResultParams struct {
 	DeliberationID string `json:"deliberation_id"`
+	Round          *int   `json:"round,omitempty"`
 }
 
 func (s *server) handleGetAnalysisResult(ctx context.Context, _ *sdkmcp.CallToolRequest, args getAnalysisResultParams) (*sdkmcp.CallToolResult, any, error) {
 	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
-	result, err := CoreGetAnalysisResult(s.svc, args.DeliberationID, keyID)
+	result, err := CoreGetAnalysisResult(s.svc, args.DeliberationID, keyID, args.Round)
 	if err != nil {
 		return errResult(err)
 	}
@@ -946,6 +952,19 @@ func (s *server) handleGetAnalysisResult(ctx context.Context, _ *sdkmcp.CallTool
 		return textResult("no analysis results yet"), nil, nil
 	}
 	return jsonResult(result)
+}
+
+type exportDeliberationParams struct {
+	DeliberationID string `json:"deliberation_id"`
+}
+
+func (s *server) handleExportDeliberation(ctx context.Context, _ *sdkmcp.CallToolRequest, args exportDeliberationParams) (*sdkmcp.CallToolResult, any, error) {
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	export, err := CoreExportDeliberation(s.svc, args.DeliberationID, keyID)
+	if err != nil {
+		return errResult(err)
+	}
+	return jsonResult(export)
 }
 
 type getVotesParams struct {
