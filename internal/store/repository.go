@@ -881,6 +881,30 @@ func (s *DB) DeleteExpiredSandboxDeliberations(maxAge time.Duration) (int, error
 	return len(ids), nil
 }
 
+// PurgeSoftDeleted hard-deletes deliberations that were soft-deleted more than maxAge ago.
+func (s *DB) PurgeSoftDeleted(maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge).UTC()
+	rows, err := s.db.Query(
+		`SELECT id FROM deliberations WHERE status = 'deleted' AND status_changed_at < $1`, cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	for _, id := range ids {
+		s.hardDeleteDeliberation(id) //nolint:errcheck
+	}
+	return len(ids), nil
+}
+
 // CreateShareToken stores a share token for a group.
 func (s *DB) CreateShareToken(token, groupID string, expiresAt time.Time) error {
 	_, err := s.db.Exec(
