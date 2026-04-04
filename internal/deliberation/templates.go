@@ -78,6 +78,22 @@ var templates = map[string]Template{
 		AnalysisHint:       "Review panel: distinguish blocking concerns (must be addressed before approval) from suggestions (nice-to-have improvements). Identify where reviewers agree the work is sound. Flag security or correctness issues with higher weight than style preferences.",
 		DefaultRules:       map[string]any{"min_participants": 2},
 	},
+	"roberts_rules": {
+		Name:               "roberts_rules",
+		Description:        "Full parliamentary procedure. Motions require a second before debate. Amendments modify existing motions. Call the question forces a vote. Point of order challenges procedural violations.",
+		DefaultType:        "policy",
+		DefaultMaxPart:     100,
+		SuggestedThreshold: 0.51,
+		AnalysisHint:       "Parliamentary procedure: motions require a second to be debatable. Unsupported motions are tabled. Amendments modify the original motion — analyze the amended version. Report the procedural state: which motions are on the floor, which are tabled, which have been decided.",
+		DefaultRules: map[string]any{
+			"min_participants":    5,
+			"cooling_period_minutes": 15,
+			"position_cost":      3,
+			"require_second":     true,
+			"allow_amendments":   true,
+			"speaking_time_limit": 500,
+		},
+	},
 }
 
 // GetTemplate returns a template by name.

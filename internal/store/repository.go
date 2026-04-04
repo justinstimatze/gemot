@@ -240,8 +240,8 @@ func (s *DB) CreatePosition(p *deliberation.Position) error {
 		draft = 1
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, interests, draft, round_number, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, p.Interests, draft, p.Round, p.CreatedAt,
+		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, interests, draft, round_number, created_at, parent_position_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, p.Interests, draft, p.Round, p.CreatedAt, p.ParentPositionID,
 	)
 	return err
 }
@@ -250,7 +250,7 @@ func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Pos
 	var rows *rowsWrapper
 	if round != nil {
 		r, err := s.db.Query(
-			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE deliberation_id = $1 AND round_number = $2 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
+			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE deliberation_id = $1 AND round_number = $2 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID, *round,
 		)
 		if err != nil {
@@ -259,7 +259,7 @@ func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Pos
 		rows = &rowsWrapper{r}
 	} else {
 		r, err := s.db.Query(
-			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE deliberation_id = $1 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
+			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE deliberation_id = $1 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID,
 		)
 		if err != nil {
@@ -274,7 +274,7 @@ func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Pos
 		var p deliberation.Position
 		var createdAt time.Time
 		var draftInt int
-		if err := rows.Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID); err != nil {
 			return nil, err
 		}
 		p.Draft = draftInt == 1
@@ -289,8 +289,8 @@ func (s *DB) GetPositionByID(id string) (*deliberation.Position, error) {
 	var createdAt time.Time
 	var draftInt int
 	err := s.db.QueryRow(
-		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at FROM positions WHERE id = $1`, id,
-	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt)
+		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE id = $1`, id,
+	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID)
 	p.Draft = draftInt == 1
 	if err != nil {
 		return nil, err
