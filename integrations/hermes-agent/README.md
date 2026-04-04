@@ -1,71 +1,59 @@
-# Structured Disagreement Analysis for Hermes Subagents
+# Voting Engine + Disagreement Analysis for Hermes Multi-Agent Workflows
 
-When `delegate_task` subagents disagree, the parent agent guesses. Gemot finds the crux — the specific claim that divides them — so the parent can act on structure, not intuition.
+When `delegate_task` subagents disagree, gemot gives you two things: a **structured vote** that picks a winner, and **crux analysis** that explains why the vote split.
 
-## Verified Demo: Hermes CLI + real gemot MCP
+## Demo 1: Vote-Based Decision (Cache Layer Selection)
 
-One parent agent, run via `hermes --query`. It called `delegate_task` to spawn 3 specialist reviewers, then used gemot MCP tools to analyze where they disagreed. Reviewers cross-voted on each other's positions before analysis. Full session recorded — 3 verified end-to-end runs on April 4, 2026.
+Three agents designed competing cache approaches. Gemot ran a structured vote and auto-resolved when one approach hit the 67% approval threshold.
 
 ```
-$ hermes --query "Review this payment code from 3 specialist perspectives,
-  then use gemot to find where the reviewers disagree..."
+$ hermes --query "Evaluate 3 cache approaches, vote to pick the best..."
 
+  ┊ 🔀 delegate  3 parallel tasks  64s
+  ✓ [1/3] Redis write-through
+  ✓ [2/3] In-process LRU + TTL
+  ✓ [3/3] CDN edge caching (stale-while-revalidate)
+  ┊ ⚡ mcp_gemot_create_deliberation  (template: assembly)
+  ┊ ⚡ mcp_gemot_submit_position  ×3
+  ┊ ⚡ mcp_gemot_vote  ×6  (cross-voting)
+  ┊ ⚡ mcp_gemot_get_deliberation  → status: open, resolution: ✓
+```
+
+**Result** — auto-resolved in <1 second after votes:
+
+```
+WINNER: Redis write-through (100% approval)
+
+Approach              | agree | disagree | pass | approval
+----------------------|-------|----------|------|----------
+Redis write-through   |   1   |    0     |   1  |  1.00  ← WINNER
+In-process LRU + TTL  |   1   |    1     |   0  |  0.50
+CDN edge caching      |   0   |    1     |   1  |  0.00
+```
+
+No analysis needed. No polling loop. Votes go in, decision comes out. The `resolution` field on the deliberation is machine-readable — agents can check it programmatically and act.
+
+## Demo 2: Disagreement Analysis (Code Review)
+
+When votes are close or you need to understand *why* agents disagree, trigger analysis. Three specialist reviewers examined a payment function. Gemot found 4 cruxes.
+
+```
   ┊ 🔀 delegate  3 parallel tasks  31s
-  ✓ [1/3] security review
-  ✓ [2/3] reliability review
-  ✓ [3/3] performance review
   ┊ ⚡ mcp_gemot_create_deliberation  (template: review)
   ┊ ⚡ mcp_gemot_submit_position  ×3
-  ┊ ⚡ mcp_gemot_get_positions
-  ┊ ⚡ mcp_gemot_vote  ×6  (cross-voting)
+  ┊ ⚡ mcp_gemot_vote  ×6
   ┊ ⚡ mcp_gemot_analyze
   ┊ ⚡ mcp_gemot_get_deliberation  [polling ~25 calls, ~2 min]
   ┊ ⚡ mcp_gemot_get_analysis_result
-  ┊ ⚡ mcp_gemot_get_context
 ```
 
-The code under review:
-```python
-async def process_payment(user_id: str, amount: float, db: AsyncSession):
-    user = await db.execute(select(User).where(User.id == user_id))
-    user = user.scalar_one()
-    if user.balance < amount:
-        raise InsufficientFunds()
-    user.balance -= amount
-    await db.commit()
-    await notify_payment_service(user_id, amount)
-    return {"status": "success", "new_balance": user.balance}
-```
+**4 cruxes found** (controversy 0.67–1.0):
+1. How to fix deduct+notify atomicity (outbox vs fire-and-forget)
+2. Where to enforce idempotency (DB constraint vs Redis cache)
+3. notify_payment_service() hardening (move outside session vs timeout)
+4. Audit logging framing (compliance vs operational)
 
-### What gemot returned (from `get_analysis_result` + `get_context`)
-
-26 claims extracted across 3 positions. 5 topics identified. 4 cruxes detected (controversy 0.67–1.0). All 3 reviewers in separate clusters — maximum perspective diversity.
-
-**Consensus** — all 3 reviewers independently flagged:
-- TOCTOU race condition on balance check/deduct (CRITICAL)
-- `commit()` before `notify_payment_service()` breaks atomicity
-- No idempotency key (network retries cause double charges)
-- `float` for monetary values (rounding exploits, ledger drift)
-- No audit trail / payment transaction record
-- No authorization check on `user_id`
-
-**4 cruxes** — where reviewers genuinely disagree:
-
-**Crux 1 (0.67) — How to fix deduct+notify atomicity.** Reliability wants transactional outbox. Performance says fire-and-forget async with timeout is sufficient. Security wants both in same transaction.
-
-**Crux 2 (1.0) — Where to enforce idempotency.** Reliability says DB-level unique constraint on idempotency key. Performance says Redis cache with TTL. Real trade-off: durability vs latency.
-
-**Crux 3 (1.0) — notify_payment_service() hardening.** Reliability says move it outside the DB session entirely. Performance says `asyncio.wait_for` with timeout is pragmatic enough.
-
-**Crux 4 (1.0) — Audit logging vs payment ledger.** Security frames it as PCI-DSS compliance. Reliability frames it as operational (dispute resolution, incident investigation). Same fix, different urgency framing.
-
-The engine correctly refused to synthesize consensus — the reviewers agree on *what's wrong*, they only disagree on *how to fix it*.
-
-### Rough edges observed
-
-- **Tool name auto-repair**: Hermes MCP tools get a `mcp_` prefix. The LLM keeps generating `gemot_vote` instead of `mcp_gemot_vote`. Hermes auto-repairs every call (~80 repairs per run). Functionally correct but noisy.
-- **Polling loop**: Analysis takes ~2 minutes. The agent polled `get_deliberation` ~25 times. A webhook/callback mechanism would be better.
-- **Vote type coercion**: Hermes sends vote values as strings (`"1"`) not integers. We added coercion to handle both — fixed in this version.
+Analysis also returns a machine-readable `recommended_action` field (`vote_on_compromise`, `submit_position_on_cruxes`, `consensus_reached`, etc.) so agents know what to do next without external LLM inference.
 
 ## How it works
 
@@ -79,9 +67,23 @@ mcp_servers:
     timeout: 300
 ```
 
-A [`deliberated-review` skill](skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit → vote → analyze → report cruxes. The skill uses the `review` template, which configures the analysis for structured review panels.
+**For decisions (use case #1/#2/#3/#5 from the issue):**
+1. `create_deliberation` → `submit_position` per option → `vote` → check `resolution` field
 
-The full flow takes 3-5 minutes (delegate_task ~30s, cross-voting ~5s, gemot analysis ~2 min, polling ~1 min). Best for architecture decisions and thorny PRs, not every commit. Analysis costs ~$0.30 per run (Sonnet).
+**For understanding disagreements (use case #4/#6):**
+1. Same as above, plus `analyze` → `get_analysis_result` for cruxes and clusters
+
+Templates control the voting strategy:
+- `assembly` (67%) — supermajority
+- `negotiation` (60%) — near-majority
+- `consensus` (100%) — unanimous required
+- `review` (75%) — strong majority
+- `jury` (92%) — near-unanimous
+- `roberts_rules` (51%) — parliamentary procedure with motions, seconds, and amendments
+
+Resolution is non-blocking: votes auto-resolve when threshold is met, but agents can continue voting (resolution updates live) and analysis works regardless. Agents can also set deadlines (`deadline_minutes`) and withdraw from deliberations.
+
+A [`deliberated-review` skill](skills/deliberated-review/SKILL.md) is included for the code review workflow.
 
 Self-hosted (single Go binary):
 ```bash
@@ -91,10 +93,21 @@ go build -o gemot . && DATABASE_URL=postgres://... GEMOT_ANTHROPIC_KEY=sk-ant-..
 
 ## On #412
 
-Build the voting engine natively — it's ~200 LOC. Gemot is for what voting can't tell you: *why* the vote split, and what question would resolve it.
+This addresses all 6 use cases from the issue:
 
-This demo was single-round — 4 useful cruxes without iteration. Gemot supports multi-round refinement (agents read cruxes, adjust positions, re-analyze) for deeper architecture discussions.
+| Use case | How gemot handles it |
+|----------|---------------------|
+| Quality gating on fan-out | Submit options → vote → auto-resolve |
+| Go/no-go decisions | Submit "merge"/"block" → vote → threshold check |
+| Research synthesis | Submit findings → vote on relevance → winner |
+| Conflict resolution | Vote first, then `analyze` for crux detection |
+| Cascade routing | Submit "use cheap model"/"escalate" → vote |
+| Weighted expertise | `conviction` field (0.0–1.0) on positions |
 
-**Next:** PR to `delegate_task` adding optional disagreement analysis. Off by default.
+Resolution is a field, not a status change — deliberations stay open for further voting or analysis. This matches the issue's "vote changing" and "early resolution" requirements.
+
+Voting strategies map to templates: majority → `negotiation` (60%), supermajority → `assembly` (67%), unanimous → `consensus` (100%). Quorum via `min_participants` rule.
+
+What gemot adds beyond voting: when the vote is close (e.g., 2-1), `analyze` tells you *why* — the specific claim that divides the voters. This turns a thin majority into an actionable insight.
 
 [github.com/justinstimatze/gemot](https://github.com/justinstimatze/gemot) (MIT)
