@@ -11,7 +11,7 @@ import (
 )
 
 // deliberationColumns is the canonical SELECT column list for deliberation queries.
-const deliberationColumns = `id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), created_at`
+const deliberationColumns = `id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), COALESCE(resolution_json, ''), deadline_at, created_at`
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
@@ -22,12 +22,22 @@ type scanner interface {
 func scanDeliberation(s scanner) (deliberation.Deliberation, error) {
 	var d deliberation.Deliberation
 	var createdAt time.Time
-	var rulesJSON string
-	if err := s.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &createdAt); err != nil {
+	var deadlineAt sql.NullTime
+	var rulesJSON, resolutionJSON string
+	if err := s.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &resolutionJSON, &deadlineAt, &createdAt); err != nil {
 		return d, err
 	}
 	d.CreatedAt = createdAt
+	if deadlineAt.Valid {
+		d.DeadlineAt = &deadlineAt.Time
+	}
 	d.Rules = unmarshalRules(rulesJSON)
+	if resolutionJSON != "" {
+		var res deliberation.Resolution
+		if err := json.Unmarshal([]byte(resolutionJSON), &res); err == nil {
+			d.Resolution = &res
+		}
+	}
 	return d, nil
 }
 
@@ -48,8 +58,8 @@ func (s *DB) CreateDeliberation(d *deliberation.Deliberation) error {
 	d.ID = uuid.New().String()
 	d.CreatedAt = time.Now().UTC()
 	_, err := s.db.Exec(
-		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, template, rules, group_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.Template, marshalRules(d.Rules), d.GroupID, d.CreatedAt,
+		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, template, rules, group_id, deadline_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.Template, marshalRules(d.Rules), d.GroupID, d.DeadlineAt, d.CreatedAt,
 	)
 	return err
 }
@@ -102,7 +112,7 @@ func (s *DB) ListByGroup(groupID string, limit, offset int) ([]deliberation.Deli
 func (s *DB) ListByAgent(agentID string, limit, offset int) ([]deliberation.Deliberation, error) {
 	limit, offset = normalizePagination(limit, offset)
 	// deliberationColumns uses unqualified names; prefix with "d." for the JOIN query.
-	const cols = `d.id, d.topic, d.description, d.round_number, d.status, COALESCE(d.sub_status, ''), COALESCE(d.type, ''), COALESCE(d.visibility, 'open'), COALESCE(d.creator_key, ''), COALESCE(d.max_participants, 0), COALESCE(d.template, ''), COALESCE(d.rules, '{}'), COALESCE(d.group_id, ''), d.created_at`
+	const cols = `d.id, d.topic, d.description, d.round_number, d.status, COALESCE(d.sub_status, ''), COALESCE(d.type, ''), COALESCE(d.visibility, 'open'), COALESCE(d.creator_key, ''), COALESCE(d.max_participants, 0), COALESCE(d.template, ''), COALESCE(d.rules, '{}'), COALESCE(d.group_id, ''), COALESCE(d.resolution_json, ''), d.deadline_at, d.created_at`
 	rows, err := s.db.Query(`SELECT DISTINCT `+cols+` FROM deliberations d JOIN positions p ON d.id = p.deliberation_id WHERE p.agent_id = $1 AND d.status != 'deleted' ORDER BY d.created_at DESC LIMIT $2 OFFSET $3`, agentID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -167,6 +177,24 @@ func (s *DB) UpdateDeliberationStatus(id, status string) error {
 		return fmt.Errorf("deliberation not found: %s", id)
 	}
 	return nil
+}
+
+// SaveResolution updates the resolution field without changing status.
+// Pass nil to clear a stale resolution.
+func (s *DB) SaveResolution(id string, resolution *deliberation.Resolution) error {
+	if resolution == nil {
+		_, err := s.db.Exec(`UPDATE deliberations SET resolution_json = '' WHERE id = $1`, id)
+		return err
+	}
+	resJSON, err := json.Marshal(resolution)
+	if err != nil {
+		return fmt.Errorf("marshal resolution: %w", err)
+	}
+	_, err = s.db.Exec(
+		`UPDATE deliberations SET resolution_json = $1 WHERE id = $2`,
+		string(resJSON), id,
+	)
+	return err
 }
 
 func (s *DB) UpdateSubStatus(id, subStatus string) error {
@@ -348,32 +376,40 @@ func (s *DB) SaveAnalysisResult(deliberationID string, round int, result *delibe
 
 func (s *DB) GetAnalysisResult(deliberationID string, round int) (*deliberation.AnalysisResult, error) {
 	var resultJSON string
+	var analyzedAt time.Time
 	err := s.db.QueryRow(
-		`SELECT result_json FROM analysis_results WHERE deliberation_id = $1 AND round_number = $2`,
+		`SELECT result_json, analyzed_at FROM analysis_results WHERE deliberation_id = $1 AND round_number = $2`,
 		deliberationID, round,
-	).Scan(&resultJSON)
+	).Scan(&resultJSON, &analyzedAt)
 	if err != nil {
 		return nil, err
 	}
 	var result deliberation.AnalysisResult
 	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
 		return nil, err
+	}
+	if result.AnalyzedAt.IsZero() {
+		result.AnalyzedAt = analyzedAt
 	}
 	return &result, nil
 }
 
 func (s *DB) GetLatestAnalysisResult(deliberationID string) (*deliberation.AnalysisResult, error) {
 	var resultJSON string
+	var analyzedAt time.Time
 	err := s.db.QueryRow(
-		`SELECT result_json FROM analysis_results WHERE deliberation_id = $1 ORDER BY round_number DESC LIMIT 1`,
+		`SELECT result_json, analyzed_at FROM analysis_results WHERE deliberation_id = $1 ORDER BY round_number DESC LIMIT 1`,
 		deliberationID,
-	).Scan(&resultJSON)
+	).Scan(&resultJSON, &analyzedAt)
 	if err != nil {
 		return nil, err
 	}
 	var result deliberation.AnalysisResult
 	if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
 		return nil, err
+	}
+	if result.AnalyzedAt.IsZero() {
+		result.AnalyzedAt = analyzedAt
 	}
 	return &result, nil
 }
@@ -960,6 +996,33 @@ func (s *DB) LookupShareToken(token string) (string, error) {
 		return "", fmt.Errorf("share token expired")
 	}
 	return groupID, nil
+}
+
+// WithdrawPositions marks all positions by an agent in a deliberation as drafts (invisible).
+func (s *DB) WithdrawPositions(deliberationID, agentID string) error {
+	_, err := s.db.Exec(
+		`UPDATE positions SET draft = 1 WHERE deliberation_id = $1 AND agent_id = $2`,
+		deliberationID, agentID,
+	)
+	return err
+}
+
+// DeleteVotesByAgent removes all votes by an agent in a deliberation.
+func (s *DB) DeleteVotesByAgent(deliberationID, agentID string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM votes WHERE deliberation_id = $1 AND agent_id = $2`,
+		deliberationID, agentID,
+	)
+	return err
+}
+
+// DeleteDelegationsByAgent deactivates all delegations from or to an agent in a deliberation.
+func (s *DB) DeleteDelegationsByAgent(deliberationID, agentID string) error {
+	_, err := s.db.Exec(
+		`UPDATE delegations SET active = 0 WHERE deliberation_id = $1 AND (from_agent = $2 OR to_agent = $2)`,
+		deliberationID, agentID,
+	)
+	return err
 }
 
 // hardDeleteDeliberation permanently removes a deliberation and all related data.

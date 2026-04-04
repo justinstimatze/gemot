@@ -69,6 +69,8 @@ var a2aMethods = []string{
 	"gemot/agent_reputation",
 	"gemot/create_share",
 	"gemot/lookup_share",
+	"gemot/cancel_analysis",
+	"gemot/withdraw",
 }
 
 // A2ARequest is an A2A JSON-RPC 2.0 request.
@@ -174,7 +176,8 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				"gemot/invite_agent": true, "gemot/dispute_crux": true,
 				"gemot/delete_deliberation": true, "gemot/report_abuse": true,
 				"gemot/set_template": true, "gemot/generate_join_code": true,
-				"gemot/join_deliberation": true,
+				"gemot/join_deliberation": true, "gemot/cancel_analysis": true,
+				"gemot/withdraw": true,
 			}
 			if writeOps[req.Method] {
 				ip := ClientIP(r)
@@ -238,6 +241,12 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 			if g := str("group_id"); g != "" {
 				dopts = append(dopts, deliberation.WithGroupID(g))
+			}
+			if dm, ok := req.Params["deadline_minutes"]; ok {
+				if f, ok := dm.(float64); ok && f > 0 {
+					deadline := time.Now().Add(time.Duration(f) * time.Minute)
+					dopts = append(dopts, deliberation.WithDeadline(deadline))
+				}
 			}
 			if keyID != "" {
 				dopts = append(dopts, deliberation.WithCreatorKey(keyID))
@@ -755,6 +764,23 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				return
 			}
 			writeA2AResult(w, req.ID, delibs)
+
+		case "gemot/cancel_analysis":
+			deliberationID := str("deliberation_id")
+			if err := CoreCancelAnalysis(svc, deliberationID, keyID); err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, map[string]string{"status": "analysis cancelled"})
+
+		case "gemot/withdraw":
+			deliberationID := str("deliberation_id")
+			agentID := scope(str("agent_id"))
+			if err := CoreWithdraw(svc, deliberationID, agentID, keyID); err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, map[string]string{"status": "agent withdrawn"})
 
 		default:
 			writeA2AError(w, req.ID, -32601,

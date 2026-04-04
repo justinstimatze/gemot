@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -30,6 +31,7 @@ type Store interface {
 	ListByAgent(agentID string, limit, offset int) ([]Deliberation, error)
 	SetGroupID(deliberationID, groupID string) error
 	UpdateDeliberationStatus(id, status string) error
+	SaveResolution(id string, resolution *Resolution) error
 	UpdateDeliberationTemplate(id, template string) error
 	UpdateDeliberationRules(id string, rules map[string]any) error
 	DeleteDeliberation(id string) error
@@ -86,6 +88,10 @@ type Store interface {
 
 	CreateShareToken(token, groupID string, expiresAt time.Time) error
 	LookupShareToken(token string) (groupID string, err error)
+
+	WithdrawPositions(deliberationID, agentID string) error
+	DeleteVotesByAgent(deliberationID, agentID string) error
+	DeleteDelegationsByAgent(deliberationID, agentID string) error
 }
 
 // ContextKeyDeliberationID is the context key for passing the deliberation ID
@@ -311,6 +317,11 @@ func WithRules(rules map[string]any) DeliberationOption {
 	}
 }
 
+// WithDeadline sets an absolute deadline for the deliberation.
+func WithDeadline(d time.Time) DeliberationOption {
+	return func(del *Deliberation) { del.DeadlineAt = &d }
+}
+
 // ContextKeyTemplate is the context key for passing the template name through analysis.
 type ContextKeyTemplate struct{}
 
@@ -512,6 +523,9 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 	if d.Status != "open" {
 		return nil, fmt.Errorf("deliberation is %s, not accepting positions", d.Status)
 	}
+	if d.DeadlineAt != nil && time.Now().After(*d.DeadlineAt) {
+		return nil, fmt.Errorf("deliberation deadline has passed")
+	}
 
 	// Forced acknowledgment: in round 2+, agents must call get_context first
 	if d.Round > 1 {
@@ -592,6 +606,9 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 	if d.Status != "open" {
 		return fmt.Errorf("deliberation is %s, not accepting votes", d.Status)
 	}
+	if d.DeadlineAt != nil && time.Now().After(*d.DeadlineAt) {
+		return fmt.Errorf("deliberation deadline has passed")
+	}
 
 	pos, err := s.store.GetPositionByID(positionID)
 	if err != nil {
@@ -621,13 +638,153 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 		"position_id": positionID,
 		"value":       value,
 	})
+
+	// Recalculate resolution after every vote.
+	// Resolution is informational, not a status change — deliberation stays "open"
+	// so analysis and further voting can continue.
+	if resolution := s.checkResolution(d); resolution != nil {
+		if err := s.store.SaveResolution(deliberationID, resolution); err != nil {
+			log.Printf("[gemot] resolution save failed for %s: %v", deliberationID, err)
+		} else {
+			s.emit("resolved", deliberationID, resolution.AgentID, resolution.PositionID)
+			log.Printf("[gemot] deliberation %s resolved: position %s (%.0f%% approval, strategy=%s)",
+				deliberationID, resolution.PositionID, resolution.Approval*100, resolution.Strategy)
+		}
+	} else {
+		// Clear stale resolution if votes changed and threshold no longer met
+		if err := s.store.SaveResolution(deliberationID, nil); err != nil {
+			log.Printf("[gemot] clear resolution failed for %s: %v", deliberationID, err)
+		}
+	}
 	return nil
+}
+
+// checkResolution tallies votes and checks if any position meets the template threshold.
+// Returns nil if no position meets the threshold.
+func (s *Service) checkResolution(d *Deliberation) *Resolution {
+	// Get template threshold
+	tmpl, _ := GetTemplate(d.Template)
+	threshold := tmpl.SuggestedThreshold
+	if threshold == 0 {
+		threshold = 0.67 // default: supermajority
+	}
+	// Rules can override threshold
+	if t, ok := d.Rules["threshold"]; ok {
+		if f, ok := t.(float64); ok && f > 0 {
+			threshold = f
+		}
+	}
+
+	positions, err := s.store.GetPositions(d.ID, nil)
+	if err != nil || len(positions) == 0 {
+		return nil
+	}
+
+	votes, err := s.store.GetVotes(d.ID)
+	if err != nil {
+		return nil
+	}
+
+	// Need at least 2 voters (positions are from different agents, votes are cross-agent)
+	voterSet := make(map[string]bool)
+	for _, v := range votes {
+		voterSet[v.AgentID] = true
+	}
+	if len(voterSet) < 2 {
+		return nil
+	}
+
+	// Tally votes per position
+	type tally struct {
+		agree, disagree, pass int
+	}
+	tallies := make(map[string]*tally)
+	for _, p := range positions {
+		tallies[p.ID] = &tally{}
+	}
+	for _, v := range votes {
+		t, ok := tallies[v.PositionID]
+		if !ok {
+			continue
+		}
+		switch v.Value {
+		case 1:
+			t.agree++
+		case -1:
+			t.disagree++
+		case 0:
+			t.pass++
+		}
+	}
+
+	// Check if any position meets threshold
+	var bestPos *Position
+	var bestApproval float64
+
+	for _, p := range positions {
+		t := tallies[p.ID]
+		if t.agree+t.disagree == 0 {
+			continue // no substantive votes
+		}
+		approval := float64(t.agree) / float64(t.agree+t.disagree)
+		if approval >= threshold && approval > bestApproval {
+			pCopy := p
+			bestPos = &pCopy
+			bestApproval = approval
+		}
+	}
+
+	if bestPos == nil {
+		return nil
+	}
+
+	// Build vote breakdown for all positions
+	var breakdown []VoteTally
+	for _, p := range positions {
+		t := tallies[p.ID]
+		app := 0.0
+		if t.agree+t.disagree > 0 {
+			app = float64(t.agree) / float64(t.agree+t.disagree)
+		}
+		content := p.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		breakdown = append(breakdown, VoteTally{
+			PositionID: p.ID,
+			AgentID:    p.AgentID,
+			Content:    content,
+			Agree:      t.agree,
+			Disagree:   t.disagree,
+			Pass:       t.pass,
+			Approval:   app,
+		})
+	}
+
+	strategy := d.Template
+	if strategy == "" {
+		strategy = "default"
+	}
+
+	return &Resolution{
+		PositionID:    bestPos.ID,
+		PositionText:  bestPos.Content,
+		AgentID:       bestPos.AgentID,
+		Strategy:      strategy,
+		Threshold:     threshold,
+		Approval:      bestApproval,
+		VoteBreakdown: breakdown,
+		ResolvedAt:    time.Now().UTC(),
+	}
 }
 
 func (s *Service) Analyze(ctx context.Context, deliberationID string) (*AnalysisResult, error) {
 	d, err := s.store.GetDeliberation(deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.DeadlineAt != nil && time.Now().After(*d.DeadlineAt) {
+		return nil, fmt.Errorf("deliberation deadline has passed")
 	}
 
 	// Enforce cooling period (minimum time between analyses)
@@ -1513,6 +1670,82 @@ func (s *Service) ResetAnalyzingStatus(deliberationID string) {
 	if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
 		fmt.Fprintf(os.Stderr, "gemot: warning: failed to reset status after panic: %v\n", err)
 	}
+}
+
+// CancelAnalysis resets a deliberation from "analyzing" back to "open".
+// Returns an error if the deliberation is not currently analyzing.
+func (s *Service) CancelAnalysis(deliberationID string) error {
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.Status != "analyzing" {
+		return fmt.Errorf("deliberation is not analyzing (current status: %s)", d.Status)
+	}
+	// Cancel the active analysis goroutine if running
+	s.analysisMu.Lock()
+	if cancel, ok := s.activeAnalyses[deliberationID]; ok {
+		cancel()
+		delete(s.activeAnalyses, deliberationID)
+	}
+	s.analysisMu.Unlock()
+	if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
+		return err
+	}
+	s.emit("analysis_cancelled", deliberationID, "", "")
+	return nil
+}
+
+// WithdrawAgent removes an agent from a deliberation by hiding their positions,
+// deleting their votes, and revoking their delegations.
+func (s *Service) WithdrawAgent(deliberationID, agentID string) error {
+	d, err := s.store.GetDeliberation(deliberationID)
+	if err != nil {
+		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.Status != "open" {
+		return fmt.Errorf("deliberation is %s, cannot withdraw", d.Status)
+	}
+	// Verify agent has participated
+	positions, err := s.store.GetPositions(deliberationID, nil)
+	if err != nil {
+		return err
+	}
+	votes, err := s.store.GetVotes(deliberationID)
+	if err != nil {
+		return err
+	}
+	hasPositions := false
+	for _, p := range positions {
+		if p.AgentID == agentID {
+			hasPositions = true
+			break
+		}
+	}
+	hasVotes := false
+	for _, v := range votes {
+		if v.AgentID == agentID {
+			hasVotes = true
+			break
+		}
+	}
+	if !hasPositions && !hasVotes {
+		return fmt.Errorf("agent %s has not participated in this deliberation", agentID)
+	}
+	// Mark positions as withdrawn (draft = 1 makes them invisible)
+	if err := s.store.WithdrawPositions(deliberationID, agentID); err != nil {
+		return fmt.Errorf("failed to withdraw positions: %w", err)
+	}
+	// Delete votes
+	if err := s.store.DeleteVotesByAgent(deliberationID, agentID); err != nil {
+		return fmt.Errorf("failed to delete votes: %w", err)
+	}
+	// Revoke delegations from/to this agent
+	if err := s.store.DeleteDelegationsByAgent(deliberationID, agentID); err != nil {
+		return fmt.Errorf("failed to revoke delegations: %w", err)
+	}
+	s.emit("agent_withdrawn", deliberationID, agentID, "")
+	return nil
 }
 
 // RecoverStuck resets deliberations stuck in "analyzing" status back to "open"

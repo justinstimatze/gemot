@@ -7,7 +7,7 @@ type Deliberation struct {
 	Topic       string    `json:"topic"`
 	Description string    `json:"description"`
 	Round       int       `json:"round_number"`
-	Status      string    `json:"status"`                      // open | analyzing | closed
+	Status      string    `json:"status"`                      // open | analyzing | resolved | closed
 	SubStatus   string    `json:"sub_status,omitempty"`        // taxonomy | extracting | deduplicating | crux_detection | summarizing | complete
 	Type        string    `json:"type,omitempty"`              // reasoning | knowledge | negotiation | policy (affects consensus threshold)
 	Criteria        []Criterion `json:"criteria,omitempty"`           // evaluation dimensions for multi-criteria voting
@@ -17,7 +17,32 @@ type Deliberation struct {
 	Template        string         `json:"template,omitempty"`         // governance template (assembly, jury, etc.)
 	Rules           map[string]any `json:"rules,omitempty"`            // governance rules (quorum, timelock, etc.)
 	GroupID         string         `json:"group_id,omitempty"`         // links related deliberations (experiment, workflow, session)
+	Resolution      *Resolution    `json:"resolution,omitempty"`       // set when deliberation reaches threshold
+	DeadlineAt      *time.Time     `json:"deadline_at,omitempty"`      // optional time limit for the deliberation
 	CreatedAt       time.Time      `json:"created_at"`
+}
+
+// Resolution captures the outcome when a deliberation's votes meet its template threshold.
+type Resolution struct {
+	PositionID   string         `json:"position_id"`            // winning position
+	PositionText string         `json:"position_text"`          // content of winning position
+	AgentID      string         `json:"agent_id"`               // who submitted the winning position
+	Strategy     string         `json:"strategy"`               // template name that defined the threshold
+	Threshold    float64        `json:"threshold"`              // threshold that was met
+	Approval     float64        `json:"approval"`               // actual approval ratio
+	VoteBreakdown []VoteTally   `json:"vote_breakdown"`         // per-position tallies
+	ResolvedAt   time.Time      `json:"resolved_at"`
+}
+
+// VoteTally summarizes votes for a single position.
+type VoteTally struct {
+	PositionID string  `json:"position_id"`
+	AgentID    string  `json:"agent_id"`     // who submitted this position
+	Content    string  `json:"content"`      // position text (truncated)
+	Agree      int     `json:"agree"`
+	Disagree   int     `json:"disagree"`
+	Pass       int     `json:"pass"`
+	Approval   float64 `json:"approval"`     // agree / (agree + disagree), ignoring pass
 }
 
 type Position struct {

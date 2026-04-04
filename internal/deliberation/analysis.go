@@ -1,5 +1,7 @@
 package deliberation
 
+import "time"
+
 // SourceQuote traces a crux back to a specific quote from an agent's position.
 type SourceQuote struct {
 	PositionID string `json:"position_id"`
@@ -129,6 +131,9 @@ type AnalysisResult struct {
 	ParticipationRate    float64  `json:"participation_rate,omitempty"`    // votes cast / (agents × positions)
 	PerspectiveDiversity float64  `json:"perspective_diversity,omitempty"` // clusters / agents (0-1, higher = more diverse)
 	// Pareto analysis
-	ParetoEfficient  []string `json:"pareto_efficient,omitempty"`  // proposals on the Pareto frontier
-	DominatedProposals []string `json:"dominated_proposals,omitempty"` // proposals beaten on all criteria
+	ParetoEfficient    []string  `json:"pareto_efficient,omitempty"`    // proposals on the Pareto frontier
+	DominatedProposals []string  `json:"dominated_proposals,omitempty"` // proposals beaten on all criteria
+	// Freshness + decision guidance
+	AnalyzedAt       time.Time `json:"analyzed_at,omitempty"`        // when this analysis was produced
+	RecommendedAction string   `json:"recommended_action,omitempty"` // machine-readable next step for agents
 }

@@ -168,6 +168,28 @@ func CoreAgentReputation(svc *deliberation.Service, agentID, groupID string) (de
 	return svc.AgentReputation(agentID, groupID)
 }
 
+// CoreCancelAnalysis cancels an in-progress analysis after access check.
+func CoreCancelAnalysis(svc *deliberation.Service, deliberationID, keyID string) error {
+	if deliberationID == "" {
+		return fmt.Errorf("deliberation_id is required")
+	}
+	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+		return err
+	}
+	return svc.CancelAnalysis(deliberationID)
+}
+
+// CoreWithdraw removes an agent from a deliberation after access check and agent scoping.
+func CoreWithdraw(svc *deliberation.Service, deliberationID, agentID, keyID string) error {
+	if deliberationID == "" || agentID == "" {
+		return fmt.Errorf("deliberation_id and agent_id are required")
+	}
+	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+		return err
+	}
+	return svc.WithdrawAgent(deliberationID, agentID)
+}
+
 // filterVisible removes private deliberations not owned by the caller.
 func filterVisible(all []deliberation.Deliberation, keyID string, isAdmin bool) []deliberation.Deliberation {
 	result := make([]deliberation.Deliberation, 0, len(all))
