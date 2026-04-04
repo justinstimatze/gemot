@@ -1423,6 +1423,46 @@ func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction str
 	return d, nil
 }
 
+// DrainAnalyses waits for all active analyses to complete, up to maxWait.
+// Returns the number of analyses that were waited on.
+// Called during shutdown to ensure analyses finish before the DB closes.
+func (s *Service) DrainAnalyses(maxWait time.Duration) int {
+	s.analysisMu.Lock()
+	count := len(s.activeAnalyses)
+	s.analysisMu.Unlock()
+
+	if count == 0 {
+		return 0
+	}
+
+	fmt.Fprintf(os.Stderr, "gemot: draining %d active analysis/analyses (max %s)...\n", count, maxWait)
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		s.analysisMu.Lock()
+		remaining := len(s.activeAnalyses)
+		s.analysisMu.Unlock()
+		if remaining == 0 {
+			return count
+		}
+		time.Sleep(time.Second)
+	}
+
+	// Timeout: cancel remaining analyses
+	s.analysisMu.Lock()
+	remaining := len(s.activeAnalyses)
+	for id, cancel := range s.activeAnalyses {
+		fmt.Fprintf(os.Stderr, "gemot: cancelling analysis %s (drain timeout)\n", id[:8])
+		cancel()
+		delete(s.activeAnalyses, id)
+	}
+	s.analysisMu.Unlock()
+
+	if remaining > 0 {
+		fmt.Fprintf(os.Stderr, "gemot: cancelled %d analysis/analyses after %s drain timeout\n", remaining, maxWait)
+	}
+	return count
+}
+
 // ResetAnalyzingStatus resets a specific deliberation from "analyzing" back to "open".
 // Used by the panic recovery handler in RunAnalysisAsync.
 func (s *Service) ResetAnalyzingStatus(deliberationID string) {

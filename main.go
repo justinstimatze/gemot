@@ -134,6 +134,12 @@ func cmdServe(httpMode bool, addr string) {
 			os.Exit(1)
 		}
 	}
+
+	// Wait for active analyses to finish before closing DB.
+	// Without this, db.Close() (deferred above) kills in-flight analyses.
+	if n := svc.DrainAnalyses(10 * time.Minute); n > 0 {
+		fmt.Fprintf(os.Stderr, "gemot: waited for %d active analysis/analyses to complete\n", n)
+	}
 }
 
 type noopAnalyzer struct{}
