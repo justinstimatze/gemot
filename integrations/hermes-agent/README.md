@@ -4,7 +4,7 @@ When `delegate_task` subagents disagree, the parent agent guesses. Gemot finds t
 
 ## Demo: Hermes CLI, real delegate_task, real gemot MCP
 
-One parent agent, run via `hermes --query`. It called `delegate_task` to spawn 3 specialist reviewers, then used gemot MCP tools to analyze where they disagreed. No scripting — the parent agent orchestrated everything.
+One parent agent, run via `hermes --query` with explicit step-by-step instructions. It called `delegate_task` to spawn 3 specialist reviewers, then used gemot MCP tools to analyze where they disagreed. The included [`deliberated-review` skill](integrations/hermes-agent/skills/deliberated-review/SKILL.md) teaches the agent this workflow so you don't need the explicit prompt after install.
 
 ```
 $ hermes --query "Review this payment code from 3 specialist perspectives,
@@ -32,7 +32,7 @@ async def process_payment(user_id: str, amount: float, db: AsyncSession):
     return {"status": "success", "new_balance": user.balance}
 ```
 
-### What the parent agent reported (unedited, abbreviated)
+### What the parent agent reported (its synthesis of gemot's `get_context` output, abbreviated)
 
 **4 cruxes found** from organic disagreement between 3 independent reviewers:
 
@@ -67,6 +67,8 @@ mcp_servers:
 ```
 
 A [`deliberated-review` skill](integrations/hermes-agent/skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit positions → analyze → report cruxes.
+
+The full flow takes 3-5 minutes (delegate_task ~1 min, gemot analysis ~2-3 min, polling ~1 min). Best for architecture decisions and thorny PRs, not every commit. Set `max_iterations` to 40+ to leave room for the polling loop. Analysis costs ~$0.30 per run (Sonnet).
 
 Self-hosted (single Go binary):
 ```bash
