@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -251,11 +252,8 @@ No API key needed — the join code is your credential.
 	checkoutLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
 	rateLimitCheckout := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			ip := r.RemoteAddr
-			if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-				ip = strings.Split(fwd, ",")[0]
-			}
-			if !checkoutLimiter.Allow("checkout:" + strings.TrimSpace(ip)) {
+			ip := ClientIP(r)
+			if !checkoutLimiter.Allow("checkout:" + ip) {
 				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 				return
 			}
@@ -496,11 +494,8 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		}
 
 		// Rate limit by IP
-		ip := r.RemoteAddr
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			ip = strings.Split(fwd, ",")[0]
-		}
-		if !tryLimiter.Allow("try:" + strings.TrimSpace(ip)) {
+		ip := ClientIP(r)
+		if !tryLimiter.Allow("try:" + ip) {
 			http.Error(w, "Rate limited — max 3 sandbox deliberations per day", http.StatusTooManyRequests)
 			return
 		}
@@ -525,14 +520,16 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			deliberation.WithRules(map[string]any{"min_participants": 1}), // override assembly quorum for sandbox
 		)
 		if err != nil {
-			http.Error(w, "Failed to create sandbox: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("[gemot] sandbox creation failed: %v", err)
+			http.Error(w, "Failed to create sandbox — please try again", http.StatusInternalServerError)
 			return
 		}
 
 		// Generate multi-use join code (48h TTL, up to 10 agents)
 		jc, err := svc.GenerateJoinCode(d.ID, "participant", 48*time.Hour, 10)
 		if err != nil {
-			http.Error(w, "Failed to generate join code: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("[gemot] join code generation failed: %v", err)
+			http.Error(w, "Failed to generate join code — please try again", http.StatusInternalServerError)
 			return
 		}
 
@@ -729,11 +726,23 @@ type syncWriter struct {
 	f  http.Flusher
 }
 
-func (s *syncWriter) Header() http.Header         { return s.w.Header() }
-func (s *syncWriter) WriteHeader(statusCode int)   { s.w.WriteHeader(statusCode) }
+func (s *syncWriter) Header() http.Header                           { return s.w.Header() } // safe: returns map reference, concurrent map access is ok for reads
+func (s *syncWriter) WriteHeader(statusCode int)                    { s.mu.Lock(); defer s.mu.Unlock(); s.w.WriteHeader(statusCode) }
 func (s *syncWriter) Write(p []byte) (int, error)  { s.mu.Lock(); defer s.mu.Unlock(); return s.w.Write(p) }
 func (s *syncWriter) Flush()                       { s.mu.Lock(); defer s.mu.Unlock(); s.f.Flush() }
 func (s *syncWriter) WriteAndFlush(p []byte)       { s.mu.Lock(); defer s.mu.Unlock(); s.w.Write(p); s.f.Flush() } //nolint:errcheck
+
+// ClientIP extracts the real client IP from a request, preferring
+// Fly-Client-IP (set by Fly proxy, cannot be forged) over X-Forwarded-For.
+func ClientIP(r *http.Request) string {
+	if ip := r.Header.Get("Fly-Client-IP"); ip != "" {
+		return strings.TrimSpace(ip)
+	}
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		return strings.TrimSpace(strings.Split(fwd, ",")[0])
+	}
+	return r.RemoteAddr
+}
 
 // csvSafe escapes a string for safe CSV output.
 // Prevents CSV injection by prefixing formula-triggering characters with a single quote,

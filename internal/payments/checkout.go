@@ -3,6 +3,7 @@ package payments
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -360,7 +361,7 @@ function copyKey(){
   });
 }
 </script>
-</body></html>`, key, balance, key, key)
+</body></html>`, html.EscapeString(key), balance, html.EscapeString(key), html.EscapeString(key))
 	}
 }
 

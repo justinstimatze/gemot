@@ -145,8 +145,8 @@ gemot/
 ├── main.go                          # CLI: serve (stdio) | http (SSE)
 ├── internal/
 │   ├── mcp/
-│   │   ├── server.go                # 19 MCP tools
-│   │   └── http.go                  # SSE transport, auth, billing, pages
+│   │   ├── server.go                # 24 MCP tools + Streamable HTTP
+│   │   └── http.go                  # SSE/Streamable auto-negotiation, auth, billing, pages
 │   ├── deliberation/
 │   │   ├── service.go               # Business logic, async analysis, drift detection
 │   │   ├── models.go                # Deliberation, Position, Vote, Dispute
@@ -163,7 +163,7 @@ gemot/
 │   ├── store/                       # SQLite + LLM cache + job queue
 │   ├── sanitize/                    # PII stripping, prompt injection detection
 │   └── cost/tracker.go             # Per-deliberation model-aware cost tracking
-├── tests/                           # 111 tests
+├── tests/                           # 161 tests
 ├── THREAT_MODEL.md
 ```
 
