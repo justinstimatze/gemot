@@ -2,23 +2,24 @@
 
 When `delegate_task` subagents disagree, the parent agent guesses. Gemot finds the crux — the specific claim that divides them — so the parent can act on structure, not intuition.
 
-## Demo: Hermes CLI, real delegate_task, real gemot MCP
+## Verified Demo: Hermes CLI + real gemot MCP
 
-One parent agent, run via `hermes --query` with explicit step-by-step instructions. It called `delegate_task` to spawn 3 specialist reviewers, then used gemot MCP tools to analyze where they disagreed. The included [`deliberated-review` skill](integrations/hermes-agent/skills/deliberated-review/SKILL.md) teaches the agent this workflow so you don't need the explicit prompt after install.
+One parent agent, run via `hermes --query`. It called `delegate_task` to spawn 3 specialist reviewers, then used gemot MCP tools to analyze where they disagreed. Full session recorded at [scripts/hermes-test/run_authentic.sh](../../scripts/hermes-test/run_authentic.sh).
 
 ```
 $ hermes --query "Review this payment code from 3 specialist perspectives,
   then use gemot to find where the reviewers disagree..."
 
-  ┊ 📋 plan      4 task(s)
-  ┊ ⚡ delegate_task  [3 specialist reviews in parallel]
+  ┊ 🔀 delegate  3 parallel tasks  45.6s
+  ✓ [1/3] security review   (43.86s)
+  ✓ [3/3] performance review (44.08s)
+  ✓ [2/3] reliability review (45.51s)
   ┊ ⚡ mcp_gemot_create_deliberation
-  ┊ ⚡ mcp_gemot_submit_position  (security)
-  ┊ ⚡ mcp_gemot_submit_position  (reliability)
-  ┊ ⚡ mcp_gemot_submit_position  (performance)
+  ┊ ⚡ mcp_gemot_submit_position  ×3
   ┊ ⚡ mcp_gemot_analyze
-  ┊ ⚡ mcp_gemot_get_deliberation  [polling...]
-  ┊ ⚡ mcp_gemot_get_context
+  ┊ ⚡ mcp_gemot_get_deliberation  [polling ~28 calls, ~3 min]
+  ┊ ⚡ mcp_gemot_get_analysis_result
+  ┊ ⚡ mcp_gemot_get_context  ×3
 ```
 
 The code under review:
@@ -34,55 +35,59 @@ async def process_payment(user_id: str, amount: float, db: AsyncSession):
     return {"status": "success", "new_balance": user.balance}
 ```
 
-### What the parent agent reported (its synthesis of gemot's `get_context` output, abbreviated)
+### What gemot returned (from `get_analysis_result` + `get_context`)
 
-**4 cruxes found** from organic disagreement between 3 independent reviewers:
+**6 consensus items** — all 3 reviewers independently flagged these:
+1. TOCTOU race condition on balance check/deduct (CRITICAL)
+2. Input validation: negative amounts, NaN bypass, zero amounts
+3. Float arithmetic for money (salami-slicing, ledger drift)
+4. Commit/notify split creates partial-failure scenario
+5. No authorization check (any caller can charge any user_id)
+6. No idempotency key
 
-**Crux 1 — What's the most important fix?**
-Security says fix the race then add authorization (IDOR is exploitable). Reliability says fix race + idempotency + outbox together (they compound). Performance says move notification out of the critical path first (highest-leverage latency win).
+**4 cruxes** — where reviewers genuinely disagree:
 
-**Crux 2 — How to fix the notification problem?**
-Security and reliability both want Outbox Pattern (write to DB in same transaction). Performance says fire-and-forget is acceptable for latency. Genuine trade-off.
+**Crux 1 — Locking strategy.** Reliability wants `SELECT FOR UPDATE` (correctness over throughput). Performance wants optimistic locking with retry (better throughput for low-conflict workloads). Both technically correct; depends on load profile.
 
-**Crux 3 — Is missing authorization critical?**
-Security: YES, CRITICAL IDOR. Reliability: important but not critical. Performance: didn't flag it. Sharpest crux — only security sees it as urgent.
+**Crux 2 — Async vs synchronous notify (sharpest disagreement).** Performance wants `asyncio.create_task()` to unblock the hot path. Reliability says that makes things worse — fire-and-forget loses all delivery guarantees after commit. Resolution: transactional outbox (write intent in same transaction, background worker delivers).
 
-**Crux 4 — Is idempotency a critical gap?**
-Reliability: YES, P0 (client retries double-charge users). Security: medium (replay attack vector). Performance: didn't flag it.
+**Crux 3 — Authentication urgency.** Security: unconditional blocker, ship nothing without it. Performance: adds per-request latency that must be designed carefully. Not actually a disagreement about *whether* — only about *how*.
 
-**Parent agent's synthesis:**
+**Crux 4 — Idempotency priority.** Reliability: hard deploy blocker. Security: HIGH but potentially shippable with documented mitigation.
 
-> Fix the race condition first — it's the only finding all three reviewers rate as critical. The atomic UPDATE eliminates the race, removes a DB round-trip, and doesn't require locks.
->
-> The sharpest disagreement for you to make a call on: Security says add an authorization check urgently. The other reviewers didn't flag it. If this function is called from an authenticated API handler that already validates ownership, it may be a non-issue. If `user_id` comes from untrusted input, the security reviewer is right and it's critical.
+### Rough edges observed
+
+- **Tool name auto-repair**: Hermes MCP tools get a `mcp_` prefix. The agent kept calling `gemot_create_deliberation` and Hermes auto-repaired to `mcp_gemot_create_deliberation`. Every single gemot call was auto-repaired. The included skill file uses the correct `mcp_gemot_` prefix to avoid this.
+- **Polling loop**: Analysis takes ~3 minutes. The agent polled `get_deliberation` 28 times. One poll timed out at 300s during the extracting phase (the analysis itself continued server-side and completed fine on the next poll). A webhook/callback mechanism would be better.
+- **First-call errors**: `create_deliberation` and `submit_position` each failed once before the tool name auto-repair kicked in.
 
 ## How it works
 
-Gemot is an MCP server. Add 4 lines to your config, and `delegate_task` results can be analyzed for disagreements:
+Gemot is an MCP server. Add 4 lines to your config:
 
 ```yaml
 # ~/.hermes/config.yaml
 mcp_servers:
   gemot:
     url: "https://gemot.dev/mcp"
-    timeout: 180
+    timeout: 300
 ```
 
-A [`deliberated-review` skill](https://github.com/justinstimatze/gemot/blob/main/integrations/hermes-agent/skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit positions → analyze → report cruxes.
+A [`deliberated-review` skill](skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit positions → analyze → report cruxes. The skill uses the `review` template, which configures the analysis for structured review panels.
 
-The full flow takes 3-5 minutes (delegate_task ~1 min, gemot analysis ~2-3 min, polling ~1 min). Best for architecture decisions and thorny PRs, not every commit. Set `max_iterations` to 40+ to leave room for the polling loop. Analysis costs ~$0.30 per run (Sonnet).
+The full flow takes 3-5 minutes (delegate_task ~1 min, gemot analysis ~2-3 min, polling ~1 min). Best for architecture decisions and thorny PRs, not every commit. Analysis costs ~$0.30 per run (Sonnet).
 
 Self-hosted (single Go binary):
 ```bash
 git clone https://github.com/justinstimatze/gemot.git && cd gemot
-go build -o gemot . && GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http --addr :8080
+go build -o gemot . && DATABASE_URL=postgres://... GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http --addr :8080
 ```
 
 ## On #412
 
 Build the voting engine natively — it's ~200 LOC. Gemot is for what voting can't tell you: *why* the vote split, and what question would resolve it.
 
-The demo was single-round — 4 useful cruxes without iteration. Gemot supports multi-round refinement (agents read cruxes, adjust positions, re-analyze) for deeper architecture discussions.
+This demo was single-round — 4 useful cruxes without iteration. Gemot supports multi-round refinement (agents read cruxes, adjust positions, re-analyze) for deeper architecture discussions.
 
 **Next:** PR to `delegate_task` adding optional disagreement analysis. Off by default.
 
