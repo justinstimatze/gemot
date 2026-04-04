@@ -43,26 +43,41 @@ SECRET = os.environ.get("GEMOT_API_SECRET", "")
 URL = os.environ.get("GEMOT_A2A_URL", "https://gemot.dev/a2a")  # prod by default
 HEADERS = {"Authorization": f"Bearer {SECRET}"} if SECRET else {}
 
-TOPIC = "We're adding automated code review to our CI pipeline. Should we use adversarial debate between two agents (one attacks, one defends) or a consensus panel of 3-5 specialist reviewers who vote? The codebase is 200K lines of Python with security-sensitive payment handling."
+CODE_SNIPPET = """
+async def process_payment(user_id: str, amount: float, db: AsyncSession):
+    user = await db.execute(select(User).where(User.id == user_id))
+    user = user.scalar_one()
+
+    if user.balance < amount:
+        raise InsufficientFunds()
+
+    user.balance -= amount
+    await db.commit()
+
+    await notify_payment_service(user_id, amount)
+    return {"status": "success", "new_balance": user.balance}
+""".strip()
+
+TOPIC = f"Review this payment processing code. What are the issues and how should they be fixed?\n\n```python\n{CODE_SNIPPET}\n```"
 
 AGENT_DEFS = [
     {
-        "id": "debate-advocate",
-        "r1_system": "You are a senior engineer who has shipped adversarial AI code review. You believe two-agent debate (attacker + defender) catches more bugs than panel review because the adversarial dynamic forces deeper analysis. You've seen panel reviews devolve into groupthink. Be specific about failure modes you've observed.",
-        "r2_system": "You advocate adversarial debate for code review. If the crux analysis shows a genuine weakness, acknowledge it honestly. Don't hedge.",
-        "r3_system": "Final round. State clearly: what's settled, what's unresolved. If your position changed, say so.",
+        "id": "security-reviewer",
+        "r1_system": "You are a security engineer. Review the code for vulnerabilities, race conditions, and compliance issues. Be specific — cite lines and explain the attack vector.",
+        "r2_system": "You are a security engineer. The structured analysis found disagreements with other reviewers. Address the specific cruxes honestly — if another reviewer's concern outweighs yours, say so.",
+        "r3_system": "You are a security engineer. Final review. State what's been settled and what the team should actually fix first.",
     },
     {
-        "id": "panel-advocate",
-        "r1_system": "You are a security engineering lead who has run review panels. You believe a 3-5 specialist panel (security, performance, maintainability) catches more diverse issues than a two-agent debate. Debate optimizes depth on one axis; panels optimize breadth. Be specific about what panel review catches that debate misses.",
-        "r2_system": "You advocate panel review. If the crux analysis shows a genuine weakness, acknowledge it honestly. Don't hedge.",
-        "r3_system": "Final round. State clearly: what's settled, what's unresolved. If your position changed, say so.",
+        "id": "backend-reviewer",
+        "r1_system": "You are a backend engineer focused on reliability and correctness. Review the code for error handling, data integrity, and operational issues. Be specific — cite lines and explain what breaks.",
+        "r2_system": "You are a backend engineer. The structured analysis found disagreements with other reviewers. Address the specific cruxes honestly.",
+        "r3_system": "You are a backend engineer. Final review. State what's been settled and what the team should fix first.",
     },
     {
-        "id": "cost-engineer",
-        "r1_system": "You are a platform engineer who manages CI costs. You care about token spend, latency, and false positive rates. You think both approaches are wasteful without proper evaluation metrics and gating. Be specific about the cost math and propose what you'd actually measure before choosing.",
-        "r2_system": "You care about costs and metrics. If the crux analysis shows a genuine weakness in your position, acknowledge it. Don't hedge.",
-        "r3_system": "Final round. State clearly: what's settled, what's unresolved. If your position changed, say so.",
+        "id": "performance-reviewer",
+        "r1_system": "You are a performance engineer. Review the code for latency, throughput, and resource usage issues. Be specific — cite lines, estimate impact, and propose fixes.",
+        "r2_system": "You are a performance engineer. The structured analysis found disagreements with other reviewers. Address the specific cruxes honestly.",
+        "r3_system": "You are a performance engineer. Final review. State what's been settled and what the team should fix first.",
     },
 ]
 
