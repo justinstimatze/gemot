@@ -60,6 +60,10 @@ var a2aMethods = []string{
 	"gemot/get_audit_log",
 	"gemot/get_analysis_result",
 	"gemot/get_votes",
+	"gemot/get_commitments",
+	"gemot/publish_position",
+	"gemot/challenge_analysis",
+	"gemot/reframe",
 	"gemot/create_share",
 	"gemot/lookup_share",
 }
@@ -204,7 +208,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				"version":     Version,
 				"url":         "https://gemot.dev",
 				"docs":        "https://gemot.dev/docs",
-				"tools":       27,
+				"tools":       len(a2aMethods) - 1, // exclude agent/info itself
 			})
 
 		case "gemot/create_deliberation":
@@ -393,14 +397,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
-			var deliberations []deliberation.Deliberation
-			for _, d := range allDelibs {
-				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
-					continue
-				}
-				deliberations = append(deliberations, d)
-			}
-			writeA2AResult(w, req.ID, deliberations)
+			writeA2AResult(w, req.ID, filterVisible(allDelibs, keyID, isAdmin))
 
 		case "gemot/propose_compromise":
 			if err := checkAccess(str("deliberation_id")); err != nil {
@@ -522,39 +519,17 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			})
 
 		case "gemot/get_analysis_result":
-			deliberationID := str("deliberation_id")
-			if deliberationID == "" {
-				writeA2AError(w, req.ID, -32602, "deliberation_id is required")
-				return
-			}
-			if err := checkAccess(deliberationID); err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
-				return
-			}
-			result, err := svc.GetLatestAnalysisResult(deliberationID)
+			result, err := CoreGetAnalysisResult(svc, str("deliberation_id"), keyID)
 			if err != nil {
-				writeA2AError(w, req.ID, -32603, sanitizeError(err))
-				return
-			}
-			if result == nil {
-				writeA2AResult(w, req.ID, nil)
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
 				return
 			}
 			writeA2AResult(w, req.ID, result)
 
 		case "gemot/get_votes":
-			deliberationID := str("deliberation_id")
-			if deliberationID == "" {
-				writeA2AError(w, req.ID, -32602, "deliberation_id is required")
-				return
-			}
-			if err := checkAccess(deliberationID); err != nil {
-				writeA2AError(w, req.ID, -32000, err.Error())
-				return
-			}
-			votes, err := svc.GetVotes(deliberationID)
+			votes, err := CoreGetVotes(svc, str("deliberation_id"), keyID)
 			if err != nil {
-				writeA2AError(w, req.ID, -32603, sanitizeError(err))
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
 				return
 			}
 			writeA2AResult(w, req.ID, votes)
@@ -677,29 +652,48 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
 			}
-			allDelibs, err := svc.ListByGroup(groupID, 0, 0)
+			delibs, err := CoreListByGroup(svc, groupID, keyID, isAdmin, 0, 0)
 			if err != nil {
 				writeA2AError(w, req.ID, -32603, sanitizeError(err))
 				return
-			}
-			delibs := []deliberation.Deliberation{}
-			for _, d := range allDelibs {
-				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
-					continue
-				}
-				delibs = append(delibs, d)
 			}
 			writeA2AResult(w, req.ID, map[string]any{
 				"group_id":      groupID,
 				"deliberations": delibs,
 			})
 
-		case "gemot/list_by_group":
-			groupID := str("group_id")
-			if groupID == "" {
-				writeA2AError(w, req.ID, -32602, "group_id is required")
+		case "gemot/get_commitments":
+			result, err := CoreGetCommitments(svc, str("deliberation_id"), keyID)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
 				return
 			}
+			writeA2AResult(w, req.ID, result)
+
+		case "gemot/publish_position":
+			if err := CorePublishPosition(svc, str("position_id"), keyID); err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, map[string]string{"status": "position published"})
+
+		case "gemot/challenge_analysis":
+			result, err := CoreChallengeAnalysis(svc, str("deliberation_id"), scope(str("agent_id")), str("reason"), keyID)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, result)
+
+		case "gemot/reframe":
+			result, err := CoreReframe(svc, creditStore, str("deliberation_id"), str("position_id"), str("model"), keyID, isAdmin, token)
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, result)
+
+		case "gemot/list_by_group":
 			var pgLimit, pgOffset int
 			if v, ok := req.Params["limit"].(float64); ok {
 				pgLimit = int(v)
@@ -707,26 +701,14 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			if v, ok := req.Params["offset"].(float64); ok {
 				pgOffset = int(v)
 			}
-			allDelibs, err := svc.ListByGroup(groupID, pgLimit, pgOffset)
+			delibs, err := CoreListByGroup(svc, str("group_id"), keyID, isAdmin, pgLimit, pgOffset)
 			if err != nil {
-				writeA2AError(w, req.ID, -32603, sanitizeError(err))
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
 				return
-			}
-			delibs := []deliberation.Deliberation{}
-			for _, d := range allDelibs {
-				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
-					continue
-				}
-				delibs = append(delibs, d)
 			}
 			writeA2AResult(w, req.ID, delibs)
 
 		case "gemot/list_by_agent":
-			agentID := str("agent_id")
-			if agentID == "" {
-				writeA2AError(w, req.ID, -32602, "agent_id is required")
-				return
-			}
 			var pgLimit, pgOffset int
 			if v, ok := req.Params["limit"].(float64); ok {
 				pgLimit = int(v)
@@ -734,17 +716,10 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			if v, ok := req.Params["offset"].(float64); ok {
 				pgOffset = int(v)
 			}
-			allDelibs, err := svc.ListByAgent(agentID, pgLimit, pgOffset)
+			delibs, err := CoreListByAgent(svc, str("agent_id"), keyID, isAdmin, pgLimit, pgOffset)
 			if err != nil {
-				writeA2AError(w, req.ID, -32603, sanitizeError(err))
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
 				return
-			}
-			delibs := []deliberation.Deliberation{}
-			for _, d := range allDelibs {
-				if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
-					continue
-				}
-				delibs = append(delibs, d)
 			}
 			writeA2AResult(w, req.ID, delibs)
 

@@ -229,6 +229,26 @@ func newServer(s *server) *sdkmcp.Server {
 		Description: "Change the governance template on an existing deliberation. Only the creator can do this. Affects analysis behavior (consensus threshold, analysis hints) for future rounds. Existing positions and votes are preserved. Use this to switch governance models mid-deliberation — e.g., start with 'assembly' for open discussion, switch to 'jury' for the final verdict.",
 	}, s.handleSetTemplate)
 
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "get_analysis_result",
+		Description: "Get the latest analysis result for a deliberation. Returns cruxes, clusters, consensus statements, and integrity warnings.",
+	}, s.handleGetAnalysisResult)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "get_votes",
+		Description: "Get all votes in a deliberation. Shows who voted on what and how.",
+	}, s.handleGetVotes)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "list_by_group",
+		Description: "List deliberations in a group. Groups link related deliberations (experiment, workflow, session). Pass a group_id to filter.",
+	}, s.handleListByGroup)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name:        "list_by_agent",
+		Description: "List deliberations an agent has participated in (submitted positions or voted).",
+	}, s.handleListByAgent)
+
 	return srv
 }
 
@@ -671,59 +691,23 @@ func (s *server) handleProposeCompromise(ctx context.Context, _ *sdkmcp.CallTool
 }
 
 func (s *server) handleChallengeAnalysis(ctx context.Context, _ *sdkmcp.CallToolRequest, args challengeAnalysisParams) (*sdkmcp.CallToolResult, any, error) {
-	if args.DeliberationID == "" || args.AgentID == "" || args.Reason == "" {
-		return errResult(fmt.Errorf("deliberation_id, agent_id, and reason are required"))
-	}
 	args.AgentID = scopeAgentID(ctx, args.AgentID)
-
-	// File the challenge as a dispute + trigger re-analysis
-	_, err := s.svc.DisputeCrux(args.DeliberationID, args.AgentID,
-		"[FULL ANALYSIS CHALLENGE]", args.Reason)
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	result, err := CoreChallengeAnalysis(s.svc, args.DeliberationID, args.AgentID, args.Reason, keyID)
 	if err != nil {
 		return errResult(err)
 	}
-
-	return textResult(fmt.Sprintf(
-		"Analysis challenged by %s. The challenge reason has been recorded as an integrity warning. "+
-			"Call analyze again to trigger re-analysis — the challenge will be visible to the analysis engine.",
-		args.AgentID,
-	)), nil, nil
+	return textResult(result["status"] + ". " + result["detail"]), nil, nil
 }
 
 func (s *server) handleReframe(ctx context.Context, _ *sdkmcp.CallToolRequest, args reframeParams) (*sdkmcp.CallToolResult, any, error) {
-	if args.DeliberationID == "" || args.PositionID == "" {
-		return errResult(fmt.Errorf("deliberation_id and position_id are required"))
-	}
-	if args.Model != "" {
-		if !llm.AllowedModels[args.Model] {
-			return errResult(fmt.Errorf("unsupported model %q", args.Model))
-		}
-		ctx = context.WithValue(ctx, llm.ContextKeyModel{}, args.Model)
-	}
-
-	// Deduct credits
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
 	apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
-	var creditCost int
-	if apiKey != "" && s.credits != nil {
-		creditCost = payments.CreditCost(args.Model)
-		if _, err := s.credits.Deduct(apiKey, creditCost); err != nil {
-			balance, _ := s.credits.GetBalance(apiKey)
-			return errResult(fmt.Errorf("insufficient credits: have %d, need %d", balance, creditCost))
-		}
-	}
-
-	reframed, err := s.svc.ReframePosition(ctx, args.DeliberationID, args.PositionID)
+	result, err := CoreReframe(s.svc, s.credits, args.DeliberationID, args.PositionID, args.Model, keyID, false, apiKey)
 	if err != nil {
-		if apiKey != "" && creditCost > 0 && s.credits != nil {
-			_, _ = s.credits.AddCredits(apiKey, creditCost)
-		}
 		return errResult(err)
 	}
-
-	return jsonResult(map[string]string{
-		"original_position_id": args.PositionID,
-		"reframed":             reframed,
-	})
+	return jsonResult(result)
 }
 
 func (s *server) handleDelegate(ctx context.Context, _ *sdkmcp.CallToolRequest, args delegateParams) (*sdkmcp.CallToolResult, any, error) {
@@ -741,21 +725,8 @@ func (s *server) handleDelegate(ctx context.Context, _ *sdkmcp.CallToolRequest, 
 }
 
 func (s *server) handlePublishPosition(ctx context.Context, _ *sdkmcp.CallToolRequest, args publishPositionParams) (*sdkmcp.CallToolResult, any, error) {
-	if args.PositionID == "" {
-		return errResult(fmt.Errorf("position_id is required"))
-	}
-	// Verify caller owns this position (check key namespace)
 	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
-	if keyID != "" {
-		pos, err := s.svc.GetPositionByID(args.PositionID)
-		if err != nil {
-			return errResult(fmt.Errorf("position not found"))
-		}
-		if !strings.HasPrefix(pos.AgentID, keyID+":") {
-			return errResult(fmt.Errorf("access denied: you can only publish your own positions"))
-		}
-	}
-	if err := s.svc.PublishPosition(args.PositionID); err != nil {
+	if err := CorePublishPosition(s.svc, args.PositionID, keyID); err != nil {
 		return errResult(err)
 	}
 	return textResult("position published"), nil, nil
@@ -775,14 +746,8 @@ func (s *server) handleCommit(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 }
 
 func (s *server) handleGetCommitments(ctx context.Context, _ *sdkmcp.CallToolRequest, args getCommitmentsParams) (*sdkmcp.CallToolResult, any, error) {
-	if args.DeliberationID == "" {
-		return errResult(fmt.Errorf("deliberation_id is required"))
-	}
 	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
-	if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
-		return errResult(err)
-	}
-	commitments, err := s.svc.GetCommitments(args.DeliberationID)
+	commitments, err := CoreGetCommitments(s.svc, args.DeliberationID, keyID)
 	if err != nil {
 		return errResult(err)
 	}
@@ -920,6 +885,69 @@ func (s *server) handleReportAbuse(ctx context.Context, _ *sdkmcp.CallToolReques
 	}
 		s.audit(ctx, "report_abuse", args.DeliberationID, "")
 return textResult("abuse report filed — thank you"), nil, nil
+}
+
+// --- New parity handlers (backed by core.go) ---
+
+type getAnalysisResultParams struct {
+	DeliberationID string `json:"deliberation_id"`
+}
+
+func (s *server) handleGetAnalysisResult(ctx context.Context, _ *sdkmcp.CallToolRequest, args getAnalysisResultParams) (*sdkmcp.CallToolResult, any, error) {
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	result, err := CoreGetAnalysisResult(s.svc, args.DeliberationID, keyID)
+	if err != nil {
+		return errResult(err)
+	}
+	if result == nil {
+		return textResult("no analysis results yet"), nil, nil
+	}
+	return jsonResult(result)
+}
+
+type getVotesParams struct {
+	DeliberationID string `json:"deliberation_id"`
+}
+
+func (s *server) handleGetVotes(ctx context.Context, _ *sdkmcp.CallToolRequest, args getVotesParams) (*sdkmcp.CallToolResult, any, error) {
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	votes, err := CoreGetVotes(s.svc, args.DeliberationID, keyID)
+	if err != nil {
+		return errResult(err)
+	}
+	return jsonResult(votes)
+}
+
+type listByGroupParams struct {
+	GroupID string `json:"group_id"`
+	Limit   int    `json:"limit,omitempty"`
+	Offset  int    `json:"offset,omitempty"`
+}
+
+func (s *server) handleListByGroup(ctx context.Context, _ *sdkmcp.CallToolRequest, args listByGroupParams) (*sdkmcp.CallToolResult, any, error) {
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	isAdmin, _ := ctx.Value(payments.ContextKeyIsAdmin{}).(bool)
+	delibs, err := CoreListByGroup(s.svc, args.GroupID, keyID, isAdmin, args.Limit, args.Offset)
+	if err != nil {
+		return errResult(err)
+	}
+	return jsonResult(delibs)
+}
+
+type listByAgentParams struct {
+	AgentID string `json:"agent_id"`
+	Limit   int    `json:"limit,omitempty"`
+	Offset  int    `json:"offset,omitempty"`
+}
+
+func (s *server) handleListByAgent(ctx context.Context, _ *sdkmcp.CallToolRequest, args listByAgentParams) (*sdkmcp.CallToolResult, any, error) {
+	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+	isAdmin, _ := ctx.Value(payments.ContextKeyIsAdmin{}).(bool)
+	delibs, err := CoreListByAgent(s.svc, args.AgentID, keyID, isAdmin, args.Limit, args.Offset)
+	if err != nil {
+		return errResult(err)
+	}
+	return jsonResult(delibs)
 }
 
 // --- Helpers ---
