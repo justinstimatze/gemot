@@ -117,6 +117,12 @@ func cmdServe(httpMode bool, addr string) {
 				} else if n > 0 {
 					fmt.Fprintf(os.Stderr, "gemot: cleaned up %d expired sandbox deliberation(s)\n", n)
 				}
+				// Purge soft-deleted deliberations older than 60 days
+				if n, err := db.PurgeSoftDeleted(60 * 24 * time.Hour); err != nil {
+					fmt.Fprintf(os.Stderr, "gemot: purge error: %v\n", err)
+				} else if n > 0 {
+					fmt.Fprintf(os.Stderr, "gemot: purged %d soft-deleted deliberation(s)\n", n)
+				}
 				// Evict stale cost tracker entries (24h)
 				tracker.Cleanup(24 * time.Hour)
 			}
