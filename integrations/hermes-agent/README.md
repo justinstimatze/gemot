@@ -2,114 +2,81 @@
 
 When `delegate_task` subagents disagree, the parent agent guesses. Gemot finds the crux — the specific claim that divides them — so the parent can act on structure, not intuition.
 
-## Demo
+## Demo: Hermes CLI, real delegate_task, real gemot MCP
 
-Three Hermes v0.6.0 agents. Same setup as `delegate_task` batch.
+One parent agent, run via `hermes --query`. It called `delegate_task` to spawn 3 specialist reviewers, then used gemot MCP tools to analyze where they disagreed. No scripting — the parent agent orchestrated everything.
 
-> *"Should we use adversarial debate or a specialist panel for automated code review? 200K LOC Python, payment handling."*
+```
+$ hermes --query "Review this payment code from 3 specialist perspectives,
+  then use gemot to find where the reviewers disagree..."
 
-**debate-advocate**: *"Go adversarial. Panel review fails on payment code — each specialist reviews in isolation, nobody models the full execution chain..."*
+  ┊ 📋 plan      4 task(s)
+  ┊ ⚡ delegate_task  [3 specialist reviews in parallel]
+  ┊ ⚡ mcp_gemot_create_deliberation
+  ┊ ⚡ mcp_gemot_submit_position  ×3
+  ┊ ⚡ mcp_gemot_analyze
+  ┊ ⚡ mcp_gemot_get_deliberation  [polling...]
+  ┊ ⚡ mcp_gemot_get_context
+```
 
-**panel-advocate**: *"Use the panel. Two agents can't cover security, performance, and maintainability..."*
+The code under review:
+```python
+async def process_payment(user_id: str, amount: float, db: AsyncSession):
+    user = await db.execute(select(User).where(User.id == user_id))
+    user = user.scalar_one()
+    if user.balance < amount:
+        raise InsufficientFunds()
+    user.balance -= amount
+    await db.commit()
+    await notify_payment_service(user_id, amount)
+    return {"status": "success", "new_balance": user.balance}
+```
 
-**cost-engineer**: *"Neither is production-ready without a baseline. If forced, consensus panel with PCI-DSS pre-filter..."*
+### What the parent agent reported (unedited, abbreviated)
 
-### What gemot found
+**4 cruxes found** from organic disagreement between 3 independent reviewers:
 
-**Round 1** — 2 cruxes, 5 consensus items, 4 bridging proposals, compromise generated.
+**Crux 1 — What's the most important fix?**
+Security says fix the race then add authorization (IDOR is exploitable). Reliability says fix race + idempotency + outbox together (they compound). Performance says move notification out of the critical path first (highest-leverage latency win).
 
-Consensus (stable across all 3 rounds):
-- Majority voting on security findings is unacceptable — single REJECT blocks merge
-- Cross-domain vulnerabilities are the hardest class to catch
-- Neither architecture should be trusted without empirical validation
+**Crux 2 — How to fix the notification problem?**
+Security and reliability both want Outbox Pattern (write to DB in same transaction). Performance says fire-and-forget is acceptable for latency. Genuine trade-off.
 
-**Round 2** — Agents read the cruxes and adjusted. Panel-advocate conceded: *"adversarial debate does have a structural advantage for cross-boundary threat modeling."* Cost-engineer conceded: *"the point about composed attack chains across domain boundaries is real."*
+**Crux 3 — Is missing authorization critical?**
+Security: YES, CRITICAL IDOR. Reliability: important but not critical. Performance: didn't flag it. Sharpest crux — only security sees it as urgent.
 
-6 cruxes (more specific), 5 consensus (stable), 7 bridging proposals.
+**Crux 4 — Is idempotency a critical gap?**
+Reliability: YES, P0 (client retries double-charge users). Security: medium (replay attack vector). Performance: didn't flag it.
 
-**Round 3** — All three agreed on hybrid architecture. Remaining disagreement: who holds the merge gate before empirical data exists.
+**Parent agent's synthesis:**
 
-8 cruxes (refined), 5 consensus (stable), 10 bridging proposals, implementation-ready compromise.
-
-### Parent agent output (unedited)
-
-> **Consensus:** Run both systems in shadow mode first. The metric that decides: cross-domain false-negative rate. A single security REJECT blocks the merge.
+> Fix the race condition first — it's the only finding all three reviewers rate as critical. The atomic UPDATE eliminates the race, removes a DB round-trip, and doesn't require locks.
 >
-> **Agreement:** Hybrid architecture wins — adversarial + panel in parallel.
->
-> **Open question:** Who holds the primary gate before data exists.
->
-> **Next step:** Deploy both in shadow mode, measure cross-domain recall, defer the gate decision until you have data.
+> The sharpest disagreement for you to make a call on: Security says add an authorization check urgently. The other reviewers didn't flag it. If this function is called from an authenticated API handler that already validates ownership, it may be a non-issue. If `user_id` comes from untrusted input, the security reviewer is right and it's critical.
 
 ## How it works
 
-```python
-# After delegate_task returns conflicting summaries:
-aggregated, analysis = await asyncio.gather(
-    synthesize_subagent_results(summaries),
-    analyze_disagreements(query, summaries),  # gemot
-)
-# analysis.relevant_cruxes, .consensus_statements, .compromise_proposal
+Gemot is an MCP server. Add 4 lines to your config, and `delegate_task` results can be analyzed for disagreements:
+
+```yaml
+# ~/.hermes/config.yaml
+mcp_servers:
+  gemot:
+    url: "https://gemot.dev/mcp"
+    timeout: 180
 ```
 
-<details>
-<summary>Implementation (~40 lines)</summary>
+A [`deliberated-review` skill](integrations/hermes-agent/skills/deliberated-review/SKILL.md) is included that teaches the agent the workflow: delegate → submit positions → analyze → report cruxes.
 
-```python
-async def analyze_disagreements(query, responses):
-    try:
-        async with httpx.AsyncClient() as c:
-            r = await c.post(GEMOT_URL, json={"jsonrpc":"2.0","id":1,
-                "method":"gemot/create_deliberation",
-                "params":{"topic":query[:200],"type":"reasoning"}})
-            did = r.json()["result"]["deliberation_id"]
-
-            for i, (agent, text) in enumerate(responses.items()):
-                await c.post(GEMOT_URL, json={"jsonrpc":"2.0","id":i+10,
-                    "method":"gemot/submit_position",
-                    "params":{"deliberation_id":did,"agent_id":agent,"content":text}})
-
-            await c.post(GEMOT_URL, json={"jsonrpc":"2.0","id":100,
-                "method":"gemot/analyze","params":{"deliberation_id":did}})
-
-            for _ in range(60):
-                await asyncio.sleep(3)
-                r = await c.post(GEMOT_URL, json={"jsonrpc":"2.0","id":101,
-                    "method":"gemot/get_deliberation","params":{"deliberation_id":did}})
-                if r.json()["result"]["status"] == "open": break
-
-            r = await c.post(GEMOT_URL, json={"jsonrpc":"2.0","id":102,
-                "method":"gemot/get_context",
-                "params":{"deliberation_id":did,"agent_id":next(iter(responses))}})
-            return r.json()["result"]
-    except Exception:
-        return None
-```
-</details>
-
-## When to bother
-
-For 2-3 short summaries, just read them. Gemot helps when you need to know *why* they disagree, not just *that* they disagree. Also works for `mixture_of_agents`.
-
-## Setup
-
+Self-hosted (single Go binary):
 ```bash
-# Self-hosted
 git clone https://github.com/justinstimatze/gemot.git && cd gemot
 go build -o gemot . && GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http --addr :8080
 ```
 
-```yaml
-# Or MCP (Hermes auto-discovers tools)
-mcp_servers:
-  gemot:
-    url: "https://gemot.dev/mcp"
-    timeout: 120
-```
-
 ## On #412
 
-Build the voting engine natively — it's ~200 LOC. Gemot is for what voting can't tell you: *why* the vote split 2-1, and what specific question would resolve it.
+Build the voting engine natively — it's ~200 LOC. Gemot is for what voting can't tell you: *why* the vote split, and what question would resolve it.
 
 **Next:** PR to `delegate_task` adding optional disagreement analysis. Off by default.
 
