@@ -64,6 +64,9 @@ var a2aMethods = []string{
 	"gemot/publish_position",
 	"gemot/challenge_analysis",
 	"gemot/reframe",
+	"gemot/fulfill_commitment",
+	"gemot/break_commitment",
+	"gemot/agent_reputation",
 	"gemot/create_share",
 	"gemot/lookup_share",
 }
@@ -692,6 +695,36 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				return
 			}
 			writeA2AResult(w, req.ID, result)
+
+		case "gemot/fulfill_commitment":
+			verifiedBy := str("verified_by")
+			if verifiedBy == "" {
+				verifiedBy = keyID
+			}
+			if err := CoreFulfillCommitment(svc, str("commitment_id"), verifiedBy); err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, map[string]string{"status": "commitment fulfilled"})
+
+		case "gemot/break_commitment":
+			verifiedBy := str("verified_by")
+			if verifiedBy == "" {
+				verifiedBy = keyID
+			}
+			if err := CoreBreakCommitment(svc, str("commitment_id"), str("reason"), verifiedBy); err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, map[string]string{"status": "commitment broken"})
+
+		case "gemot/agent_reputation":
+			rep, err := CoreAgentReputation(svc, str("agent_id"), str("group_id"))
+			if err != nil {
+				writeA2AError(w, req.ID, -32000, sanitizeError(err))
+				return
+			}
+			writeA2AResult(w, req.ID, rep)
 
 		case "gemot/list_by_group":
 			var pgLimit, pgOffset int
