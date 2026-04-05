@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"html"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -94,7 +94,7 @@ func CheckoutHandler(store *CreditStore, baseURL string) http.HandlerFunc {
 
 		s, err := session.New(params)
 		if err != nil {
-			log.Printf("[gemot] stripe checkout error: %v", err)
+			slog.Error("stripe checkout error", "error", err)
 			http.Error(w, `{"error":"failed to create checkout session"}`, http.StatusInternalServerError)
 			return
 		}
@@ -118,13 +118,13 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 		var event stripe.Event
 
 		if webhookSecret == "" {
-			log.Printf("[gemot] webhook: STRIPE_WEBHOOK_SECRET not set, rejecting event")
+			slog.Error("webhook: STRIPE_WEBHOOK_SECRET not set, rejecting event")
 			http.Error(w, "webhook not configured", http.StatusServiceUnavailable)
 			return
 		}
 		event, err = webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), webhookSecret)
 		if err != nil {
-			log.Printf("[gemot] webhook signature verification failed: %v", err)
+			slog.Error("webhook signature verification failed", "error", err)
 			http.Error(w, "invalid signature", http.StatusBadRequest)
 			return
 		}
@@ -132,7 +132,7 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 		if event.Type == "checkout.session.completed" {
 			var sess stripe.CheckoutSession
 			if err := json.Unmarshal(event.Data.Raw, &sess); err != nil {
-				log.Printf("[gemot] webhook parse error: %v", err)
+				slog.Error("webhook parse error", "error", err)
 				http.Error(w, "parse error", http.StatusBadRequest)
 				return
 			}
@@ -159,7 +159,7 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 				}
 			}
 			if expectedAmount > 0 && sess.AmountTotal != expectedAmount {
-				log.Printf("[gemot] webhook: amount mismatch for session %s: got %d, expected %d", sess.ID, sess.AmountTotal, expectedAmount)
+				slog.Warn("webhook: amount mismatch", "session_id", sess.ID, "got", sess.AmountTotal, "expected", expectedAmount)
 				w.WriteHeader(http.StatusOK) // ACK to Stripe but don't provision
 				return
 			}
@@ -174,7 +174,7 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 					if len(keyPreview) > 12 {
 						keyPreview = keyPreview[:12]
 					}
-					log.Printf("[gemot] webhook: session %s already processed (key: %s...)", sess.ID, keyPreview)
+					slog.Info("webhook: session already processed", "session_id", sess.ID, "key_preview", keyPreview)
 					w.WriteHeader(http.StatusOK)
 					return
 				}
@@ -185,14 +185,14 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 					// No existing key — create one
 					key, err = store.GenerateKey(email, customerID, sess.ID, credits)
 					if err != nil {
-						log.Printf("[gemot] failed to create api key: %v", err)
+						slog.Error("failed to create api key", "error", err)
 						w.WriteHeader(http.StatusInternalServerError)
 						return
 					}
 					_ = credits // balance tracked in DB
-					log.Printf("[gemot] new api key created for %s: %s (%d credits)", email, key[:12]+"...", credits)
+					slog.Info("new api key created", "email", email, "key_prefix", key[:12]+"...", "credits", credits)
 				} else {
-					log.Printf("[gemot] credits added for %s: +%d = %d total (key: %s...)", email, credits, balance, key[:12])
+					slog.Info("credits added", "email", email, "added", credits, "balance", balance, "key_prefix", key[:12]+"...")
 				}
 			}
 		}
@@ -213,10 +213,10 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
 		}
 
 		// Look up the session to get the email and payment status
-		log.Printf("[gemot] success page accessed: session=%s remote=%s", sessionID[:min(len(sessionID), 20)]+"...", r.RemoteAddr)
+		slog.Info("success page accessed", "session_prefix", sessionID[:min(len(sessionID), 20)]+"...", "remote_addr", r.RemoteAddr)
 		s, err := session.Get(sessionID, nil)
 		if err != nil {
-			log.Printf("[gemot] success page: invalid session %s from %s", sessionID[:min(len(sessionID), 20)]+"...", r.RemoteAddr)
+			slog.Warn("success page: invalid session", "session_prefix", sessionID[:min(len(sessionID), 20)]+"...", "remote_addr", r.RemoteAddr)
 			http.Error(w, "invalid session", http.StatusBadRequest)
 			return
 		}
@@ -262,10 +262,10 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
 				}
 				key, err = store.GenerateKey(email, customerID, s.ID, credits)
 				if err != nil {
-					log.Printf("[gemot] success handler: failed to create key for %s: %v", email, err)
+					slog.Error("success handler: failed to create key", "email", email, "error", err)
 				} else {
 					balance = credits
-					log.Printf("[gemot] success handler: provisioned key for %s inline (webhook may not have fired yet)", email)
+					slog.Info("success handler: provisioned key inline", "email", email)
 				}
 			}
 		}

@@ -182,7 +182,7 @@ func TestPositionCap(t *testing.T) {
 		}
 	}
 	// Verify count query works
-	count, err := db.CountPositions(d.ID)
+	count, err := db.CountPositions(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

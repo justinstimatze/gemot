@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"strings"
 	"time"
@@ -68,10 +68,13 @@ func isRetryable(err error) bool {
 
 // retryDelay returns the delay before the nth retry (exponential backoff, capped at 30s).
 func retryDelay(attempt int) time.Duration {
+	const maxDelay = 30 * time.Second
+	if attempt > 4 { // 2s * 2^4 = 32s > 30s cap, so anything above 4 is always capped
+		return maxDelay
+	}
 	delay := baseRetryDelay * time.Duration(math.Pow(2, float64(attempt)))
-	// Cap at 30 seconds
-	if delay > 30*time.Second {
-		delay = 30 * time.Second
+	if delay > maxDelay {
+		delay = maxDelay
 	}
 	return delay
 }
@@ -123,15 +126,18 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		attempts = attempt
 
-		// Acquire API slot (blocks if 10 concurrent calls are in flight)
-		select {
-		case apiSemaphore <- struct{}{}:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-
-		resp, lastErr = c.client.Messages.New(ctx, params)
-		<-apiSemaphore // release slot immediately after API call
+		// Acquire API slot (blocks if 10 concurrent calls are in flight).
+		// Use a func scope so defer releases even if the API call panics.
+		lastErr = func() error {
+			select {
+			case apiSemaphore <- struct{}{}:
+				defer func() { <-apiSemaphore }()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			resp, lastErr = c.client.Messages.New(ctx, params)
+			return lastErr
+		}()
 
 		if lastErr == nil {
 			break
@@ -140,7 +146,7 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 			return fmt.Errorf("API call failed: %w", lastErr)
 		}
 		// Retryable error — log and sleep without holding the semaphore
-		log.Printf("[gemot] LLM retry %d/%d: %v", attempt+1, maxRetries, lastErr)
+		slog.Warn("LLM retry", "attempt", attempt+1, "max_retries", maxRetries, "error", lastErr)
 
 		delay := retryDelay(attempt)
 		select {
@@ -150,11 +156,11 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 		}
 	}
 	if lastErr != nil {
-		log.Printf("[gemot] LLM call failed after %d retries: %v", maxRetries, lastErr)
+		slog.Error("LLM call failed", "retries", maxRetries, "error", lastErr)
 		return fmt.Errorf("API call failed after %d retries: %w", maxRetries, lastErr)
 	}
 	if attempts > 0 {
-		log.Printf("[gemot] LLM call succeeded after %d retries", attempts)
+		slog.Info("LLM call succeeded after retries", "retries", attempts)
 	}
 
 	// Report token usage if callback is set
@@ -195,15 +201,17 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		attempts = attempt
 
-		// Acquire API slot
-		select {
-		case apiSemaphore <- struct{}{}:
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-
-		resp, lastErr = c.client.Messages.New(ctx, params)
-		<-apiSemaphore // release slot immediately after API call
+		// Acquire API slot — func scope ensures defer releases even on panic
+		lastErr = func() error {
+			select {
+			case apiSemaphore <- struct{}{}:
+				defer func() { <-apiSemaphore }()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			resp, lastErr = c.client.Messages.New(ctx, params)
+			return lastErr
+		}()
 
 		if lastErr == nil {
 			break
@@ -212,7 +220,7 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 			return "", fmt.Errorf("classify API call failed: %w", lastErr)
 		}
 		// Retryable error — log and sleep without holding the semaphore
-		log.Printf("[gemot] LLM classify retry %d/%d: %v", attempt+1, maxRetries, lastErr)
+		slog.Warn("LLM classify retry", "attempt", attempt+1, "max_retries", maxRetries, "error", lastErr)
 
 		delay := retryDelay(attempt)
 		select {
@@ -222,11 +230,11 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 		}
 	}
 	if lastErr != nil {
-		log.Printf("[gemot] LLM classify failed after %d retries: %v", maxRetries, lastErr)
+		slog.Error("LLM classify failed", "retries", maxRetries, "error", lastErr)
 		return "", fmt.Errorf("classify API call failed after %d retries: %w", maxRetries, lastErr)
 	}
 	if attempts > 0 {
-		log.Printf("[gemot] LLM classify succeeded after %d retries", attempts)
+		slog.Info("LLM classify succeeded after retries", "retries", attempts)
 	}
 
 	if c.OnUsage != nil {

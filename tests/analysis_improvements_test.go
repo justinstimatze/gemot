@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"testing"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
@@ -166,12 +167,12 @@ func TestContextAccessTracking(t *testing.T) {
 	_, db := newTestService(t)
 
 	// Record access
-	if err := db.RecordContextAccess("delib1", "agent1", 1); err != nil {
+	if err := db.RecordContextAccess(context.Background(), "delib1", "agent1", 1); err != nil {
 		t.Fatal(err)
 	}
 
 	// Should have access
-	has, err := db.HasContextAccess("delib1", "agent1", 1)
+	has, err := db.HasContextAccess(context.Background(), "delib1", "agent1", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +181,7 @@ func TestContextAccessTracking(t *testing.T) {
 	}
 
 	// Different round should not have access
-	has, err = db.HasContextAccess("delib1", "agent1", 2)
+	has, err = db.HasContextAccess(context.Background(), "delib1", "agent1", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestContextAccessTracking(t *testing.T) {
 	}
 
 	// Different agent should not have access
-	has, err = db.HasContextAccess("delib1", "agent2", 1)
+	has, err = db.HasContextAccess(context.Background(), "delib1", "agent2", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestContextAccessTracking(t *testing.T) {
 	}
 
 	// Duplicate insert should not error (INSERT OR IGNORE)
-	if err := db.RecordContextAccess("delib1", "agent1", 1); err != nil {
+	if err := db.RecordContextAccess(context.Background(), "delib1", "agent1", 1); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -207,9 +208,9 @@ func TestAuditLogStorage(t *testing.T) {
 	_, db := newTestService(t)
 
 	// Log some events
-	db.LogAuditEvent("key1", "1.2.3.4", "gemot/submit_position", "delib1", "agent1")
-	db.LogAuditEvent("key1", "1.2.3.4", "gemot/vote", "delib1", "agent1")
-	db.LogAuditEvent("key2", "5.6.7.8", "gemot/submit_position", "delib1", "agent2")
+	db.LogAuditEvent("key1", "1.2.3.4", "gemot/participate:submit_position", "delib1", "agent1")
+	db.LogAuditEvent("key1", "1.2.3.4", "gemot/participate:vote", "delib1", "agent1")
+	db.LogAuditEvent("key2", "5.6.7.8", "gemot/participate:submit_position", "delib1", "agent2")
 
 	// Query
 	logs, err := db.GetAuditLog("delib1", 50)
@@ -225,7 +226,7 @@ func TestAuditLogStorage(t *testing.T) {
 	for _, l := range logs {
 		methods[l["method"]+":"+l["key_id"]] = true
 	}
-	if !methods["gemot/submit_position:key1"] || !methods["gemot/vote:key1"] || !methods["gemot/submit_position:key2"] {
+	if !methods["gemot/participate:submit_position:key1"] || !methods["gemot/participate:vote:key1"] || !methods["gemot/participate:submit_position:key2"] {
 		t.Fatal("expected all 3 audit entries to be present")
 	}
 

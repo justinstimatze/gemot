@@ -112,7 +112,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Creating deliberation...\n")
 	topic := "How should we govern frontier AI development?"
 	description := "Five experts with different perspectives deliberate on AI governance. Each submits a position, votes on others' positions, then receives analysis identifying the key disagreements and areas of consensus."
-	createRes := callTool(ctx, session, "create_deliberation", map[string]any{"topic": topic, "description": description})
+	createRes := callTool(ctx, session, "deliberation", map[string]any{"action": "create", "topic": topic, "description": description})
 	var delib struct {
 		ID string `json:"deliberation_id"`
 	}
@@ -122,8 +122,8 @@ func main() {
 	posIDs := map[string]string{}
 	for _, a := range agents {
 		fmt.Fprintf(os.Stderr, "  %s submitting position...\n", a.Role)
-		res := callTool(ctx, session, "submit_position", map[string]any{
-			"deliberation_id": delib.ID, "agent_id": a.ID, "content": a.Position,
+		res := callTool(ctx, session, "participate", map[string]any{
+			"action": "submit_position", "deliberation_id": delib.ID, "agent_id": a.ID, "content": a.Position,
 		})
 		var pos struct {
 			ID string `json:"position_id"`
@@ -162,8 +162,8 @@ func main() {
 	var votes []Vote
 	fmt.Fprintf(os.Stderr, "Recording votes...\n")
 	for _, v := range voteMatrix {
-		callTool(ctx, session, "vote", map[string]any{
-			"deliberation_id": delib.ID, "agent_id": v.from, "position_id": posIDs[v.to], "value": v.value,
+		callTool(ctx, session, "participate", map[string]any{
+			"action": "vote", "deliberation_id": delib.ID, "agent_id": v.from, "position_id": posIDs[v.to], "value": v.value,
 		})
 		label := "pass"
 		if v.value == 1 {
@@ -177,7 +177,7 @@ func main() {
 
 	// Analyze
 	fmt.Fprintf(os.Stderr, "Running analysis (this takes ~2 minutes)...\n")
-	analyzeRes := callTool(ctx, session, "analyze", map[string]any{"deliberation_id": delib.ID})
+	analyzeRes := callTool(ctx, session, "analyze", map[string]any{"action": "run", "deliberation_id": delib.ID})
 	fmt.Fprintf(os.Stderr, "Raw analysis (first 500 chars): %s\n", analyzeRes[:min(500, len(analyzeRes))])
 	var result struct {
 		Cruxes []struct {
@@ -202,8 +202,8 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Getting agent contexts...\n")
 	contexts := map[string]map[string]any{}
 	for _, a := range agents {
-		res := callTool(ctx, session, "get_context", map[string]any{
-			"deliberation_id": delib.ID, "agent_id": a.ID,
+		res := callTool(ctx, session, "participate", map[string]any{
+			"action": "get_context", "deliberation_id": delib.ID, "agent_id": a.ID,
 		})
 		var actx map[string]any
 		mustParse(res, &actx)

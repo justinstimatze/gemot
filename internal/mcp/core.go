@@ -191,16 +191,16 @@ func CoreGetVotes(svc *deliberation.Service, deliberationID, keyID string) ([]de
 	return svc.GetVotes(deliberationID)
 }
 
-// CoreListByGroup lists deliberations in a group with visibility filtering.
+// CoreListByGroup lists deliberations in a group.
 func CoreListByGroup(svc *deliberation.Service, groupID, keyID string, isAdmin bool, limit, offset int) ([]deliberation.Deliberation, error) {
 	if groupID == "" {
 		return nil, fmt.Errorf("group_id is required")
 	}
-	all, err := svc.ListByGroup(groupID, limit, offset)
-	if err != nil {
-		return nil, err
+	effectiveKeyID := keyID
+	if isAdmin {
+		effectiveKeyID = "" // admins see all, empty keyID matches the OR condition
 	}
-	return filterVisible(all, keyID, isAdmin), nil
+	return svc.ListByGroup(groupID, limit, offset, effectiveKeyID)
 }
 
 // CoreListByAgent lists deliberations an agent has participated in.
@@ -208,11 +208,11 @@ func CoreListByAgent(svc *deliberation.Service, agentID, keyID string, isAdmin b
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_id is required")
 	}
-	all, err := svc.ListByAgent(agentID, limit, offset)
-	if err != nil {
-		return nil, err
+	effectiveKeyID := keyID
+	if isAdmin {
+		effectiveKeyID = ""
 	}
-	return filterVisible(all, keyID, isAdmin), nil
+	return svc.ListByAgent(agentID, limit, offset, effectiveKeyID)
 }
 
 // CoreFulfillCommitment marks a commitment as fulfilled.
@@ -261,14 +261,3 @@ func CoreWithdraw(svc *deliberation.Service, deliberationID, agentID, keyID stri
 	return svc.WithdrawAgent(deliberationID, agentID)
 }
 
-// filterVisible removes private deliberations not owned by the caller.
-func filterVisible(all []deliberation.Deliberation, keyID string, isAdmin bool) []deliberation.Deliberation {
-	result := make([]deliberation.Deliberation, 0, len(all))
-	for _, d := range all {
-		if d.Visibility == "private" && d.CreatorKey != keyID && !isAdmin {
-			continue
-		}
-		result = append(result, d)
-	}
-	return result
-}

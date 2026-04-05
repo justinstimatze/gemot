@@ -177,7 +177,7 @@ func TestSoftDelete(t *testing.T) {
 	}
 
 	// Should NOT appear in list
-	deliberations, err := svc.ListDeliberations(0, 0)
+	deliberations, err := svc.ListDeliberations(0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestForcedAcknowledgment(t *testing.T) {
 	}
 
 	// Record context access
-	db.RecordContextAccess(d.ID, "agent1", 2)
+	db.RecordContextAccess(context.Background(), d.ID, "agent1", 2)
 
 	// Now submit should succeed
 	_, err = svc.SubmitPosition(d.ID, "agent1", "Updated position after reading cruxes")

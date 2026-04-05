@@ -42,7 +42,7 @@ func (s *CreditStore) GenerateKey(email, stripeCustomerID, stripeSessionID strin
 	return key, nil
 }
 
-// KeyID derives a stable 8-char identifier from an API key via SHA256.
+// KeyID derives a stable 16-char identifier from an API key via SHA256.
 // Used to scope agent identities to their API key owner.
 // Hashed to avoid leaking any prefix of the actual key material.
 func KeyID(key string) string {
@@ -50,7 +50,7 @@ func KeyID(key string) string {
 		return ""
 	}
 	h := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(h[:4]) // 8 hex chars = 32 bits, collision-resistant for <10K keys
+	return hex.EncodeToString(h[:8]) // 16 hex chars = 64 bits, collision-resistant for millions of keys
 }
 
 // AddCredits adds credits to an existing key. Returns new balance.

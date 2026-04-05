@@ -82,7 +82,7 @@ func TestConcurrentToolCalls(t *testing.T) {
 	}
 
 	// Verify votes were recorded
-	votes, err := db.GetVotes(d.ID)
+	votes, err := db.GetVotes(context.Background(), d.ID)
 	if err != nil {
 		t.Fatalf("GetVotes: %v", err)
 	}

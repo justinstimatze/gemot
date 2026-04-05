@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -13,11 +14,11 @@ func TestShareTokenCreateAndLookup(t *testing.T) {
 	token := "tok_abc123"
 	expiresAt := time.Now().Add(24 * time.Hour)
 
-	if err := db.CreateShareToken(token, groupID, expiresAt); err != nil {
+	if err := db.CreateShareToken(context.Background(), token, groupID, expiresAt); err != nil {
 		t.Fatalf("CreateShareToken: %v", err)
 	}
 
-	got, err := db.LookupShareToken(token)
+	got, err := db.LookupShareToken(context.Background(), token)
 	if err != nil {
 		t.Fatalf("LookupShareToken: %v", err)
 	}
@@ -30,7 +31,7 @@ func TestShareTokenCreateAndLookup(t *testing.T) {
 func TestShareTokenNotFound(t *testing.T) {
 	db := tempDB(t)
 
-	_, err := db.LookupShareToken("nonexistent-token")
+	_, err := db.LookupShareToken(context.Background(), "nonexistent-token")
 	if err == nil {
 		t.Fatal("expected error for nonexistent token, got nil")
 	}
@@ -44,11 +45,11 @@ func TestShareTokenExpired(t *testing.T) {
 	token := "tok_expired"
 	expiresAt := time.Now().Add(-1 * time.Hour) // already expired
 
-	if err := db.CreateShareToken(token, groupID, expiresAt); err != nil {
+	if err := db.CreateShareToken(context.Background(), token, groupID, expiresAt); err != nil {
 		t.Fatalf("CreateShareToken: %v", err)
 	}
 
-	_, err := db.LookupShareToken(token)
+	_, err := db.LookupShareToken(context.Background(), token)
 	if err == nil {
 		t.Fatal("expected error for expired token, got nil")
 	}

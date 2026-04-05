@@ -176,7 +176,7 @@ func TestFullDeliberationLoop(t *testing.T) {
 	}
 
 	// Step 7: List deliberations
-	list, err := svc.ListDeliberations(0, 0)
+	list, err := svc.ListDeliberations(0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestClosedDeliberationRejectsInput(t *testing.T) {
 	svc, db := newTestService(t)
 
 	d, _ := svc.CreateDeliberation("Test", "")
-	db.UpdateDeliberationStatus(d.ID, "closed")
+	db.UpdateDeliberationStatus(context.Background(), d.ID, "closed")
 
 	if _, err := svc.SubmitPosition(d.ID, "agent-1", "Late position"); err == nil {
 		t.Fatal("expected error submitting to closed deliberation")
