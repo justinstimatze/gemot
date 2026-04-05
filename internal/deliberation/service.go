@@ -212,10 +212,32 @@ type Service struct {
 	// Used by stuck recovery to kill zombie analysis goroutines.
 	analysisMu      sync.Mutex
 	activeAnalyses  map[string]context.CancelFunc
+
+	// Per-deliberation lock for vote+resolution atomicity.
+	// Prevents concurrent votes from computing conflicting resolutions.
+	resolutionMu    sync.Mutex
+	resolutionLocks map[string]*sync.Mutex
 }
 
 func NewService(store Store, analyzer Analyzer) *Service {
-	return &Service{store: store, analyzer: analyzer, activeAnalyses: make(map[string]context.CancelFunc)}
+	return &Service{
+		store:           store,
+		analyzer:        analyzer,
+		activeAnalyses:  make(map[string]context.CancelFunc),
+		resolutionLocks: make(map[string]*sync.Mutex),
+	}
+}
+
+// resolutionLock returns a per-deliberation mutex for vote+resolution atomicity.
+func (s *Service) resolutionLock(deliberationID string) *sync.Mutex {
+	s.resolutionMu.Lock()
+	defer s.resolutionMu.Unlock()
+	mu, ok := s.resolutionLocks[deliberationID]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.resolutionLocks[deliberationID] = mu
+	}
+	return mu
 }
 
 // SetContentClassifier sets the LLM content screening function.
@@ -590,17 +612,26 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 		return nil, fmt.Errorf("deliberation has reached the maximum of %d positions", maxPositions)
 	}
 
-	// Enforce max_participants cap
+	// Enforce max_participants cap (locked to prevent race)
 	if d.MaxParticipants > 0 {
-		positions, err := s.store.GetPositions(context.TODO(), deliberationID, nil)
-		if err == nil {
+		if err := func() error {
+			mu := s.resolutionLock(deliberationID)
+			mu.Lock()
+			defer mu.Unlock()
+			positions, err := s.store.GetPositions(context.TODO(), deliberationID, nil)
+			if err != nil {
+				return nil
+			}
 			uniqueAgents := map[string]bool{}
 			for _, p := range positions {
 				uniqueAgents[p.AgentID] = true
 			}
 			if !uniqueAgents[agentID] && len(uniqueAgents) >= d.MaxParticipants {
-				return nil, fmt.Errorf("deliberation has reached the maximum of %d participants", d.MaxParticipants)
+				return fmt.Errorf("deliberation has reached the maximum of %d participants", d.MaxParticipants)
 			}
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 
@@ -689,6 +720,11 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 	if len(criterionID) > 0 && criterionID[0] != "" {
 		v.CriterionID = criterionID[0]
 	}
+	// Lock per-deliberation to ensure vote+resolution is atomic.
+	mu := s.resolutionLock(deliberationID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if err := s.store.CreateVote(context.TODO(), v); err != nil {
 		return err
 	}
@@ -705,6 +741,9 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 			s.emit("position_seconded", deliberationID, agentID, positionID)
 		}
 	}
+
+	// Re-read deliberation inside the lock so resolution sees the latest state.
+	d, _ = s.store.GetDeliberation(context.TODO(), deliberationID)
 
 	// Recalculate resolution after every vote.
 	// Resolution is informational, not a status change — deliberation stays "open"
@@ -1456,6 +1495,13 @@ func resolveDelegations(votes []Vote, delegations []Delegation) []Vote {
 }
 
 func (s *Service) Delegate(deliberationID, fromAgent, toAgent, scope string) (*Delegation, error) {
+	delib, err := s.store.GetDeliberation(context.TODO(), deliberationID)
+	if err != nil {
+		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+	if delib.DeadlineAt != nil && time.Now().After(*delib.DeadlineAt) {
+		return nil, fmt.Errorf("deliberation deadline has passed")
+	}
 	// Delegation cap: no agent can receive more than 3 delegations
 	// Prevents power concentration (Uniswap VC-delegate pattern)
 	delegations, _ := s.store.GetDelegations(context.TODO(), deliberationID)
@@ -1493,6 +1539,9 @@ func (s *Service) Commit(deliberationID, agentID, statement, conditional string)
 	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.DeadlineAt != nil && time.Now().After(*d.DeadlineAt) {
+		return nil, fmt.Errorf("deliberation deadline has passed")
 	}
 	c := &Commitment{
 		DeliberationID: deliberationID,
@@ -1679,6 +1728,11 @@ func (s *Service) GetVotes(deliberationID string) ([]Vote, error) {
 }
 
 func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction string) (*Dispute, error) {
+	if delib, err := s.store.GetDeliberation(context.TODO(), deliberationID); err == nil {
+		if delib.DeadlineAt != nil && time.Now().After(*delib.DeadlineAt) {
+			return nil, fmt.Errorf("deliberation deadline has passed")
+		}
+	}
 	if len(cruxClaim) > maxContentLen {
 		return nil, fmt.Errorf("crux_claim exceeds %d characters", maxContentLen)
 	}
@@ -1816,6 +1870,13 @@ func (s *Service) WithdrawAgent(deliberationID, agentID string) error {
 	// Revoke delegations from/to this agent
 	if err := s.store.DeleteDelegationsByAgent(context.TODO(), deliberationID, agentID); err != nil {
 		return fmt.Errorf("failed to revoke delegations: %w", err)
+	}
+	// Invalidate pending commitments by the withdrawn agent
+	commitments, _ := s.store.GetCommitments(context.TODO(), deliberationID)
+	for _, c := range commitments {
+		if c.AgentID == agentID && c.FulfilledAt == nil && c.BrokenAt == nil {
+			_ = s.store.BreakCommitment(context.TODO(), c.ID, "agent withdrew from deliberation", "system")
+		}
 	}
 	s.emit("agent_withdrawn", deliberationID, agentID, "")
 	return nil
