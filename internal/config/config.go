@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -12,14 +13,33 @@ type Config struct {
 	Model        string
 }
 
+// Load reads configuration from environment variables (and optional .env file).
+// Validates required settings and warns about misconfigurations.
 func Load() *Config {
 	loadDotenv(".env")
 
-	return &Config{
+	cfg := &Config{
 		DatabaseURL:  envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
 		AnthropicKey: os.Getenv("GEMOT_ANTHROPIC_KEY"),
 		Model:        envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
 	}
+
+	// Validate model is in known set
+	validModels := map[string]bool{
+		"claude-sonnet-4-6": true,
+		"claude-opus-4-6":   true,
+		"claude-haiku-4-5":  true,
+	}
+	if !validModels[cfg.Model] {
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: unknown GEMOT_MODEL %q — analysis may fail\n", cfg.Model)
+	}
+
+	// Warn if analysis won't work
+	if cfg.AnthropicKey == "" {
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: GEMOT_ANTHROPIC_KEY not set — analysis and content screening disabled\n")
+	}
+
+	return cfg
 }
 
 func envOr(key, fallback string) string {

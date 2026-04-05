@@ -60,6 +60,9 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 
 	mux := http.NewServeMux()
 
+	// Shared rate limiter for public/semi-public endpoints (30 req/min per key)
+	endpointLimiter := payments.NewRateLimiter(ctx, 30, time.Minute)
+
 	// sseKeepalive wraps an http.Handler to send SSE comment keepalives every 10s.
 	// Prevents Fly.io proxy from killing idle SSE connections during long analyses.
 	// Uses a mutex to synchronize writes with the underlying SSE handler.
@@ -119,8 +122,13 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	mux.Handle("/mcp/sse/", paymentMiddleware(mcpSSEWithKeepalive))
 	mux.Handle("/mcp/sse", paymentMiddleware(mcpSSEWithKeepalive))
 
-	// Join page — content-negotiated landing for join codes
+	// Join page — content-negotiated landing for join codes (IP rate-limited)
 	mux.HandleFunc("/join/", func(w http.ResponseWriter, r *http.Request) {
+		ip := ClientIP(r)
+		if !endpointLimiter.Allow("join:" + ip) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
 		code := strings.TrimPrefix(r.URL.Path, "/join/")
 		if code == "" {
 			http.Error(w, "join code required", http.StatusBadRequest)
@@ -264,8 +272,16 @@ No API key needed — the join code is your credential.
 	mux.HandleFunc("/checkout/success", rateLimitCheckout(payments.SuccessHandler(creditStore)))
 	mux.HandleFunc("/checkout/cancel", payments.CancelHandler())
 
-	// Stripe Webhook — credit accounts on successful payment (Stripe-signed)
-	mux.HandleFunc("POST /webhook/stripe", payments.WebhookHandler(creditStore))
+	// Stripe Webhook — credit accounts on successful payment (Stripe-signed, IP rate-limited)
+	webhookHandler := payments.WebhookHandler(creditStore)
+	mux.HandleFunc("POST /webhook/stripe", func(w http.ResponseWriter, r *http.Request) {
+		ip := ClientIP(r)
+		if !endpointLimiter.Allow("webhook:" + ip) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		webhookHandler(w, r)
+	})
 
 	// Serve .well-known/agent-card.json (public)
 	staticRoot, err := fs.Sub(staticFS, "static")
@@ -274,9 +290,14 @@ No API key needed — the join code is your credential.
 	}
 	mux.Handle("/.well-known/", http.FileServer(http.FS(staticRoot)))
 
-	// Health check (public)
+	// Health check (public) — verifies DB connectivity
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if err := db.PingContext(r.Context()); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprintf(w, `{"status":"down","service":"gemot","version":"%s","reason":"database unreachable"}`, Version)
+			return
+		}
 		_, _ = fmt.Fprintf(w, `{"status":"ok","service":"gemot","version":"%s"}`, Version)
 	})
 
@@ -317,8 +338,13 @@ No API key needed — the join code is your credential.
 		json.NewEncoder(w).Encode(stats) //nolint:errcheck
 	})
 
-	// Balance check (authenticated)
+	// Balance check (authenticated, rate-limited)
 	mux.HandleFunc("/balance", func(w http.ResponseWriter, r *http.Request) {
+		ip := ClientIP(r)
+		if !endpointLimiter.Allow("balance:" + ip) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		auth := r.Header.Get("Authorization")
 		if !strings.HasPrefix(auth, "Bearer gmt_") {
@@ -388,8 +414,13 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 </body></html>`) //nolint:errcheck
 	})
 
-	// CSV export (authenticated) — T3C-compatible format
+	// CSV export (authenticated, rate-limited) — T3C-compatible format
 	mux.HandleFunc("/export", func(w http.ResponseWriter, r *http.Request) {
+		ip := ClientIP(r)
+		if !endpointLimiter.Allow("export:" + ip) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
 		if !strings.HasPrefix(auth, "Bearer ") || (apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1) {
