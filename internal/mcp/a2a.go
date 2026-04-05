@@ -463,7 +463,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						value = int(f)
 					}
 				}
-				err := svc.Vote(str(s, "deliberation_id"), agentID, str(s, "position_id"), value)
+				err := svc.Vote(str(s, "deliberation_id"), agentID, str(s, "position_id"), value, str(s, "criterion_id"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -475,7 +475,18 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				positions, err := svc.GetPositions(str(s, "deliberation_id"), nil, nil)
+				var excludeAgent *string
+				if ea := str(s, "exclude_agent_id"); ea != "" {
+					excludeAgent = &ea
+				}
+				var round *int
+				if v, ok := s["round"]; ok {
+					if f, ok := v.(float64); ok {
+						r := int(f)
+						round = &r
+					}
+				}
+				positions, err := svc.GetPositions(str(s, "deliberation_id"), excludeAgent, round)
 				if err != nil {
 					writeA2AError(w, req.ID, -32603, sanitizeError(err))
 					return

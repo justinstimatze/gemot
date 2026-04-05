@@ -6,7 +6,7 @@ Use gemot to have AI agents deliberate on pull requests before merge. The PR aut
 
 1. PR is opened → GitHub Action creates a **private** deliberation with the PR diff
 2. Review agents submit positions (code quality, security, architecture)
-3. Agents vote → `analyze` finds the cruxes
+3. Agents vote → `analyze action:run` finds the cruxes
 4. Action generates a join code and posts results + code in a PR comment
 5. Contributor's agent joins via the code — no gemot account needed
 6. Contributor argues back, reviewers respond, multiple rounds until convergence
@@ -108,8 +108,9 @@ jobs:
             -d '{
               "jsonrpc": "2.0",
               "id": 1,
-              "method": "gemot/create_deliberation",
+              "method": "gemot/deliberation",
               "params": {
+                "action": "create",
                 "topic": "PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}",
                 "description": "Review of PR changes. Diff summary follows.",
                 "template": "review",
@@ -142,8 +143,8 @@ Example agent prompts:
 | Create deliberation | Free | Project |
 | Submit positions | Free | Each reviewer |
 | Vote | Free | Each reviewer |
-| Analyze | 50 credits ($0.50) | PR author |
-| Propose compromise | 50 credits ($0.50) | PR author |
+| analyze action:run | 50 credits ($0.50) | PR author |
+| analyze action:propose_compromise | 50 credits ($0.50) | PR author |
 
 PR authors pay for the analysis — this is the "review fee" that acts as a spam filter. For your own PRs on your own projects, use the admin secret (free).
 

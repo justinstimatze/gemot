@@ -78,7 +78,12 @@ def run():
     # Step 1: Parent agent synthesizes crux data for the user
     print("[1/4] Parent agent reads cruxes and synthesizes for user...")
     ctx = a2a(
-        "get_context", {"deliberation_id": DELIB_ID, "agent_id": "open-weight-advocate"}
+        "participate",
+        {
+            "action": "get_context",
+            "deliberation_id": DELIB_ID,
+            "agent_id": "open-weight-advocate",
+        },
     )
     if not ctx:
         print("  No context available — run run_finetuning_test.py first")
@@ -116,7 +121,12 @@ def run():
     print("[2/4] Agents read cruxes (forced acknowledgment)...")
     for agent_def in AGENTS:
         ctx = a2a(
-            "get_context", {"deliberation_id": DELIB_ID, "agent_id": agent_def["id"]}
+            "participate",
+            {
+                "action": "get_context",
+                "deliberation_id": DELIB_ID,
+                "agent_id": agent_def["id"],
+            },
         )
         cruxes = ctx.get("relevant_cruxes", []) if ctx else []
         print(f"  {agent_def['id']}: {len(cruxes)} cruxes read")
@@ -125,7 +135,12 @@ def run():
     print("\n[3/4] Agents submit refined positions...")
     for agent_def in AGENTS:
         ctx = a2a(
-            "get_context", {"deliberation_id": DELIB_ID, "agent_id": agent_def["id"]}
+            "participate",
+            {
+                "action": "get_context",
+                "deliberation_id": DELIB_ID,
+                "agent_id": agent_def["id"],
+            },
         )
         cruxes = ctx.get("relevant_cruxes", []) if ctx else []
 
@@ -158,8 +173,9 @@ def run():
 
         # Submit refined position to gemot
         a2a(
-            "submit_position",
+            "participate",
             {
+                "action": "submit_position",
                 "deliberation_id": DELIB_ID,
                 "agent_id": agent_def["id"],
                 "content": refined,
@@ -169,10 +185,10 @@ def run():
 
     # Step 4: Re-analyze
     print("\n[4/4] Re-analyzing (round 2)...")
-    a2a("analyze", {"deliberation_id": DELIB_ID})
+    a2a("analyze", {"action": "run", "deliberation_id": DELIB_ID})
     for i in range(60):
         time.sleep(3)
-        d = a2a("get_deliberation", {"deliberation_id": DELIB_ID})
+        d = a2a("deliberation", {"action": "get", "deliberation_id": DELIB_ID})
         if d and d.get("status") == "open":
             print(f"  Analysis complete (round {d.get('round_number')})")
             break
@@ -185,7 +201,12 @@ def run():
     print("ROUND 2 RESULTS")
     print(f"{'=' * 70}")
     ctx = a2a(
-        "get_context", {"deliberation_id": DELIB_ID, "agent_id": "open-weight-advocate"}
+        "participate",
+        {
+            "action": "get_context",
+            "deliberation_id": DELIB_ID,
+            "agent_id": "open-weight-advocate",
+        },
     )
     if ctx:
         cruxes = ctx.get("relevant_cruxes", [])

@@ -15,11 +15,11 @@ Gemot is the deliberation primitive that resolves disputes between rigs in the W
 When a validator and a contributor disagree on a PR, their rigs enter a gemot deliberation:
 
 ```
-1. Contributor's rig: submit_position (defends the approach)
-2. Validator's rig: submit_position (explains concerns)
-3. Both: vote on each other's positions
-4. Gemot: analyze → finds the crux
-5. Both rigs: get_context → see the specific disagreement
+1. Contributor's rig: participate action:submit_position (defends the approach)
+2. Validator's rig: participate action:submit_position (explains concerns)
+3. Both: participate action:vote on each other's positions
+4. Gemot: analyze action:run → finds the crux
+5. Both rigs: participate action:get_context → see the specific disagreement
 6. Round 2: updated positions based on the crux
 7. If converged → stamp issued, PR merged
 8. If crux persists → escalated to community with a crisp one-sentence disagreement
@@ -108,7 +108,7 @@ Gemot features directly relevant to the Wasteland:
 - **Analysis refusal**: If integrity is too compromised (Sybil voting, vote domination), gemot refuses to produce consensus rather than outputting tainted results. Cruxes and warnings are still returned.
 - **Restorative trust**: Trust penalties from integrity warnings decay over rounds — rigs that reform see their trust recover.
 - **Content screening**: LLM-based classifier screens positions on submission. Harmful content rejected before storage.
-- **Audit trail**: Every operation logged. Rigs call `get_audit_log` to verify the process was fair.
+- **Audit trail**: Every operation logged. Rigs call `admin action:get_audit_log` to verify the process was fair.
 - **Coalition detection**: Analysis identifies which subsets of rigs consistently agree.
 - **Challenge/appeal**: If a rig believes analysis is flawed, they can formally challenge it.
 - **Reframe tool**: LLM restates a position to emphasize common ground.

@@ -1,6 +1,6 @@
 # Deliberation Templates
 
-Templates are governance presets that configure a deliberation's defaults and inform the analysis. Pass a template name to `create_deliberation` to use one.
+Templates are governance presets that configure a deliberation's defaults and inform the analysis. Pass a template name to `deliberation action:create` to use one.
 
 ## Available Templates
 
@@ -64,8 +64,9 @@ Structured review by a small panel. Reviewers submit independent assessments, th
 
 ```json
 {
-  "name": "create_deliberation",
+  "name": "deliberation",
   "arguments": {
+    "action": "create",
     "topic": "Q3 architecture decision",
     "template": "jury"
   }
@@ -80,8 +81,9 @@ Explicit parameters override template defaults:
 
 ```json
 {
-  "name": "create_deliberation",
+  "name": "deliberation",
   "arguments": {
+    "action": "create",
     "topic": "Q3 architecture decision",
     "template": "jury",
     "max_participants": 6,
@@ -103,7 +105,7 @@ Each template includes an analysis hint that shapes how the LLM interprets posit
 
 ## Discovering templates
 
-Call `list_templates` to see all available templates with their descriptions and defaults.
+Call `admin action:list_templates` to see all available templates with their descriptions and defaults.
 
 ## Game-theoretic properties
 
