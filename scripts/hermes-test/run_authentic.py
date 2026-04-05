@@ -70,9 +70,9 @@ Do this in order:
 2. Once you have the 3 review results, use the gemot MCP tools:
    - Create a deliberation (topic: "Payment code review", type: "reasoning")
    - Submit each reviewer's findings as a position (agent_id: "security-reviewer", "reliability-reviewer", "performance-reviewer")
-   - Call analyze
-   - Poll get_deliberation until status is "open" again
-   - Call get_context for one reviewer
+   - Call analyze action:run
+   - Poll deliberation action:get until status is "open" again
+   - Call participate action:get_context for one reviewer
 
 3. Report to me:
    - What all reviewers agree on

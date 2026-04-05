@@ -13,11 +13,11 @@ What they didn't specify: any concrete protocol for what happens when agents dis
 The Foundation for Intelligent Physical Agents standardized agent communication with FIPA-ACL (based on speech act theory) and interaction protocols like the Contract Net.
 
 **Contract Net flow:**
-1. Initiator sends CFP (call for proposals) → `create_deliberation`
-2. Participants respond with propose → `submit_position`
-3. Initiator evaluates proposals → `analyze` (but with LLM crux detection, not just bid comparison)
-4. Accept/reject → `get_context` + `commit`
-5. Iterated Contract Net (re-propose) → multi-round `get_context` → revised `submit_position`
+1. Initiator sends CFP (call for proposals) → `deliberation action:create`
+2. Participants respond with propose → `participate action:submit_position`
+3. Initiator evaluates proposals → `analyze action:run` (but with LLM crux detection, not just bid comparison)
+4. Accept/reject → `participate action:get_context` + `decide action:commit`
+5. Iterated Contract Net (re-propose) → multi-round `participate action:get_context` → revised `participate action:submit_position`
 
 The critical difference: FIPA Contract Net was task-allocation (one winner takes the job). Gemot is deliberation (finding shared understanding, surfacing *why* agents disagree). FIPA had no mechanism for crux detection.
 
@@ -74,7 +74,7 @@ What gemot does that the Semantic Web era couldn't:
 - **Natural language crux detection**: The T3C pipeline uses LLM understanding to find where positions actually conflict. FIPA agents could exchange formal propositions but couldn't detect implicit disagreements.
 - **Zero-ontology interoperability**: Agents don't need shared vocabularies. The LLM bridges semantic gaps automatically.
 - **Statistical consensus via Polis vote math**: PCA + K-means identifies opinion clusters without requiring agents to self-organize.
-- **Personalized context**: `get_context` tells each agent where it sits in the opinion landscape, what its cluster thinks, and what the key cruxes are.
+- **Personalized context**: `participate action:get_context` tells each agent where it sits in the opinion landscape, what its cluster thinks, and what the key cruxes are.
 
 What they had that gemot could learn from:
 - **Formal argumentation structure**: Attack graphs with extension semantics could formalize crux output.

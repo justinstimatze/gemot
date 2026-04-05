@@ -64,8 +64,8 @@ AGENTS = [
         "system": "You are an AI safety researcher. You believe transparency is critical for AI trust.",
         "prompt": f"""You have access to gemot deliberation tools via MCP. Do the following:
 
-1. Use the create_deliberation tool to create a deliberation with topic: "{TOPIC}" and type: "reasoning"
-2. Use submit_position to share your position. Your view: mandatory AI identification is essential for informed consent and preventing manipulation. Be specific and substantive (2-3 sentences).
+1. Use the deliberation tool with action:create to create a deliberation with topic: "{TOPIC}" and type: "reasoning"
+2. Use the participate tool with action:submit_position to share your position. Your view: mandatory AI identification is essential for informed consent and preventing manipulation. Be specific and substantive (2-3 sentences).
 3. Report back the deliberation_id so other agents can join.
 
 Use the MCP tools available to you. Do NOT make up responses — actually call the tools.""",
@@ -135,12 +135,12 @@ def run_test():
         )
         prompt = f"""You have access to gemot deliberation tools via MCP.
 
-Use submit_position to share your position on this topic: "{TOPIC}"
+Use the participate tool with action:submit_position to share your position on this topic: "{TOPIC}"
 
 The deliberation_id is: {delib_id}
 Your agent_id is: {agent_def["name"]}
 
-Share a specific, substantive position (2-3 sentences). Then vote on the other positions using the vote tool (get_positions first to see them, then vote +1 or -1 on each).
+Share a specific, substantive position (2-3 sentences). Then vote on the other positions using participate action:vote (participate action:get_positions first to see them, then vote +1 or -1 on each).
 
 Use the MCP tools. Do NOT make up responses."""
         result = agent.run_conversation(prompt)
@@ -159,14 +159,14 @@ Use the MCP tools. Do NOT make up responses."""
         persist_session=False,
     )
     analyze_result = analyst.run_conversation(
-        f"Use the analyze tool on deliberation {delib_id}. Then use get_context with agent_id 'safety-researcher' to see the results. Report: how many cruxes were found, what are they, and is there any shared ground?"
+        f"Use the analyze tool with action:run on deliberation {delib_id}. Then use participate action:get_context with agent_id 'safety-researcher' to see the results. Report: how many cruxes were found, what are they, and is there any shared ground?"
     )
     print(f"  Analysis: {analyze_result.get('response', '')[:500]}...\n")
 
     # Step 5: Summary
     print("[5/5] Getting final context...")
     summary = analyst.run_conversation(
-        f"Use get_context for deliberation {delib_id} with agent_id 'ethicist'. Summarize: relevant cruxes, consensus statements, bridging statements, and the compromise proposal if any."
+        f"Use participate action:get_context for deliberation {delib_id} with agent_id 'ethicist'. Summarize: relevant cruxes, consensus statements, bridging statements, and the compromise proposal if any."
     )
     print(f"\n{'=' * 60}")
     print("FINAL RESULT")
