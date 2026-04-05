@@ -105,8 +105,9 @@ def run_test():
     # Step 1: Create deliberation via A2A
     print("[1/5] Creating deliberation...")
     result = a2a(
-        "create_deliberation",
+        "deliberation",
         {
+            "action": "create",
             "topic": TOPIC,
             "type": "reasoning",
             "group_id": "hermes-finetuning-test",
@@ -156,8 +157,9 @@ def run_test():
     position_ids = {}
     for agent_id, content in positions.items():
         result = a2a(
-            "submit_position",
+            "participate",
             {
+                "action": "submit_position",
                 "deliberation_id": delib_id,
                 "agent_id": agent_id,
                 "content": content,
@@ -178,8 +180,9 @@ def run_test():
                     1 if voter_id == pos_agent else 0
                 )  # pass on others, let content analysis work
                 a2a(
-                    "vote",
+                    "participate",
                     {
+                        "action": "vote",
                         "deliberation_id": delib_id,
                         "agent_id": voter_id,
                         "position_id": pos_id,
@@ -188,7 +191,7 @@ def run_test():
                 )
 
     # Analyze
-    result = a2a("analyze", {"deliberation_id": delib_id})
+    result = a2a("analyze", {"action": "run", "deliberation_id": delib_id})
     print("  Analysis started...")
 
     # Poll
@@ -196,7 +199,7 @@ def run_test():
         import time
 
         time.sleep(3)
-        result = a2a("get_deliberation", {"deliberation_id": delib_id})
+        result = a2a("deliberation", {"action": "get", "deliberation_id": delib_id})
         if result and result.get("status") == "open":
             print(f"  Analysis complete (round {result.get('round_number')})")
             break
@@ -210,8 +213,9 @@ def run_test():
 
     for agent_id in positions:
         ctx = a2a(
-            "get_context",
+            "participate",
             {
+                "action": "get_context",
                 "deliberation_id": delib_id,
                 "agent_id": agent_id,
             },

@@ -52,7 +52,7 @@ $CODE
 
 Step 1: Use delegate_task in batch mode with 3 tasks — a security review, a reliability review, and a performance review of this code. Include the code in each task's context.
 
-Step 2: Use the gemot MCP tools (mcp_gemot_create_deliberation, mcp_gemot_submit_position, mcp_gemot_analyze, mcp_gemot_get_context) to find where the reviewers disagree.
+Step 2: Use the gemot MCP tools (mcp_gemot_deliberation action:create, mcp_gemot_participate action:submit_position, mcp_gemot_analyze action:run, mcp_gemot_participate action:get_context) to find where the reviewers disagree.
 
 Step 3: Tell me what they agree on, where they disagree, and what I should fix first.
 "

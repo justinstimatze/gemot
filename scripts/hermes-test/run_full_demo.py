@@ -131,7 +131,7 @@ def wait_for_analysis(delib_id, expected_round):
     """Poll until analysis completes and round advances."""
     for i in range(120):  # 6 minutes max
         time.sleep(3)
-        d = a2a("get_deliberation", {"deliberation_id": delib_id})
+        d = a2a("deliberation", {"action": "get", "deliberation_id": delib_id})
         if not d:
             continue
         status = d.get("status", "")
@@ -145,7 +145,10 @@ def wait_for_analysis(delib_id, expected_round):
 
 
 def get_crux_summary(delib_id, agent_id):
-    ctx = a2a("get_context", {"deliberation_id": delib_id, "agent_id": agent_id})
+    ctx = a2a(
+        "participate",
+        {"action": "get_context", "deliberation_id": delib_id, "agent_id": agent_id},
+    )
     if not ctx:
         return "", []
     cruxes = ctx.get("relevant_cruxes") or []
@@ -172,8 +175,13 @@ def run():
 
     # Create deliberation
     result = a2a(
-        "create_deliberation",
-        {"topic": TOPIC, "type": "reasoning", "group_id": "hermes-demo"},
+        "deliberation",
+        {
+            "action": "create",
+            "topic": TOPIC,
+            "type": "reasoning",
+            "group_id": "hermes-demo",
+        },
     )
     if not result:
         return
@@ -245,13 +253,18 @@ def run():
             # Satisfy forced acknowledgment for round 2+
             if round_num > 1:
                 a2a(
-                    "get_context",
-                    {"deliberation_id": delib_id, "agent_id": agent_def["id"]},
+                    "participate",
+                    {
+                        "action": "get_context",
+                        "deliberation_id": delib_id,
+                        "agent_id": agent_def["id"],
+                    },
                 )
 
             a2a(
-                "submit_position",
+                "participate",
                 {
+                    "action": "submit_position",
                     "deliberation_id": delib_id,
                     "agent_id": agent_def["id"],
                     "content": text,
@@ -260,12 +273,12 @@ def run():
 
         # Analyze
         print("\n  Analyzing...")
-        a2a("analyze", {"deliberation_id": delib_id})
+        a2a("analyze", {"action": "run", "deliberation_id": delib_id})
         expected_round = round_num + 1  # analysis advances the round
         if not wait_for_analysis(delib_id, expected_round):
             print("  Analysis timed out — retrying once...")
             # Retry: analysis may have been stuck-recovered
-            a2a("analyze", {"deliberation_id": delib_id})
+            a2a("analyze", {"action": "run", "deliberation_id": delib_id})
             if not wait_for_analysis(delib_id, expected_round):
                 print("  Analysis failed after retry")
                 continue
@@ -273,8 +286,12 @@ def run():
         # Collect results
         for agent_def in AGENT_DEFS:
             ctx = a2a(
-                "get_context",
-                {"deliberation_id": delib_id, "agent_id": agent_def["id"]},
+                "participate",
+                {
+                    "action": "get_context",
+                    "deliberation_id": delib_id,
+                    "agent_id": agent_def["id"],
+                },
             )
             if not ctx:
                 continue
@@ -336,7 +353,12 @@ def run():
     print(f"{'=' * 70}\n")
 
     final_ctx = a2a(
-        "get_context", {"deliberation_id": delib_id, "agent_id": AGENT_DEFS[2]["id"]}
+        "participate",
+        {
+            "action": "get_context",
+            "deliberation_id": delib_id,
+            "agent_id": AGENT_DEFS[2]["id"],
+        },
     )
     crux_text = ""
     if final_ctx:
