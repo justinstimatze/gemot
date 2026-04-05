@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"sort"
 	"strconv"
@@ -401,19 +401,19 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 			}
 			subtopicSpeakers[key][c.AgentNum] = true
 		}
-		log.Printf("[gemot] claim extraction: %d total claims from %d positions", len(allClaims), len(positions))
+		slog.Info("claim extraction complete", "total_claims", len(allClaims), "positions", len(positions))
 		for t, cnt := range topicCounts {
-			log.Printf("[gemot]   topic %q: %d claims", t, cnt)
+			slog.Info("topic claims", "topic", t, "claims", cnt)
 		}
 		qualifiedSubtopics := 0
 		for st, cnt := range subtopicCounts {
 			speakers := len(subtopicSpeakers[st])
-			log.Printf("[gemot]   subtopic %q: %d claims, %d speakers", st, cnt, speakers)
+			slog.Info("subtopic claims", "subtopic", st, "claims", cnt, "speakers", speakers)
 			if speakers >= 2 {
 				qualifiedSubtopics++
 			}
 		}
-		log.Printf("[gemot]   subtopics with 2+ speakers: %d", qualifiedSubtopics)
+		slog.Info("qualified subtopics", "count", qualifiedSubtopics)
 	}
 
 	// Fail loudly if claim extraction produced nothing — caller should know analysis failed
@@ -431,7 +431,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		topicPositions := formatPositions(positions, agentToNum)
 		summary, err := a.getSummary(ctx, deliberationTopic, topic.TopicName, topicPositions)
 		if err != nil {
-			log.Printf("[gemot] summary generation failed for topic %q (continuing): %v", topic.TopicName, err)
+			slog.Warn("summary generation failed", "topic", topic.TopicName, "error", err)
 			warnings = append(warnings, fmt.Sprintf("SOFT_FAIL: summary generation failed for topic %q", topic.TopicName))
 		} else {
 			summaries = append(summaries, deliberation.TopicSummary{
@@ -452,7 +452,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 			// Deduplicate claims within this subtopic (soft-fail: use raw claims if dedup fails)
 			deduped, err := a.deduplicateClaims(ctx, deliberationTopic, subtopic.SubtopicName, subtopicClaims)
 			if err != nil {
-				log.Printf("[gemot] dedup failed for subtopic %q (using raw claims): %v", subtopic.SubtopicName, err)
+				slog.Warn("dedup failed, using raw claims", "subtopic", subtopic.SubtopicName, "error", err)
 				deduped = subtopicClaims
 			}
 
@@ -621,7 +621,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		// No votes on latest-round positions (e.g. bilateral negotiations, or multi-round
 		// where new positions were submitted without voting): use LLM agreement detection
 		if ctx.Err() != nil {
-			log.Printf("[gemot] skipping LLM agreement detection: context cancelled")
+			slog.Warn("skipping LLM agreement detection: context cancelled")
 		} else {
 			consensus, bridging = a.findAgreementsLLM(ctx, deliberationTopic, positions, cruxes)
 		}
@@ -795,8 +795,14 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	}
 	result.RecommendedAction = recommendAction(result)
 
-	log.Printf("[gemot] analysis complete: deliberation=%s round=%d agents=%d positions=%d cruxes=%d clusters=%d duration=%s",
-		result.DeliberationID, result.Round, result.AgentCount, result.PositionCount, len(result.Cruxes), len(result.Clusters), time.Since(startTime))
+	slog.Info("analysis complete",
+		"deliberation_id", result.DeliberationID,
+		"round", result.Round,
+		"agents", result.AgentCount,
+		"positions", result.PositionCount,
+		"cruxes", len(result.Cruxes),
+		"clusters", len(result.Clusters),
+		"duration", time.Since(startTime))
 
 	return result, nil
 }
@@ -1938,7 +1944,7 @@ func (a *TextAnalyzer) findAgreementsLLM(ctx context.Context, topic string, posi
 	}
 
 	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
-		log.Printf("[gemot] LLM agreement detection failed: %v", err)
+		slog.Warn("LLM agreement detection failed", "error", err)
 		return nil, nil
 	}
 

@@ -64,7 +64,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 				http.Error(w, "invalid or expired share token", http.StatusNotFound)
 				return
 			}
-			delibs, err := svc.ListByGroup(groupID, 500, 0)
+			delibs, err := svc.ListByGroup(groupID, 500, 0, "")
 			if err != nil || len(delibs) == 0 {
 				http.Error(w, "group not found", http.StatusNotFound)
 				return

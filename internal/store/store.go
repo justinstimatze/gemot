@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -21,6 +22,12 @@ func Open(dsn string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+
+	// Connection pool limits — prevent resource exhaustion under load
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	db.SetConnMaxIdleTime(5 * time.Minute)
 
 	if err := db.Ping(); err != nil {
 		db.Close() //nolint:errcheck

@@ -996,7 +996,8 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
 				}
-				callToolSoft(ctx, submitSession, "submit_position", map[string]any{
+				callToolSoft(ctx, submitSession, "participate", map[string]any{
+					"action":          "submit_position",
 					"deliberation_id": pp.deliberationID,
 					"agent_id":        pp.agentID,
 					"content":         pp.content,
@@ -1009,7 +1010,8 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 				if ar.err != nil || ar.sc.scopeTag != "alliance" || len(ar.sc.messages) == 0 {
 					continue
 				}
-				posJSON := callTool(ctx, submitSession, "get_positions", map[string]any{
+				posJSON := callTool(ctx, submitSession, "participate", map[string]any{
+					"action":          "get_positions",
 					"deliberation_id": ar.deliberationID,
 				})
 				var positions []struct {
@@ -1024,7 +1026,8 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 						if voterAgent == pos.AgentID {
 							continue
 						}
-						callToolSoft(ctx, submitSession, "vote", map[string]any{
+						callToolSoft(ctx, submitSession, "participate", map[string]any{
+							"action":          "vote",
 							"deliberation_id": ar.deliberationID,
 							"agent_id":        voterAgent,
 							"position_id":     pos.ID,
@@ -1134,7 +1137,8 @@ func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSessio
 		if experimentID != "" {
 			createArgs["group_id"] = experimentID
 		}
-		createJSON := callTool(ctx, session, "create_deliberation", createArgs)
+		createArgs["action"] = "create"
+		createJSON := callTool(ctx, session, "deliberation", createArgs)
 
 		var createResp struct {
 			DeliberationID string `json:"deliberation_id"`
@@ -1144,7 +1148,8 @@ func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSessio
 
 		// Set template for scope-appropriate rules and analysis framing
 		if sc.template != "" {
-			callToolSoft(ctx, session, "set_template", map[string]any{
+			callToolSoft(ctx, session, "deliberation", map[string]any{
+				"action":          "set_template",
 				"deliberation_id": deliberationID,
 				"template":        sc.template,
 			})
@@ -1164,7 +1169,8 @@ func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSessio
 	if existingID != "" && year > 1 {
 		for _, p := range sc.powers {
 			agentID := strings.ToLower(p) + "-agent"
-			callToolSoft(ctx, session, "get_context", map[string]any{
+			callToolSoft(ctx, session, "participate", map[string]any{
+				"action":          "get_context",
 				"deliberation_id": deliberationID,
 				"agent_id":        agentID,
 			})
@@ -1234,6 +1240,7 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 	prefix := fmt.Sprintf("  [%s] %s:", sc.scopeTag, sc.name)
 	fmt.Fprintf(os.Stderr, "%s analyzing...\n", prefix)
 	callTool(ctx, session, "analyze", map[string]any{
+		"action":          "run",
 		"deliberation_id": deliberationID,
 	})
 
@@ -1244,7 +1251,8 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 	for i := 0; i < 200; i++ {
 		time.Sleep(3 * time.Second)
 
-		result := callToolSoft(ctx, session, "get_context", map[string]any{
+		result := callToolSoft(ctx, session, "participate", map[string]any{
+			"action":          "get_context",
 			"deliberation_id": deliberationID,
 			"agent_id":        firstPower,
 		})
@@ -1257,7 +1265,8 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 				fmt.Fprintf(os.Stderr, "%s reconnect failed: %v\n", prefix, reconnErr)
 			}
 			if session != nil {
-				statusJSON := callToolSoft(ctx, session, "get_deliberation", map[string]any{
+				statusJSON := callToolSoft(ctx, session, "deliberation", map[string]any{
+					"action":          "get",
 					"deliberation_id": deliberationID,
 				})
 				if statusJSON != "" {
@@ -1284,7 +1293,8 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 	contexts := make(map[string]string)
 	for _, p := range sc.powers {
 		agentID := strings.ToLower(p) + "-agent"
-		result := callToolSoft(ctx, session, "get_context", map[string]any{
+		result := callToolSoft(ctx, session, "participate", map[string]any{
+			"action":          "get_context",
 			"deliberation_id": deliberationID,
 			"agent_id":        agentID,
 		})
@@ -1295,7 +1305,8 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 
 	// Fetch commitments for this deliberation
 	var commitments []commitment
-	commJSON := callToolSoft(ctx, session, "get_commitments", map[string]any{
+	commJSON := callToolSoft(ctx, session, "decide", map[string]any{
+		"action":          "get_commitments",
 		"deliberation_id": deliberationID,
 	})
 	if commJSON != "" {

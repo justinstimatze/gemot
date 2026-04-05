@@ -17,7 +17,7 @@ func TestPaginationLimit(t *testing.T) {
 		}
 	}
 
-	results, err := svc.ListDeliberations(2, 0)
+	results, err := svc.ListDeliberations(2, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestPaginationOffset(t *testing.T) {
 		}
 	}
 
-	results, err := svc.ListDeliberations(100, 3)
+	results, err := svc.ListDeliberations(100, 3, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestPaginationDefaultLimit(t *testing.T) {
 		}
 	}
 
-	results, err := svc.ListDeliberations(0, 0)
+	results, err := svc.ListDeliberations(0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestPaginationListByGroup(t *testing.T) {
 	}
 
 	// All in group
-	all, err := svc.ListByGroup(groupID, 0, 0)
+	all, err := svc.ListByGroup(groupID, 0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestPaginationListByGroup(t *testing.T) {
 	}
 
 	// Paginated
-	page, err := svc.ListByGroup(groupID, 2, 0)
+	page, err := svc.ListByGroup(groupID, 2, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestPaginationListByGroup(t *testing.T) {
 	}
 
 	// Offset past most
-	tail, err := svc.ListByGroup(groupID, 100, 4)
+	tail, err := svc.ListByGroup(groupID, 100, 4, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -91,14 +92,14 @@ func TestDeliberationCRUD(t *testing.T) {
 		Round:       1,
 		Status:      "open",
 	}
-	if err := db.CreateDeliberation(d); err != nil {
+	if err := db.CreateDeliberation(context.Background(), d); err != nil {
 		t.Fatal(err)
 	}
 	if d.ID == "" {
 		t.Fatal("expected ID to be set")
 	}
 
-	got, err := db.GetDeliberation(d.ID)
+	got, err := db.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func TestDeliberationCRUD(t *testing.T) {
 		t.Fatalf("expected topic 'AI Safety', got %q", got.Topic)
 	}
 
-	list, err := db.ListDeliberations(0, 0)
+	list, err := db.ListDeliberations(context.Background(), 0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,18 +115,18 @@ func TestDeliberationCRUD(t *testing.T) {
 		t.Fatalf("expected 1 deliberation, got %d", len(list))
 	}
 
-	if err := db.UpdateDeliberationStatus(d.ID, "analyzing"); err != nil {
+	if err := db.UpdateDeliberationStatus(context.Background(), d.ID, "analyzing"); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = db.GetDeliberation(d.ID)
+	got, _ = db.GetDeliberation(context.Background(), d.ID)
 	if got.Status != "analyzing" {
 		t.Fatalf("expected status 'analyzing', got %q", got.Status)
 	}
 
-	if err := db.AdvanceRound(d.ID); err != nil {
+	if err := db.AdvanceRound(context.Background(), d.ID); err != nil {
 		t.Fatal(err)
 	}
-	got, _ = db.GetDeliberation(d.ID)
+	got, _ = db.GetDeliberation(context.Background(), d.ID)
 	if got.Round != 2 {
 		t.Fatalf("expected round 2, got %d", got.Round)
 	}
@@ -135,7 +136,7 @@ func TestPositionCRUD(t *testing.T) {
 	db := tempDB(t)
 
 	d := &deliberation.Deliberation{Topic: "Test", Round: 1, Status: "open"}
-	db.CreateDeliberation(d)
+	db.CreateDeliberation(context.Background(), d)
 
 	p := &deliberation.Position{
 		DeliberationID: d.ID,
@@ -143,14 +144,14 @@ func TestPositionCRUD(t *testing.T) {
 		Content:        "We should prioritize interpretability",
 		Round:          1,
 	}
-	if err := db.CreatePosition(p); err != nil {
+	if err := db.CreatePosition(context.Background(), p); err != nil {
 		t.Fatal(err)
 	}
 	if p.ID == "" {
 		t.Fatal("expected position ID to be set")
 	}
 
-	positions, err := db.GetPositions(d.ID, nil)
+	positions, err := db.GetPositions(context.Background(), d.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestPositionCRUD(t *testing.T) {
 	}
 
 	round := 1
-	positions, err = db.GetPositions(d.ID, &round)
+	positions, err = db.GetPositions(context.Background(), d.ID, &round)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +169,7 @@ func TestPositionCRUD(t *testing.T) {
 	}
 
 	round = 2
-	positions, err = db.GetPositions(d.ID, &round)
+	positions, err = db.GetPositions(context.Background(), d.ID, &round)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +177,7 @@ func TestPositionCRUD(t *testing.T) {
 		t.Fatalf("expected 0 positions for round 2, got %d", len(positions))
 	}
 
-	got, err := db.GetPositionByID(p.ID)
+	got, err := db.GetPositionByID(context.Background(), p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,10 +190,10 @@ func TestVoteCRUD(t *testing.T) {
 	db := tempDB(t)
 
 	d := &deliberation.Deliberation{Topic: "Test", Round: 1, Status: "open"}
-	db.CreateDeliberation(d)
+	db.CreateDeliberation(context.Background(), d)
 
 	p := &deliberation.Position{DeliberationID: d.ID, AgentID: "agent-1", Content: "Position 1", Round: 1}
-	db.CreatePosition(p)
+	db.CreatePosition(context.Background(), p)
 
 	v := &deliberation.Vote{
 		DeliberationID: d.ID,
@@ -200,11 +201,11 @@ func TestVoteCRUD(t *testing.T) {
 		PositionID:     p.ID,
 		Value:          1,
 	}
-	if err := db.CreateVote(v); err != nil {
+	if err := db.CreateVote(context.Background(), v); err != nil {
 		t.Fatal(err)
 	}
 
-	votes, err := db.GetVotes(d.ID)
+	votes, err := db.GetVotes(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,10 +223,10 @@ func TestVoteCRUD(t *testing.T) {
 		PositionID:     p.ID,
 		Value:          -1,
 	}
-	if err := db.CreateVote(v2); err != nil {
+	if err := db.CreateVote(context.Background(), v2); err != nil {
 		t.Fatal(err)
 	}
-	votes, _ = db.GetVotes(d.ID)
+	votes, _ = db.GetVotes(context.Background(), d.ID)
 	if len(votes) != 1 {
 		t.Fatalf("expected 1 vote after upsert, got %d", len(votes))
 	}
@@ -238,7 +239,7 @@ func TestAnalysisResultCRUD(t *testing.T) {
 	db := tempDB(t)
 
 	d := &deliberation.Deliberation{Topic: "Test", Round: 1, Status: "open"}
-	db.CreateDeliberation(d)
+	db.CreateDeliberation(context.Background(), d)
 
 	result := &deliberation.AnalysisResult{
 		DeliberationID: d.ID,
@@ -257,11 +258,11 @@ func TestAnalysisResultCRUD(t *testing.T) {
 		VoteCount:     0,
 	}
 
-	if err := db.SaveAnalysisResult(d.ID, 1, result); err != nil {
+	if err := db.SaveAnalysisResult(context.Background(), d.ID, 1, result); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := db.GetAnalysisResult(d.ID, 1)
+	got, err := db.GetAnalysisResult(context.Background(), d.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +273,7 @@ func TestAnalysisResultCRUD(t *testing.T) {
 		t.Fatalf("unexpected crux claim: %q", got.Cruxes[0].Claim)
 	}
 
-	latest, err := db.GetLatestAnalysisResult(d.ID)
+	latest, err := db.GetLatestAnalysisResult(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
