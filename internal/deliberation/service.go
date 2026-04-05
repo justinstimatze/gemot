@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -23,75 +23,102 @@ const (
 )
 
 // Store defines the persistence interface the service needs.
+// Store sub-interfaces — split by domain for clarity and targeted mocking.
+
+// DeliberationStore manages deliberation lifecycle.
+type DeliberationStore interface {
+	CreateDeliberation(ctx context.Context, d *Deliberation) error
+	GetDeliberation(ctx context.Context, id string) (*Deliberation, error)
+	ListDeliberations(ctx context.Context, limit, offset int, keyID string) ([]Deliberation, error)
+	ListByGroup(ctx context.Context, groupID string, limit, offset int, keyID string) ([]Deliberation, error)
+	ListByAgent(ctx context.Context, agentID string, limit, offset int, keyID string) ([]Deliberation, error)
+	SetGroupID(ctx context.Context, deliberationID, groupID string) error
+	UpdateDeliberationStatus(ctx context.Context, id, status string) error
+	SaveResolution(ctx context.Context, id string, resolution *Resolution) error
+	UpdateDeliberationTemplate(ctx context.Context, id, template string) error
+	UpdateDeliberationRules(ctx context.Context, id string, rules map[string]any) error
+	DeleteDeliberation(ctx context.Context, id string) error
+	GetStatusChangedAt(ctx context.Context, deliberationID string) (time.Time, error)
+	UpdateSubStatus(ctx context.Context, id, subStatus string) error
+	TrySetAnalyzing(ctx context.Context, id string) (bool, error)
+	AdvanceRound(ctx context.Context, id string) error
+}
+
+// PositionStore manages position CRUD.
+type PositionStore interface {
+	CreatePosition(ctx context.Context, p *Position) error
+	GetPositions(ctx context.Context, deliberationID string, round *int) ([]Position, error)
+	GetPositionByID(ctx context.Context, id string) (*Position, error)
+	CountPositions(ctx context.Context, deliberationID string) (int, error)
+	PublishPosition(ctx context.Context, id string) error
+	WithdrawPositions(ctx context.Context, deliberationID, agentID string) error
+}
+
+// VoteStore manages votes and delegations.
+type VoteStore interface {
+	CreateVote(ctx context.Context, v *Vote) error
+	GetVotes(ctx context.Context, deliberationID string) ([]Vote, error)
+	GetVotesByRound(ctx context.Context, deliberationID string, round int) ([]Vote, error)
+	DeleteVotesByAgent(ctx context.Context, deliberationID, agentID string) error
+	CreateDelegation(ctx context.Context, d *Delegation) error
+	RevokeDelegation(ctx context.Context, deliberationID, fromAgent string) error
+	GetDelegations(ctx context.Context, deliberationID string) ([]Delegation, error)
+	DeleteDelegationsByAgent(ctx context.Context, deliberationID, agentID string) error
+}
+
+// CommitmentStore manages commitments and reputation.
+type CommitmentStore interface {
+	CreateCommitment(ctx context.Context, c *Commitment) error
+	GetCommitments(ctx context.Context, deliberationID string) ([]Commitment, error)
+	GetCommitmentsByAgent(ctx context.Context, agentID string) ([]Commitment, error)
+	GetCommitmentsByGroup(ctx context.Context, groupID string) ([]Commitment, error)
+	UpdateCommitmentStatus(ctx context.Context, id, status string) error
+	FulfillCommitment(ctx context.Context, id, verifiedBy string) error
+	BreakCommitment(ctx context.Context, id, reason, verifiedBy string) error
+}
+
+// AnalysisStore manages analysis results and stuck recovery.
+type AnalysisStore interface {
+	SaveAnalysisResult(ctx context.Context, deliberationID string, round int, result *AnalysisResult) error
+	GetAnalysisResult(ctx context.Context, deliberationID string, round int) (*AnalysisResult, error)
+	GetLatestAnalysisResult(ctx context.Context, deliberationID string) (*AnalysisResult, error)
+	GetStuckAnalyzing(ctx context.Context, maxAge time.Duration) ([]string, error)
+	RecoverStuckAnalyzing(ctx context.Context, maxAge time.Duration) (int, error)
+}
+
+// AccessStore manages ACLs, join codes, invitations, and share tokens.
+type AccessStore interface {
+	CreateJoinCode(ctx context.Context, jc *JoinCode) error
+	ClaimJoinCode(ctx context.Context, code, agentID string) (*JoinCode, error)
+	LookupJoinCode(ctx context.Context, code string) (*JoinCode, error)
+	AddToACL(ctx context.Context, deliberationID, keyID string) error
+	CheckACL(ctx context.Context, deliberationID, keyID string) (bool, error)
+	CreateInvitation(ctx context.Context, inv *Invitation) error
+	GetInvitations(ctx context.Context, deliberationID string) ([]Invitation, error)
+	UpdateInvitationStatus(ctx context.Context, id, status string) error
+	CreateShareToken(ctx context.Context, token, groupID string, expiresAt time.Time) error
+	LookupShareToken(ctx context.Context, token string) (groupID string, err error)
+}
+
+// ModerationStore manages disputes, abuse reports, and context access.
+type ModerationStore interface {
+	CreateDispute(ctx context.Context, d *Dispute) error
+	GetDisputes(ctx context.Context, deliberationID string) ([]Dispute, error)
+	CreateAbuseReport(ctx context.Context, deliberationID, reporterKey, reason string) error
+	RecordContextAccess(ctx context.Context, deliberationID, agentID string, round int) error
+	HasContextAccess(ctx context.Context, deliberationID, agentID string, round int) (bool, error)
+}
+
+// Store composes all sub-interfaces. Implementations (store.DB) satisfy
+// this by implementing every method. Tests can mock individual sub-interfaces.
 type Store interface {
-	CreateDeliberation(d *Deliberation) error
-	GetDeliberation(id string) (*Deliberation, error)
-	ListDeliberations(limit, offset int) ([]Deliberation, error)
-	ListByGroup(groupID string, limit, offset int) ([]Deliberation, error)
-	ListByAgent(agentID string, limit, offset int) ([]Deliberation, error)
-	SetGroupID(deliberationID, groupID string) error
-	UpdateDeliberationStatus(id, status string) error
-	SaveResolution(id string, resolution *Resolution) error
-	UpdateDeliberationTemplate(id, template string) error
-	UpdateDeliberationRules(id string, rules map[string]any) error
-	DeleteDeliberation(id string) error
-	CreateAbuseReport(deliberationID, reporterKey, reason string) error
-	RecordContextAccess(deliberationID, agentID string, round int) error
-	HasContextAccess(deliberationID, agentID string, round int) (bool, error)
-	GetStatusChangedAt(deliberationID string) (time.Time, error)
-	UpdateSubStatus(id, subStatus string) error
-	TrySetAnalyzing(id string) (bool, error)
-	AdvanceRound(id string) error
-
-	CreatePosition(p *Position) error
-	GetPositions(deliberationID string, round *int) ([]Position, error)
-	GetPositionByID(id string) (*Position, error)
-	CountPositions(deliberationID string) (int, error)
-
-	CreateVote(v *Vote) error
-	GetVotes(deliberationID string) ([]Vote, error)
-	GetVotesByRound(deliberationID string, round int) ([]Vote, error)
-
-	CreateDelegation(d *Delegation) error
-	RevokeDelegation(deliberationID, fromAgent string) error
-	GetDelegations(deliberationID string) ([]Delegation, error)
-	PublishPosition(id string) error
-
-	CreateCommitment(c *Commitment) error
-	GetCommitments(deliberationID string) ([]Commitment, error)
-	GetCommitmentsByAgent(agentID string) ([]Commitment, error)
-	GetCommitmentsByGroup(groupID string) ([]Commitment, error)
-	UpdateCommitmentStatus(id, status string) error
-	FulfillCommitment(id, verifiedBy string) error
-	BreakCommitment(id, reason, verifiedBy string) error
-
-	CreateJoinCode(jc *JoinCode) error
-	ClaimJoinCode(code, agentID string) (*JoinCode, error)
-	LookupJoinCode(code string) (*JoinCode, error)
-
-	AddToACL(deliberationID, keyID string) error
-	CheckACL(deliberationID, keyID string) (bool, error)
-
-	CreateInvitation(inv *Invitation) error
-	GetInvitations(deliberationID string) ([]Invitation, error)
-	UpdateInvitationStatus(id, status string) error
-
-	CreateDispute(d *Dispute) error
-	GetDisputes(deliberationID string) ([]Dispute, error)
-
-	SaveAnalysisResult(deliberationID string, round int, result *AnalysisResult) error
-	GetAnalysisResult(deliberationID string, round int) (*AnalysisResult, error)
-	GetLatestAnalysisResult(deliberationID string) (*AnalysisResult, error)
-
-	GetStuckAnalyzing(maxAge time.Duration) ([]string, error)
-	RecoverStuckAnalyzing(maxAge time.Duration) (int, error)
-
-	CreateShareToken(token, groupID string, expiresAt time.Time) error
-	LookupShareToken(token string) (groupID string, err error)
-
-	WithdrawPositions(deliberationID, agentID string) error
-	DeleteVotesByAgent(deliberationID, agentID string) error
-	DeleteDelegationsByAgent(deliberationID, agentID string) error
+	DeliberationStore
+	PositionStore
+	VoteStore
+	CommitmentStore
+	AnalysisStore
+	AccessStore
+	ModerationStore
 }
 
 // ContextKeyDeliberationID is the context key for passing the deliberation ID
@@ -239,12 +266,12 @@ func (s *Service) ProposeCompromise(ctx context.Context, deliberationID string) 
 		return "", fmt.Errorf("compromise generation not available")
 	}
 
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(ctx, deliberationID)
 	if err != nil {
 		return "", fmt.Errorf("deliberation not found: %w", err)
 	}
 
-	result, err := s.store.GetLatestAnalysisResult(deliberationID)
+	result, err := s.store.GetLatestAnalysisResult(ctx, deliberationID)
 	if err != nil {
 		return "", fmt.Errorf("no analysis results — run analyze first: %w", err)
 	}
@@ -402,13 +429,13 @@ func (s *Service) CreateDeliberation(topic, description string, opts ...Delibera
 		return nil, fmt.Errorf("invalid visibility %q — use open, private, or link", d.Visibility)
 	}
 
-	if err := s.store.CreateDeliberation(d); err != nil {
+	if err := s.store.CreateDeliberation(context.TODO(), d); err != nil {
 		return nil, err
 	}
 
 	// Auto-add creator to ACL for private deliberations
 	if d.Visibility == "private" && d.CreatorKey != "" {
-		if err := s.store.AddToACL(d.ID, d.CreatorKey); err != nil {
+		if err := s.store.AddToACL(context.TODO(), d.ID, d.CreatorKey); err != nil {
 			fmt.Fprintf(os.Stderr, "gemot: warning: failed to add creator to ACL: %v\n", err)
 		}
 	}
@@ -418,7 +445,7 @@ func (s *Service) CreateDeliberation(topic, description string, opts ...Delibera
 }
 
 func (s *Service) GetDeliberation(id string) (*Deliberation, error) {
-	return s.store.GetDeliberation(id)
+	return s.store.GetDeliberation(context.TODO(), id)
 }
 
 // SetTemplate changes the governance template on an existing deliberation.
@@ -429,7 +456,7 @@ func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) erro
 	if !ok {
 		return fmt.Errorf("unknown template %q — use list_templates to see available templates", template)
 	}
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 	if err != nil {
 		return fmt.Errorf("deliberation not found: %w", err)
 	}
@@ -440,7 +467,7 @@ func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) erro
 	// If the rules update fails, the template name is set but rules are stale.
 	// This is acceptable because the rules update is a simple UPDATE that's
 	// extremely unlikely to fail after the template update succeeded.
-	if err := s.store.UpdateDeliberationTemplate(deliberationID, template); err != nil {
+	if err := s.store.UpdateDeliberationTemplate(context.TODO(), deliberationID, template); err != nil {
 		return err
 	}
 	// Merge new template's default rules into existing rules (explicit overrides preserved)
@@ -454,7 +481,7 @@ func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) erro
 				rules[k] = v
 			}
 		}
-		return s.store.UpdateDeliberationRules(deliberationID, rules)
+		return s.store.UpdateDeliberationRules(context.TODO(), deliberationID, rules)
 	}
 	return nil
 }
@@ -463,7 +490,7 @@ func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) erro
 // Only the creator or an admin can delete.
 func (s *Service) DeleteDeliberation(deliberationID, callerKeyID string, isAdmin bool) error {
 	if !isAdmin {
-		d, err := s.store.GetDeliberation(deliberationID)
+		d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 		if err != nil {
 			return fmt.Errorf("deliberation not found: %w", err)
 		}
@@ -471,35 +498,35 @@ func (s *Service) DeleteDeliberation(deliberationID, callerKeyID string, isAdmin
 			return fmt.Errorf("only the deliberation creator or admin can delete")
 		}
 	}
-	return s.store.DeleteDeliberation(deliberationID)
+	return s.store.DeleteDeliberation(context.TODO(), deliberationID)
 }
 
 // ReportAbuse files an abuse report for manual review.
 func (s *Service) ReportAbuse(deliberationID, reporterKey, reason string) error {
-	if _, err := s.store.GetDeliberation(deliberationID); err != nil {
+	if _, err := s.store.GetDeliberation(context.TODO(), deliberationID); err != nil {
 		return fmt.Errorf("deliberation not found: %w", err)
 	}
-	return s.store.CreateAbuseReport(deliberationID, reporterKey, reason)
+	return s.store.CreateAbuseReport(context.TODO(), deliberationID, reporterKey, reason)
 }
 
 func (s *Service) GetLatestAnalysisResult(deliberationID string) (*AnalysisResult, error) {
-	return s.store.GetLatestAnalysisResult(deliberationID)
+	return s.store.GetLatestAnalysisResult(context.TODO(), deliberationID)
 }
 
-func (s *Service) ListDeliberations(limit, offset int) ([]Deliberation, error) {
-	return s.store.ListDeliberations(limit, offset)
+func (s *Service) ListDeliberations(limit, offset int, keyID string) ([]Deliberation, error) {
+	return s.store.ListDeliberations(context.TODO(), limit, offset, keyID)
 }
 
-func (s *Service) ListByGroup(groupID string, limit, offset int) ([]Deliberation, error) {
-	return s.store.ListByGroup(groupID, limit, offset)
+func (s *Service) ListByGroup(groupID string, limit, offset int, keyID string) ([]Deliberation, error) {
+	return s.store.ListByGroup(context.TODO(), groupID, limit, offset, keyID)
 }
 
-func (s *Service) ListByAgent(agentID string, limit, offset int) ([]Deliberation, error) {
-	return s.store.ListByAgent(agentID, limit, offset)
+func (s *Service) ListByAgent(agentID string, limit, offset int, keyID string) ([]Deliberation, error) {
+	return s.store.ListByAgent(context.TODO(), agentID, limit, offset, keyID)
 }
 
 func (s *Service) SetGroupID(deliberationID, groupID string) error {
-	return s.store.SetGroupID(deliberationID, groupID)
+	return s.store.SetGroupID(context.TODO(), deliberationID, groupID)
 }
 
 func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts ...PositionOption) (*Position, error) {
@@ -536,7 +563,7 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 		fmt.Fprintf(os.Stderr, "gemot: %s for position in deliberation (content length: %d)\n", screeningWarning, len(content))
 	}
 
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
 	}
@@ -549,13 +576,13 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 
 	// Forced acknowledgment: in round 2+, agents must call get_context first
 	if d.Round > 1 {
-		accessed, _ := s.store.HasContextAccess(deliberationID, agentID, d.Round)
+		accessed, _ := s.store.HasContextAccess(context.TODO(), deliberationID, agentID, d.Round)
 		if !accessed {
 			return nil, fmt.Errorf("round %d requires reviewing cruxes first — call get_context before submitting a new position", d.Round)
 		}
 	}
 
-	count, err := s.store.CountPositions(deliberationID)
+	count, err := s.store.CountPositions(context.TODO(), deliberationID)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +592,7 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 
 	// Enforce max_participants cap
 	if d.MaxParticipants > 0 {
-		positions, err := s.store.GetPositions(deliberationID, nil)
+		positions, err := s.store.GetPositions(context.TODO(), deliberationID, nil)
 		if err == nil {
 			uniqueAgents := map[string]bool{}
 			for _, p := range positions {
@@ -597,7 +624,7 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 		p.Draft = true
 	}
 
-	if err := s.store.CreatePosition(p); err != nil {
+	if err := s.store.CreatePosition(context.TODO(), p); err != nil {
 		return nil, err
 	}
 	s.emitWithData("position_submitted", deliberationID, agentID, p.ID, map[string]any{
@@ -609,7 +636,7 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 }
 
 func (s *Service) GetPositions(deliberationID string, excludeAgentID *string, round *int) ([]Position, error) {
-	positions, err := s.store.GetPositions(deliberationID, round)
+	positions, err := s.store.GetPositions(context.TODO(), deliberationID, round)
 	if err != nil {
 		return nil, err
 	}
@@ -630,7 +657,7 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 		return fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
 	}
 
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 	if err != nil {
 		return fmt.Errorf("deliberation not found: %w", err)
 	}
@@ -641,7 +668,7 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 		return fmt.Errorf("deliberation deadline has passed")
 	}
 
-	pos, err := s.store.GetPositionByID(positionID)
+	pos, err := s.store.GetPositionByID(context.TODO(), positionID)
 	if err != nil {
 		return fmt.Errorf("position not found: %w", err)
 	}
@@ -662,7 +689,7 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 	if len(criterionID) > 0 && criterionID[0] != "" {
 		v.CriterionID = criterionID[0]
 	}
-	if err := s.store.CreateVote(v); err != nil {
+	if err := s.store.CreateVote(context.TODO(), v); err != nil {
 		return err
 	}
 	s.emitWithData("vote_cast", deliberationID, agentID, positionID, map[string]any{
@@ -672,8 +699,8 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 
 	// Seconding: a +1 vote from a different agent publishes a draft motion
 	if value == 1 && RuleBool(d, "require_second", false) && pos.Draft && pos.AgentID != agentID {
-		if err := s.store.PublishPosition(positionID); err != nil {
-			log.Printf("[gemot] failed to publish seconded position %s: %v", positionID, err)
+		if err := s.store.PublishPosition(context.TODO(), positionID); err != nil {
+			slog.Error("failed to publish seconded position", "position_id", positionID, "error", err)
 		} else {
 			s.emit("position_seconded", deliberationID, agentID, positionID)
 		}
@@ -683,17 +710,20 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 	// Resolution is informational, not a status change — deliberation stays "open"
 	// so analysis and further voting can continue.
 	if resolution := s.checkResolution(d); resolution != nil {
-		if err := s.store.SaveResolution(deliberationID, resolution); err != nil {
-			log.Printf("[gemot] resolution save failed for %s: %v", deliberationID, err)
+		if err := s.store.SaveResolution(context.TODO(), deliberationID, resolution); err != nil {
+			slog.Error("resolution save failed", "deliberation_id", deliberationID, "error", err)
 		} else {
 			s.emit("resolved", deliberationID, resolution.AgentID, resolution.PositionID)
-			log.Printf("[gemot] deliberation %s resolved: position %s (%.0f%% approval, strategy=%s)",
-				deliberationID, resolution.PositionID, resolution.Approval*100, resolution.Strategy)
+			slog.Info("deliberation resolved",
+				"deliberation_id", deliberationID,
+				"position_id", resolution.PositionID,
+				"approval_pct", int(resolution.Approval*100),
+				"strategy", resolution.Strategy)
 		}
 	} else {
 		// Clear stale resolution if votes changed and threshold no longer met
-		if err := s.store.SaveResolution(deliberationID, nil); err != nil {
-			log.Printf("[gemot] clear resolution failed for %s: %v", deliberationID, err)
+		if err := s.store.SaveResolution(context.TODO(), deliberationID, nil); err != nil {
+			slog.Error("clear resolution failed", "deliberation_id", deliberationID, "error", err)
 		}
 	}
 	return nil
@@ -715,12 +745,12 @@ func (s *Service) checkResolution(d *Deliberation) *Resolution {
 		}
 	}
 
-	positions, err := s.store.GetPositions(d.ID, nil)
+	positions, err := s.store.GetPositions(context.TODO(), d.ID, nil)
 	if err != nil || len(positions) == 0 {
 		return nil
 	}
 
-	votes, err := s.store.GetVotes(d.ID)
+	votes, err := s.store.GetVotes(context.TODO(), d.ID)
 	if err != nil {
 		return nil
 	}
@@ -819,7 +849,7 @@ func (s *Service) checkResolution(d *Deliberation) *Resolution {
 }
 
 func (s *Service) Analyze(ctx context.Context, deliberationID string) (*AnalysisResult, error) {
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(ctx, deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
 	}
@@ -830,7 +860,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	// Enforce cooling period (minimum time between analyses)
 	coolingMinutes := RuleInt(d, "cooling_period_minutes", 0)
 	if coolingMinutes > 0 && d.Round > 1 {
-		if lastChanged, err := s.store.GetStatusChangedAt(deliberationID); err == nil && !lastChanged.IsZero() {
+		if lastChanged, err := s.store.GetStatusChangedAt(ctx, deliberationID); err == nil && !lastChanged.IsZero() {
 			elapsed := time.Since(lastChanged)
 			required := time.Duration(coolingMinutes) * time.Minute
 			if elapsed < required {
@@ -843,7 +873,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	// Enforce quorum (minimum participants before analysis)
 	minParticipants := RuleInt(d, "min_participants", 0)
 	if minParticipants > 0 {
-		positions, err := s.store.GetPositions(deliberationID, nil)
+		positions, err := s.store.GetPositions(ctx, deliberationID, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -857,7 +887,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	}
 
 	// Atomic status transition: prevents concurrent analysis race condition
-	ok, err := s.store.TrySetAnalyzing(deliberationID)
+	ok, err := s.store.TrySetAnalyzing(ctx, deliberationID)
 	if err != nil {
 		return nil, err
 	}
@@ -868,24 +898,24 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	// From here, we must reset status on any error
 	resetStatus := func() {
 		// Note: log to stderr, NOT stdout — stdout is the MCP protocol channel in stdio mode
-		if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
+		if err := s.store.UpdateDeliberationStatus(ctx, deliberationID, "open"); err != nil {
 			fmt.Fprintf(os.Stderr, "gemot: warning: failed to reset deliberation status: %v\n", err)
 		}
 	}
 
-	positions, err := s.store.GetPositions(deliberationID, nil)
+	positions, err := s.store.GetPositions(ctx, deliberationID, nil)
 	if err != nil {
 		resetStatus()
 		return nil, err
 	}
-	votes, err := s.store.GetVotes(deliberationID)
+	votes, err := s.store.GetVotes(ctx, deliberationID)
 	if err != nil {
 		resetStatus()
 		return nil, err
 	}
 
 	// Resolve delegated votes (liquid democracy)
-	delegations, _ := s.store.GetDelegations(deliberationID)
+	delegations, _ := s.store.GetDelegations(ctx, deliberationID)
 	if len(delegations) > 0 {
 		votes = resolveDelegations(votes, delegations)
 	}
@@ -925,7 +955,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	}
 	// Thread prior round's norms and constitutional rules into analysis
 	if d.Round > 1 {
-		prevResult, _ := s.store.GetAnalysisResult(deliberationID, d.Round-1)
+		prevResult, _ := s.store.GetAnalysisResult(ctx, deliberationID, d.Round-1)
 		if prevResult != nil {
 			if len(prevResult.EmergentNorms) > 0 {
 				analysisCtx = context.WithValue(analysisCtx, ContextKeyPriorNorms{}, prevResult.EmergentNorms)
@@ -952,7 +982,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 
 	s.emit("analysis_started", deliberationID, "", "")
 	progressFn := ProgressFunc(func(subStatus string) {
-		_ = s.store.UpdateSubStatus(deliberationID, subStatus)
+		_ = s.store.UpdateSubStatus(ctx, deliberationID, subStatus)
 		s.emit("analysis_progress", deliberationID, "", subStatus)
 	})
 	analysisCtx = context.WithValue(analysisCtx, ContextKeyProgressFunc{}, progressFn)
@@ -964,7 +994,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	}
 
 	// Surface any pending disputes as integrity warnings
-	disputes, _ := s.store.GetDisputes(deliberationID)
+	disputes, _ := s.store.GetDisputes(ctx, deliberationID)
 	for _, disp := range disputes {
 		result.IntegrityWarnings = append(result.IntegrityWarnings,
 			fmt.Sprintf("DISPUTED: agent %q challenges crux %q — correction: %s",
@@ -982,16 +1012,16 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		}
 	}
 
-	if err := s.store.SaveAnalysisResult(deliberationID, d.Round, result); err != nil {
+	if err := s.store.SaveAnalysisResult(ctx, deliberationID, d.Round, result); err != nil {
 		resetStatus()
 		return nil, err
 	}
 
-	if err := s.store.AdvanceRound(deliberationID); err != nil {
+	if err := s.store.AdvanceRound(ctx, deliberationID); err != nil {
 		return nil, err
 	}
 
-	if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
+	if err := s.store.UpdateDeliberationStatus(ctx, deliberationID, "open"); err != nil {
 		return nil, err
 	}
 
@@ -1000,18 +1030,18 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 }
 
 func (s *Service) GetContext(deliberationID, agentID string) (*AgentContext, error) {
-	result, err := s.store.GetLatestAnalysisResult(deliberationID)
+	result, err := s.store.GetLatestAnalysisResult(context.TODO(), deliberationID)
 	if err != nil {
 		// Check if analysis is in progress
-		if d, dErr := s.store.GetDeliberation(deliberationID); dErr == nil && d.Status == "analyzing" {
+		if d, dErr := s.store.GetDeliberation(context.TODO(), deliberationID); dErr == nil && d.Status == "analyzing" {
 			return nil, fmt.Errorf("analysis is in progress (%s) — try again in a moment", d.SubStatus)
 		}
 		return nil, fmt.Errorf("no analysis results yet — run analyze first")
 	}
 
 	// Record that this agent accessed context (for forced acknowledgment)
-	if d, err := s.store.GetDeliberation(deliberationID); err == nil {
-		_ = s.store.RecordContextAccess(deliberationID, agentID, d.Round)
+	if d, err := s.store.GetDeliberation(context.TODO(), deliberationID); err == nil {
+		_ = s.store.RecordContextAccess(context.TODO(), deliberationID, agentID, d.Round)
 	}
 
 	ctx := &AgentContext{
@@ -1110,7 +1140,7 @@ func (s *Service) GetContext(deliberationID, agentID string) (*AgentContext, err
 	ctx.StrategicNudge = buildStrategicNudge(ctx, result)
 
 	// Surface pending invitations for this agent
-	if invitations, err := s.store.GetInvitations(deliberationID); err == nil {
+	if invitations, err := s.store.GetInvitations(context.TODO(), deliberationID); err == nil {
 		for _, inv := range invitations {
 			if inv.InvitedAgent == agentID && inv.Status == "pending" {
 				ctx.PendingInvitations = append(ctx.PendingInvitations, inv)
@@ -1322,13 +1352,13 @@ func (s *Service) ReframePosition(ctx context.Context, deliberationID, positionI
 		return "", fmt.Errorf("reframing not available")
 	}
 
-	pos, err := s.store.GetPositionByID(positionID)
+	pos, err := s.store.GetPositionByID(ctx, positionID)
 	if err != nil {
 		return "", fmt.Errorf("position not found: %w", err)
 	}
 
 	// Get other positions for context
-	positions, err := s.store.GetPositions(deliberationID, nil)
+	positions, err := s.store.GetPositions(ctx, deliberationID, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1344,7 +1374,7 @@ func (s *Service) ReframePosition(ctx context.Context, deliberationID, positionI
 
 	// Get cruxes if available
 	var cruxSummary string
-	result, err := s.store.GetLatestAnalysisResult(deliberationID)
+	result, err := s.store.GetLatestAnalysisResult(ctx, deliberationID)
 	if err == nil {
 		for _, c := range result.Cruxes {
 			cruxSummary += fmt.Sprintf("- %s (agree: %v, disagree: %v)\n", c.Claim, c.AgreeAgents, c.DisagreeAgents)
@@ -1428,7 +1458,7 @@ func resolveDelegations(votes []Vote, delegations []Delegation) []Vote {
 func (s *Service) Delegate(deliberationID, fromAgent, toAgent, scope string) (*Delegation, error) {
 	// Delegation cap: no agent can receive more than 3 delegations
 	// Prevents power concentration (Uniswap VC-delegate pattern)
-	delegations, _ := s.store.GetDelegations(deliberationID)
+	delegations, _ := s.store.GetDelegations(context.TODO(), deliberationID)
 	count := 0
 	for _, existing := range delegations {
 		if existing.Active && existing.ToAgent == toAgent {
@@ -1445,22 +1475,22 @@ func (s *Service) Delegate(deliberationID, fromAgent, toAgent, scope string) (*D
 		ToAgent:        toAgent,
 		Scope:          scope,
 	}
-	if err := s.store.CreateDelegation(d); err != nil {
+	if err := s.store.CreateDelegation(context.TODO(), d); err != nil {
 		return nil, err
 	}
 	return d, nil
 }
 
 func (s *Service) RevokeDelegation(deliberationID, fromAgent string) error {
-	return s.store.RevokeDelegation(deliberationID, fromAgent)
+	return s.store.RevokeDelegation(context.TODO(), deliberationID, fromAgent)
 }
 
 func (s *Service) PublishPosition(positionID string) error {
-	return s.store.PublishPosition(positionID)
+	return s.store.PublishPosition(context.TODO(), positionID)
 }
 
 func (s *Service) Commit(deliberationID, agentID, statement, conditional string) (*Commitment, error) {
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
 	}
@@ -1471,37 +1501,37 @@ func (s *Service) Commit(deliberationID, agentID, statement, conditional string)
 		Statement:      statement,
 		Conditional:    conditional,
 	}
-	if err := s.store.CreateCommitment(c); err != nil {
+	if err := s.store.CreateCommitment(context.TODO(), c); err != nil {
 		return nil, err
 	}
 
 	// Check if conditional commitments should activate
 	if conditional == "" {
 		c.Status = "active"
-		_ = s.store.UpdateCommitmentStatus(c.ID, "active")
+		_ = s.store.UpdateCommitmentStatus(context.TODO(), c.ID, "active")
 	}
 	return c, nil
 }
 
 func (s *Service) GetCommitments(deliberationID string) ([]Commitment, error) {
-	return s.store.GetCommitments(deliberationID)
+	return s.store.GetCommitments(context.TODO(), deliberationID)
 }
 
 func (s *Service) FulfillCommitment(commitmentID, verifiedBy string) error {
-	return s.store.FulfillCommitment(commitmentID, verifiedBy)
+	return s.store.FulfillCommitment(context.TODO(), commitmentID, verifiedBy)
 }
 
 func (s *Service) BreakCommitment(commitmentID, reason, verifiedBy string) error {
-	return s.store.BreakCommitment(commitmentID, reason, verifiedBy)
+	return s.store.BreakCommitment(context.TODO(), commitmentID, reason, verifiedBy)
 }
 
 func (s *Service) AgentReputation(agentID, groupID string) (ReputationSummary, error) {
 	var commitments []Commitment
 	var err error
 	if groupID != "" {
-		commitments, err = s.store.GetCommitmentsByGroup(groupID)
+		commitments, err = s.store.GetCommitmentsByGroup(context.TODO(), groupID)
 	} else {
-		commitments, err = s.store.GetCommitmentsByAgent(agentID)
+		commitments, err = s.store.GetCommitmentsByAgent(context.TODO(), agentID)
 	}
 	if err != nil {
 		return ReputationSummary{}, err
@@ -1531,7 +1561,7 @@ func (s *Service) AgentReputation(agentID, groupID string) (ReputationSummary, e
 // Optional maxUses controls how many agents can use the same code (default 1 = single-use).
 // Sandbox codes should use maxUses > 1 so every visitor to the /try page can join.
 func (s *Service) GenerateJoinCode(deliberationID, role string, ttl time.Duration, maxUses ...int) (*JoinCode, error) {
-	if _, err := s.store.GetDeliberation(deliberationID); err != nil {
+	if _, err := s.store.GetDeliberation(context.TODO(), deliberationID); err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
 	}
 
@@ -1551,7 +1581,7 @@ func (s *Service) GenerateJoinCode(deliberationID, role string, ttl time.Duratio
 		MaxUses:        mu,
 		CreatedAt:      time.Now(),
 	}
-	if err := s.store.CreateJoinCode(jc); err != nil {
+	if err := s.store.CreateJoinCode(context.TODO(), jc); err != nil {
 		return nil, err
 	}
 	return jc, nil
@@ -1560,7 +1590,7 @@ func (s *Service) GenerateJoinCode(deliberationID, role string, ttl time.Duratio
 // JoinDeliberation claims a join code and adds the agent to the deliberation.
 // Returns the deliberation ID so the agent knows where to participate.
 func (s *Service) JoinDeliberation(code, agentID string) (string, string, error) {
-	jc, err := s.store.ClaimJoinCode(code, agentID)
+	jc, err := s.store.ClaimJoinCode(context.TODO(), code, agentID)
 	if err != nil {
 		return "", "", err
 	}
@@ -1569,11 +1599,11 @@ func (s *Service) JoinDeliberation(code, agentID string) (string, string, error)
 
 // LookupJoinCode returns join code metadata without claiming it.
 func (s *Service) LookupJoinCode(code string) (*JoinCode, *Deliberation, error) {
-	jc, err := s.store.LookupJoinCode(code)
+	jc, err := s.store.LookupJoinCode(context.TODO(), code)
 	if err != nil {
 		return nil, nil, err
 	}
-	d, err := s.store.GetDeliberation(jc.DeliberationID)
+	d, err := s.store.GetDeliberation(context.TODO(), jc.DeliberationID)
 	if err != nil {
 		return jc, nil, nil
 	}
@@ -1586,9 +1616,12 @@ func (s *Service) CheckAccess(deliberationID, keyID string) error {
 	if keyID == "" {
 		return nil // admin or dev mode
 	}
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 	if err != nil {
 		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.Status == "deleted" {
+		return fmt.Errorf("deliberation not found")
 	}
 	switch d.Visibility {
 	case "open", "":
@@ -1599,7 +1632,7 @@ func (s *Service) CheckAccess(deliberationID, keyID string) error {
 		if d.CreatorKey == keyID {
 			return nil
 		}
-		allowed, err := s.store.CheckACL(deliberationID, keyID)
+		allowed, err := s.store.CheckACL(context.TODO(), deliberationID, keyID)
 		if err != nil || !allowed {
 			return fmt.Errorf("access denied: this is a private deliberation")
 		}
@@ -1623,26 +1656,26 @@ func (s *Service) InviteAgent(deliberationID, invitedBy, invitedAgent, role, rea
 		Role:           role,
 		Reason:         reason,
 	}
-	if err := s.store.CreateInvitation(inv); err != nil {
+	if err := s.store.CreateInvitation(context.TODO(), inv); err != nil {
 		return nil, err
 	}
 	return inv, nil
 }
 
 func (s *Service) GetInvitations(deliberationID string) ([]Invitation, error) {
-	return s.store.GetInvitations(deliberationID)
+	return s.store.GetInvitations(context.TODO(), deliberationID)
 }
 
 func (s *Service) AcceptInvitation(invitationID string) error {
-	return s.store.UpdateInvitationStatus(invitationID, "accepted")
+	return s.store.UpdateInvitationStatus(context.TODO(), invitationID, "accepted")
 }
 
 func (s *Service) GetPositionByID(id string) (*Position, error) {
-	return s.store.GetPositionByID(id)
+	return s.store.GetPositionByID(context.TODO(), id)
 }
 
 func (s *Service) GetVotes(deliberationID string) ([]Vote, error) {
-	return s.store.GetVotes(deliberationID)
+	return s.store.GetVotes(context.TODO(), deliberationID)
 }
 
 func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction string) (*Dispute, error) {
@@ -1658,7 +1691,7 @@ func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction str
 		CruxClaim:      cruxClaim,
 		Correction:      correction,
 	}
-	if err := s.store.CreateDispute(d); err != nil {
+	if err := s.store.CreateDispute(context.TODO(), d); err != nil {
 		return nil, err
 	}
 	return d, nil
@@ -1707,7 +1740,7 @@ func (s *Service) DrainAnalyses(maxWait time.Duration) int {
 // ResetAnalyzingStatus resets a specific deliberation from "analyzing" back to "open".
 // Used by the panic recovery handler in RunAnalysisAsync.
 func (s *Service) ResetAnalyzingStatus(deliberationID string) {
-	if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
+	if err := s.store.UpdateDeliberationStatus(context.TODO(), deliberationID, "open"); err != nil {
 		fmt.Fprintf(os.Stderr, "gemot: warning: failed to reset status after panic: %v\n", err)
 	}
 }
@@ -1715,7 +1748,7 @@ func (s *Service) ResetAnalyzingStatus(deliberationID string) {
 // CancelAnalysis resets a deliberation from "analyzing" back to "open".
 // Returns an error if the deliberation is not currently analyzing.
 func (s *Service) CancelAnalysis(deliberationID string) error {
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 	if err != nil {
 		return fmt.Errorf("deliberation not found: %w", err)
 	}
@@ -1729,7 +1762,7 @@ func (s *Service) CancelAnalysis(deliberationID string) error {
 		delete(s.activeAnalyses, deliberationID)
 	}
 	s.analysisMu.Unlock()
-	if err := s.store.UpdateDeliberationStatus(deliberationID, "open"); err != nil {
+	if err := s.store.UpdateDeliberationStatus(context.TODO(), deliberationID, "open"); err != nil {
 		return err
 	}
 	s.emit("analysis_cancelled", deliberationID, "", "")
@@ -1739,7 +1772,7 @@ func (s *Service) CancelAnalysis(deliberationID string) error {
 // WithdrawAgent removes an agent from a deliberation by hiding their positions,
 // deleting their votes, and revoking their delegations.
 func (s *Service) WithdrawAgent(deliberationID, agentID string) error {
-	d, err := s.store.GetDeliberation(deliberationID)
+	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
 	if err != nil {
 		return fmt.Errorf("deliberation not found: %w", err)
 	}
@@ -1747,11 +1780,11 @@ func (s *Service) WithdrawAgent(deliberationID, agentID string) error {
 		return fmt.Errorf("deliberation is %s, cannot withdraw", d.Status)
 	}
 	// Verify agent has participated
-	positions, err := s.store.GetPositions(deliberationID, nil)
+	positions, err := s.store.GetPositions(context.TODO(), deliberationID, nil)
 	if err != nil {
 		return err
 	}
-	votes, err := s.store.GetVotes(deliberationID)
+	votes, err := s.store.GetVotes(context.TODO(), deliberationID)
 	if err != nil {
 		return err
 	}
@@ -1773,15 +1806,15 @@ func (s *Service) WithdrawAgent(deliberationID, agentID string) error {
 		return fmt.Errorf("agent %s has not participated in this deliberation", agentID)
 	}
 	// Mark positions as withdrawn (draft = 1 makes them invisible)
-	if err := s.store.WithdrawPositions(deliberationID, agentID); err != nil {
+	if err := s.store.WithdrawPositions(context.TODO(), deliberationID, agentID); err != nil {
 		return fmt.Errorf("failed to withdraw positions: %w", err)
 	}
 	// Delete votes
-	if err := s.store.DeleteVotesByAgent(deliberationID, agentID); err != nil {
+	if err := s.store.DeleteVotesByAgent(context.TODO(), deliberationID, agentID); err != nil {
 		return fmt.Errorf("failed to delete votes: %w", err)
 	}
 	// Revoke delegations from/to this agent
-	if err := s.store.DeleteDelegationsByAgent(deliberationID, agentID); err != nil {
+	if err := s.store.DeleteDelegationsByAgent(context.TODO(), deliberationID, agentID); err != nil {
 		return fmt.Errorf("failed to revoke delegations: %w", err)
 	}
 	s.emit("agent_withdrawn", deliberationID, agentID, "")
@@ -1793,7 +1826,7 @@ func (s *Service) WithdrawAgent(deliberationID, agentID string) error {
 // Also cancels any active analysis goroutines for recovered deliberations.
 func (s *Service) RecoverStuck() (int, error) {
 	// Get the list of stuck deliberations before recovery (so we can cancel their goroutines)
-	stuck, err := s.store.GetStuckAnalyzing(30 * time.Minute)
+	stuck, err := s.store.GetStuckAnalyzing(context.TODO(), 30*time.Minute)
 	if err != nil {
 		return 0, err
 	}
@@ -1813,11 +1846,11 @@ func (s *Service) RecoverStuck() (int, error) {
 	s.analysisMu.Unlock()
 
 	// Reset DB status
-	return s.store.RecoverStuckAnalyzing(30 * time.Minute)
+	return s.store.RecoverStuckAnalyzing(context.TODO(), 30*time.Minute)
 }
 
 func (s *Service) GetAnalysisResult(deliberationID string, round int) (*AnalysisResult, error) {
-	return s.store.GetAnalysisResult(deliberationID, round)
+	return s.store.GetAnalysisResult(context.TODO(), deliberationID, round)
 }
 
 // CreateShareToken generates a random share token for a group and stores it.
@@ -1832,7 +1865,7 @@ func (s *Service) CreateShareToken(groupID string) (string, error) {
 	}
 	token := fmt.Sprintf("%x", b)
 	expiresAt := time.Now().Add(30 * 24 * time.Hour) // 30 days
-	if err := s.store.CreateShareToken(token, groupID, expiresAt); err != nil {
+	if err := s.store.CreateShareToken(context.TODO(), token, groupID, expiresAt); err != nil {
 		return "", err
 	}
 	return token, nil
@@ -1840,14 +1873,14 @@ func (s *Service) CreateShareToken(groupID string) (string, error) {
 
 // LookupShareToken returns the group ID for a valid share token.
 func (s *Service) LookupShareToken(token string) (string, error) {
-	return s.store.LookupShareToken(token)
+	return s.store.LookupShareToken(context.TODO(), token)
 }
 
 // detectRoundDrift compares the current analysis with the previous round's analysis.
 // Flags suspiciously rapid convergence that may indicate sycophantic agreement or
 // coordinated manipulation rather than genuine deliberation.
 func (s *Service) detectRoundDrift(deliberationID string, currentRound int, current *AnalysisResult, currentVotes []Vote) []string {
-	prev, err := s.store.GetAnalysisResult(deliberationID, currentRound-1)
+	prev, err := s.store.GetAnalysisResult(context.TODO(), deliberationID, currentRound-1)
 	if err != nil || prev == nil {
 		return nil
 	}
@@ -1868,7 +1901,7 @@ func (s *Service) detectRoundDrift(deliberationID string, currentRound int, curr
 
 	// 3. Check vote pattern shift: compare how agents voted on positions that exist in both rounds
 	// Build vote maps for current round
-	prevVotes, err := s.store.GetVotesByRound(deliberationID, currentRound-1)
+	prevVotes, err := s.store.GetVotesByRound(context.TODO(), deliberationID, currentRound-1)
 	if err != nil || len(prevVotes) == 0 {
 		return warnings
 	}

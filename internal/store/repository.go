@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -54,18 +55,18 @@ func scanDeliberationRows(rows *sql.Rows) ([]deliberation.Deliberation, error) {
 	return result, rows.Err()
 }
 
-func (s *DB) CreateDeliberation(d *deliberation.Deliberation) error {
+func (s *DB) CreateDeliberation(ctx context.Context, d *deliberation.Deliberation) error {
 	d.ID = uuid.New().String()
 	d.CreatedAt = time.Now().UTC()
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, template, rules, group_id, deadline_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.Template, marshalRules(d.Rules), d.GroupID, d.DeadlineAt, d.CreatedAt,
 	)
 	return err
 }
 
-func (s *DB) GetDeliberation(id string) (*deliberation.Deliberation, error) {
-	row := s.db.QueryRow(`SELECT `+deliberationColumns+` FROM deliberations WHERE id = $1`, id)
+func (s *DB) GetDeliberation(ctx context.Context, id string) (*deliberation.Deliberation, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+deliberationColumns+` FROM deliberations WHERE id = $1`, id)
 	d, err := scanDeliberation(row)
 	if err != nil {
 		return nil, err
@@ -87,9 +88,19 @@ func normalizePagination(limit, offset int) (int, int) {
 	return limit, offset
 }
 
-func (s *DB) ListDeliberations(limit, offset int) ([]deliberation.Deliberation, error) {
+func (s *DB) ListDeliberations(ctx context.Context, limit, offset int, keyID string) ([]deliberation.Deliberation, error) {
 	limit, offset = normalizePagination(limit, offset)
-	rows, err := s.db.Query(`SELECT `+deliberationColumns+` FROM deliberations WHERE status != 'deleted' ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
+	// keyID="" means admin — show everything. Otherwise filter out private deliberations not owned by caller.
+	query := `SELECT ` + deliberationColumns + ` FROM deliberations WHERE status != 'deleted'`
+	var args []any
+	if keyID != "" {
+		query += ` AND (visibility != 'private' OR creator_key = $3)`
+		args = []any{limit, offset, keyID}
+	} else {
+		args = []any{limit, offset}
+	}
+	query += ` ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -98,9 +109,18 @@ func (s *DB) ListDeliberations(limit, offset int) ([]deliberation.Deliberation, 
 }
 
 // ListByGroup returns deliberations in a group, ordered by creation time.
-func (s *DB) ListByGroup(groupID string, limit, offset int) ([]deliberation.Deliberation, error) {
+func (s *DB) ListByGroup(ctx context.Context, groupID string, limit, offset int, keyID string) ([]deliberation.Deliberation, error) {
 	limit, offset = normalizePagination(limit, offset)
-	rows, err := s.db.Query(`SELECT `+deliberationColumns+` FROM deliberations WHERE group_id = $1 AND status != 'deleted' ORDER BY created_at LIMIT $2 OFFSET $3`, groupID, limit, offset)
+	query := `SELECT ` + deliberationColumns + ` FROM deliberations WHERE group_id = $1 AND status != 'deleted'`
+	var args []any
+	if keyID != "" {
+		query += ` AND (visibility != 'private' OR creator_key = $4)`
+		args = []any{groupID, limit, offset, keyID}
+	} else {
+		args = []any{groupID, limit, offset}
+	}
+	query += ` ORDER BY created_at LIMIT $2 OFFSET $3`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -109,11 +129,19 @@ func (s *DB) ListByGroup(groupID string, limit, offset int) ([]deliberation.Deli
 }
 
 // ListByAgent returns deliberations where an agent has submitted positions.
-func (s *DB) ListByAgent(agentID string, limit, offset int) ([]deliberation.Deliberation, error) {
+func (s *DB) ListByAgent(ctx context.Context, agentID string, limit, offset int, keyID string) ([]deliberation.Deliberation, error) {
 	limit, offset = normalizePagination(limit, offset)
-	// deliberationColumns uses unqualified names; prefix with "d." for the JOIN query.
 	const cols = `d.id, d.topic, d.description, d.round_number, d.status, COALESCE(d.sub_status, ''), COALESCE(d.type, ''), COALESCE(d.visibility, 'open'), COALESCE(d.creator_key, ''), COALESCE(d.max_participants, 0), COALESCE(d.template, ''), COALESCE(d.rules, '{}'), COALESCE(d.group_id, ''), COALESCE(d.resolution_json, ''), d.deadline_at, d.created_at`
-	rows, err := s.db.Query(`SELECT DISTINCT `+cols+` FROM deliberations d JOIN positions p ON d.id = p.deliberation_id WHERE p.agent_id = $1 AND d.status != 'deleted' ORDER BY d.created_at DESC LIMIT $2 OFFSET $3`, agentID, limit, offset)
+	query := `SELECT DISTINCT ` + cols + ` FROM deliberations d JOIN positions p ON d.id = p.deliberation_id WHERE p.agent_id = $1 AND d.status != 'deleted'`
+	var args []any
+	if keyID != "" {
+		query += ` AND (d.visibility != 'private' OR d.creator_key = $4)`
+		args = []any{agentID, limit, offset, keyID}
+	} else {
+		args = []any{agentID, limit, offset}
+	}
+	query += ` ORDER BY d.created_at DESC LIMIT $2 OFFSET $3`
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -121,13 +149,13 @@ func (s *DB) ListByAgent(agentID string, limit, offset int) ([]deliberation.Deli
 	return scanDeliberationRows(rows)
 }
 
-func (s *DB) SetGroupID(deliberationID, groupID string) error {
-	_, err := s.db.Exec(`UPDATE deliberations SET group_id = $1 WHERE id = $2`, groupID, deliberationID)
+func (s *DB) SetGroupID(ctx context.Context, deliberationID, groupID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE deliberations SET group_id = $1 WHERE id = $2`, groupID, deliberationID)
 	return err
 }
 
-func (s *DB) UpdateDeliberationTemplate(id, template string) error {
-	res, err := s.db.Exec(`UPDATE deliberations SET template = $1 WHERE id = $2`, template, id)
+func (s *DB) UpdateDeliberationTemplate(ctx context.Context, id, template string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE deliberations SET template = $1 WHERE id = $2`, template, id)
 	if err != nil {
 		return err
 	}
@@ -138,8 +166,8 @@ func (s *DB) UpdateDeliberationTemplate(id, template string) error {
 	return nil
 }
 
-func (s *DB) UpdateDeliberationRules(id string, rules map[string]any) error {
-	res, err := s.db.Exec(`UPDATE deliberations SET rules = $1 WHERE id = $2`, marshalRules(rules), id)
+func (s *DB) UpdateDeliberationRules(ctx context.Context, id string, rules map[string]any) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE deliberations SET rules = $1 WHERE id = $2`, marshalRules(rules), id)
 	if err != nil {
 		return err
 	}
@@ -152,8 +180,8 @@ func (s *DB) UpdateDeliberationRules(id string, rules map[string]any) error {
 
 // DeleteDeliberation soft-deletes a deliberation by setting status to "deleted".
 // Data is preserved for compliance and abuse auditing.
-func (s *DB) DeleteDeliberation(id string) error {
-	res, err := s.db.Exec(
+func (s *DB) DeleteDeliberation(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE deliberations SET status = 'deleted', sub_status = '', status_changed_at = NOW() WHERE id = $1 AND status != 'deleted'`,
 		id,
 	)
@@ -167,8 +195,15 @@ func (s *DB) DeleteDeliberation(id string) error {
 	return nil
 }
 
-func (s *DB) UpdateDeliberationStatus(id, status string) error {
-	res, err := s.db.Exec(`UPDATE deliberations SET status = $1, sub_status = '', status_changed_at = NOW() WHERE id = $2`, status, id)
+var validStatuses = map[string]bool{
+	"open": true, "analyzing": true, "closed": true, "deleted": true,
+}
+
+func (s *DB) UpdateDeliberationStatus(ctx context.Context, id, status string) error {
+	if !validStatuses[status] {
+		return fmt.Errorf("invalid status %q", status)
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE deliberations SET status = $1, sub_status = '', status_changed_at = NOW() WHERE id = $2`, status, id)
 	if err != nil {
 		return err
 	}
@@ -181,31 +216,31 @@ func (s *DB) UpdateDeliberationStatus(id, status string) error {
 
 // SaveResolution updates the resolution field without changing status.
 // Pass nil to clear a stale resolution.
-func (s *DB) SaveResolution(id string, resolution *deliberation.Resolution) error {
+func (s *DB) SaveResolution(ctx context.Context, id string, resolution *deliberation.Resolution) error {
 	if resolution == nil {
-		_, err := s.db.Exec(`UPDATE deliberations SET resolution_json = '' WHERE id = $1`, id)
+		_, err := s.db.ExecContext(ctx, `UPDATE deliberations SET resolution_json = '' WHERE id = $1`, id)
 		return err
 	}
 	resJSON, err := json.Marshal(resolution)
 	if err != nil {
 		return fmt.Errorf("marshal resolution: %w", err)
 	}
-	_, err = s.db.Exec(
+	_, err = s.db.ExecContext(ctx,
 		`UPDATE deliberations SET resolution_json = $1 WHERE id = $2`,
 		string(resJSON), id,
 	)
 	return err
 }
 
-func (s *DB) UpdateSubStatus(id, subStatus string) error {
-	_, err := s.db.Exec(`UPDATE deliberations SET sub_status = $1 WHERE id = $2`, subStatus, id)
+func (s *DB) UpdateSubStatus(ctx context.Context, id, subStatus string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE deliberations SET sub_status = $1 WHERE id = $2`, subStatus, id)
 	return err
 }
 
 // TrySetAnalyzing atomically transitions status from "open" to "analyzing".
 // Returns false if the deliberation is not in "open" status (prevents race conditions).
-func (s *DB) TrySetAnalyzing(id string) (bool, error) {
-	res, err := s.db.Exec(`UPDATE deliberations SET status = 'analyzing', status_changed_at = NOW() WHERE id = $1 AND status = 'open'`, id)
+func (s *DB) TrySetAnalyzing(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE deliberations SET status = 'analyzing', status_changed_at = NOW() WHERE id = $1 AND status = 'open'`, id)
 	if err != nil {
 		return false, err
 	}
@@ -213,8 +248,8 @@ func (s *DB) TrySetAnalyzing(id string) (bool, error) {
 	return n > 0, nil
 }
 
-func (s *DB) AdvanceRound(id string) error {
-	res, err := s.db.Exec(`UPDATE deliberations SET round_number = round_number + 1 WHERE id = $1`, id)
+func (s *DB) AdvanceRound(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE deliberations SET round_number = round_number + 1 WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}
@@ -226,30 +261,30 @@ func (s *DB) AdvanceRound(id string) error {
 }
 
 // CountPositions returns the number of positions in a deliberation.
-func (s *DB) CountPositions(deliberationID string) (int, error) {
+func (s *DB) CountPositions(ctx context.Context, deliberationID string) (int, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM positions WHERE deliberation_id = $1`, deliberationID).Scan(&count)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM positions WHERE deliberation_id = $1`, deliberationID).Scan(&count)
 	return count, err
 }
 
-func (s *DB) CreatePosition(p *deliberation.Position) error {
+func (s *DB) CreatePosition(ctx context.Context, p *deliberation.Position) error {
 	p.ID = uuid.New().String()
 	p.CreatedAt = time.Now().UTC()
 	draft := 0
 	if p.Draft {
 		draft = 1
 	}
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, interests, draft, round_number, created_at, parent_position_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, p.Interests, draft, p.Round, p.CreatedAt, p.ParentPositionID,
 	)
 	return err
 }
 
-func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Position, error) {
+func (s *DB) GetPositions(ctx context.Context, deliberationID string, round *int) ([]deliberation.Position, error) {
 	var rows *rowsWrapper
 	if round != nil {
-		r, err := s.db.Query(
+		r, err := s.db.QueryContext(ctx,
 			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE deliberation_id = $1 AND round_number = $2 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID, *round,
 		)
@@ -258,7 +293,7 @@ func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Pos
 		}
 		rows = &rowsWrapper{r}
 	} else {
-		r, err := s.db.Query(
+		r, err := s.db.QueryContext(ctx,
 			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE deliberation_id = $1 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID,
 		)
@@ -284,11 +319,11 @@ func (s *DB) GetPositions(deliberationID string, round *int) ([]deliberation.Pos
 	return result, rows.Err()
 }
 
-func (s *DB) GetPositionByID(id string) (*deliberation.Position, error) {
+func (s *DB) GetPositionByID(ctx context.Context, id string) (*deliberation.Position, error) {
 	p := &deliberation.Position{}
 	var createdAt time.Time
 	var draftInt int
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE id = $1`, id,
 	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID)
 	p.Draft = draftInt == 1
@@ -299,10 +334,10 @@ func (s *DB) GetPositionByID(id string) (*deliberation.Position, error) {
 	return p, nil
 }
 
-func (s *DB) CreateVote(v *deliberation.Vote) error {
+func (s *DB) CreateVote(ctx context.Context, v *deliberation.Vote) error {
 	v.ID = uuid.New().String()
 	v.CreatedAt = time.Now().UTC()
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO votes (id, deliberation_id, agent_id, position_id, value, criterion_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 ON CONFLICT (deliberation_id, agent_id, position_id, criterion_id) DO UPDATE SET id = $1, value = $5, created_at = $7`,
 		v.ID, v.DeliberationID, v.AgentID, v.PositionID, v.Value, v.CriterionID, v.CreatedAt,
@@ -310,8 +345,8 @@ func (s *DB) CreateVote(v *deliberation.Vote) error {
 	return err
 }
 
-func (s *DB) GetVotes(deliberationID string) ([]deliberation.Vote, error) {
-	rows, err := s.db.Query(
+func (s *DB) GetVotes(ctx context.Context, deliberationID string) ([]deliberation.Vote, error) {
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, deliberation_id, agent_id, position_id, value, COALESCE(criterion_id, ''), created_at FROM votes WHERE deliberation_id = $1 ORDER BY created_at`,
 		deliberationID,
 	)
@@ -334,8 +369,8 @@ func (s *DB) GetVotes(deliberationID string) ([]deliberation.Vote, error) {
 }
 
 // GetVotesByRound returns votes on positions from a specific round.
-func (s *DB) GetVotesByRound(deliberationID string, round int) ([]deliberation.Vote, error) {
-	rows, err := s.db.Query(
+func (s *DB) GetVotesByRound(ctx context.Context, deliberationID string, round int) ([]deliberation.Vote, error) {
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT v.id, v.deliberation_id, v.agent_id, v.position_id, v.value, COALESCE(v.criterion_id, ''), v.created_at
 		 FROM votes v JOIN positions p ON v.position_id = p.id
 		 WHERE v.deliberation_id = $1 AND p.round_number = $2
@@ -360,13 +395,13 @@ func (s *DB) GetVotesByRound(deliberationID string, round int) ([]deliberation.V
 	return result, rows.Err()
 }
 
-func (s *DB) SaveAnalysisResult(deliberationID string, round int, result *deliberation.AnalysisResult) error {
+func (s *DB) SaveAnalysisResult(ctx context.Context, deliberationID string, round int, result *deliberation.AnalysisResult) error {
 	b, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("marshaling analysis result: %w", err)
 	}
 	id := uuid.New().String()
-	_, err = s.db.Exec(
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO analysis_results (id, deliberation_id, round_number, result_json, analyzed_at) VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (deliberation_id, round_number) DO UPDATE SET id = $1, result_json = $4, analyzed_at = $5`,
 		id, deliberationID, round, string(b), time.Now().UTC(),
@@ -374,10 +409,10 @@ func (s *DB) SaveAnalysisResult(deliberationID string, round int, result *delibe
 	return err
 }
 
-func (s *DB) GetAnalysisResult(deliberationID string, round int) (*deliberation.AnalysisResult, error) {
+func (s *DB) GetAnalysisResult(ctx context.Context, deliberationID string, round int) (*deliberation.AnalysisResult, error) {
 	var resultJSON string
 	var analyzedAt time.Time
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT result_json, analyzed_at FROM analysis_results WHERE deliberation_id = $1 AND round_number = $2`,
 		deliberationID, round,
 	).Scan(&resultJSON, &analyzedAt)
@@ -394,10 +429,10 @@ func (s *DB) GetAnalysisResult(deliberationID string, round int) (*deliberation.
 	return &result, nil
 }
 
-func (s *DB) GetLatestAnalysisResult(deliberationID string) (*deliberation.AnalysisResult, error) {
+func (s *DB) GetLatestAnalysisResult(ctx context.Context, deliberationID string) (*deliberation.AnalysisResult, error) {
 	var resultJSON string
 	var analyzedAt time.Time
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT result_json, analyzed_at FROM analysis_results WHERE deliberation_id = $1 ORDER BY round_number DESC LIMIT 1`,
 		deliberationID,
 	).Scan(&resultJSON, &analyzedAt)
@@ -415,9 +450,9 @@ func (s *DB) GetLatestAnalysisResult(deliberationID string) (*deliberation.Analy
 }
 
 // GetStuckAnalyzing returns deliberation IDs stuck in "analyzing" for longer than maxAge.
-func (s *DB) GetStuckAnalyzing(maxAge time.Duration) ([]string, error) {
+func (s *DB) GetStuckAnalyzing(ctx context.Context, maxAge time.Duration) ([]string, error) {
 	cutoff := time.Now().UTC().Add(-maxAge)
-	rows, err := s.db.Query(
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id FROM deliberations WHERE status = 'analyzing' AND COALESCE(status_changed_at, created_at) < $1`,
 		cutoff,
 	)
@@ -436,9 +471,9 @@ func (s *DB) GetStuckAnalyzing(maxAge time.Duration) ([]string, error) {
 	return ids, rows.Err()
 }
 
-func (s *DB) RecoverStuckAnalyzing(maxAge time.Duration) (int, error) {
+func (s *DB) RecoverStuckAnalyzing(ctx context.Context, maxAge time.Duration) (int, error) {
 	cutoff := time.Now().UTC().Add(-maxAge)
-	res, err := s.db.Exec(
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE deliberations SET status = 'open', sub_status = '', status_changed_at = NOW()
 		 WHERE status = 'analyzing' AND COALESCE(status_changed_at, created_at) < $1`,
 		cutoff,
@@ -475,11 +510,11 @@ func (s *DB) CachePut(key, response, model string) {
 	)
 }
 
-func (s *DB) CreateDelegation(d *deliberation.Delegation) error {
+func (s *DB) CreateDelegation(ctx context.Context, d *deliberation.Delegation) error {
 	d.ID = uuid.New().String()
 	d.CreatedAt = time.Now().UTC()
 	d.Active = true
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO delegations (id, deliberation_id, from_agent, to_agent, scope, active, created_at) VALUES ($1, $2, $3, $4, $5, 1, $6)
 		 ON CONFLICT (deliberation_id, from_agent) DO UPDATE SET id = $1, to_agent = $4, scope = $5, active = 1, created_at = $6`,
 		d.ID, d.DeliberationID, d.FromAgent, d.ToAgent, d.Scope, d.CreatedAt,
@@ -487,16 +522,16 @@ func (s *DB) CreateDelegation(d *deliberation.Delegation) error {
 	return err
 }
 
-func (s *DB) RevokeDelegation(deliberationID, fromAgent string) error {
-	_, err := s.db.Exec(
+func (s *DB) RevokeDelegation(ctx context.Context, deliberationID, fromAgent string) error {
+	_, err := s.db.ExecContext(ctx,
 		`UPDATE delegations SET active = 0 WHERE deliberation_id = $1 AND from_agent = $2`,
 		deliberationID, fromAgent,
 	)
 	return err
 }
 
-func (s *DB) GetDelegations(deliberationID string) ([]deliberation.Delegation, error) {
-	rows, err := s.db.Query(
+func (s *DB) GetDelegations(ctx context.Context, deliberationID string) ([]deliberation.Delegation, error) {
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, deliberation_id, from_agent, to_agent, COALESCE(scope, ''), active, created_at FROM delegations WHERE deliberation_id = $1 AND active = 1 ORDER BY created_at`,
 		deliberationID,
 	)
@@ -519,45 +554,45 @@ func (s *DB) GetDelegations(deliberationID string) ([]deliberation.Delegation, e
 	return result, rows.Err()
 }
 
-func (s *DB) PublishPosition(id string) error {
-	_, err := s.db.Exec(`UPDATE positions SET draft = 0 WHERE id = $1`, id)
+func (s *DB) PublishPosition(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE positions SET draft = 0 WHERE id = $1`, id)
 	return err
 }
 
-func (s *DB) CreateCommitment(c *deliberation.Commitment) error {
+func (s *DB) CreateCommitment(ctx context.Context, c *deliberation.Commitment) error {
 	c.ID = uuid.New().String()
 	c.CreatedAt = time.Now().UTC()
 	c.Status = "pending"
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO commitments (id, deliberation_id, agent_id, analysis_round, statement, conditional, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		c.ID, c.DeliberationID, c.AgentID, c.AnalysisRound, c.Statement, c.Conditional, c.Status, c.CreatedAt,
 	)
 	return err
 }
 
-func (s *DB) GetCommitments(deliberationID string) ([]deliberation.Commitment, error) {
-	return s.scanCommitments(
+func (s *DB) GetCommitments(ctx context.Context, deliberationID string) ([]deliberation.Commitment, error) {
+	return s.scanCommitments(ctx,
 		`SELECT id, deliberation_id, agent_id, analysis_round, statement, COALESCE(conditional, ''), status, created_at, fulfilled_at, broken_at, COALESCE(broken_reason, ''), COALESCE(verified_by, '') FROM commitments WHERE deliberation_id = $1 ORDER BY created_at`,
 		deliberationID,
 	)
 }
 
-func (s *DB) GetCommitmentsByAgent(agentID string) ([]deliberation.Commitment, error) {
-	return s.scanCommitments(
+func (s *DB) GetCommitmentsByAgent(ctx context.Context, agentID string) ([]deliberation.Commitment, error) {
+	return s.scanCommitments(ctx,
 		`SELECT id, deliberation_id, agent_id, analysis_round, statement, COALESCE(conditional, ''), status, created_at, fulfilled_at, broken_at, COALESCE(broken_reason, ''), COALESCE(verified_by, '') FROM commitments WHERE agent_id = $1 ORDER BY created_at`,
 		agentID,
 	)
 }
 
-func (s *DB) GetCommitmentsByGroup(groupID string) ([]deliberation.Commitment, error) {
-	return s.scanCommitments(
+func (s *DB) GetCommitmentsByGroup(ctx context.Context, groupID string) ([]deliberation.Commitment, error) {
+	return s.scanCommitments(ctx,
 		`SELECT c.id, c.deliberation_id, c.agent_id, c.analysis_round, c.statement, COALESCE(c.conditional, ''), c.status, c.created_at, c.fulfilled_at, c.broken_at, COALESCE(c.broken_reason, ''), COALESCE(c.verified_by, '') FROM commitments c JOIN deliberations d ON c.deliberation_id = d.id WHERE d.group_id = $1 ORDER BY c.created_at`,
 		groupID,
 	)
 }
 
-func (s *DB) scanCommitments(query string, args ...any) ([]deliberation.Commitment, error) {
-	rows, err := s.db.Query(query, args...)
+func (s *DB) scanCommitments(ctx context.Context, query string, args ...any) ([]deliberation.Commitment, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -573,39 +608,39 @@ func (s *DB) scanCommitments(query string, args ...any) ([]deliberation.Commitme
 	return result, rows.Err()
 }
 
-func (s *DB) UpdateCommitmentStatus(id, status string) error {
-	_, err := s.db.Exec(`UPDATE commitments SET status = $1 WHERE id = $2`, status, id)
+func (s *DB) UpdateCommitmentStatus(ctx context.Context, id, status string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE commitments SET status = $1 WHERE id = $2`, status, id)
 	return err
 }
 
-func (s *DB) FulfillCommitment(id, verifiedBy string) error {
-	_, err := s.db.Exec(
+func (s *DB) FulfillCommitment(ctx context.Context, id, verifiedBy string) error {
+	_, err := s.db.ExecContext(ctx,
 		`UPDATE commitments SET status = 'fulfilled', fulfilled_at = NOW(), verified_by = $1 WHERE id = $2`,
 		verifiedBy, id,
 	)
 	return err
 }
 
-func (s *DB) BreakCommitment(id, reason, verifiedBy string) error {
-	_, err := s.db.Exec(
+func (s *DB) BreakCommitment(ctx context.Context, id, reason, verifiedBy string) error {
+	_, err := s.db.ExecContext(ctx,
 		`UPDATE commitments SET status = 'broken', broken_at = NOW(), broken_reason = $1, verified_by = $2 WHERE id = $3`,
 		reason, verifiedBy, id,
 	)
 	return err
 }
 
-func (s *DB) CreateJoinCode(jc *deliberation.JoinCode) error {
-	_, err := s.db.Exec(
+func (s *DB) CreateJoinCode(ctx context.Context, jc *deliberation.JoinCode) error {
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO join_codes (code, deliberation_id, role, expires_at, created_at, max_uses, use_count) VALUES ($1, $2, $3, $4, $5, $6, 0)`,
 		jc.Code, jc.DeliberationID, jc.Role, jc.ExpiresAt, jc.CreatedAt, jc.MaxUses,
 	)
 	return err
 }
 
-func (s *DB) ClaimJoinCode(code, agentID string) (*deliberation.JoinCode, error) {
+func (s *DB) ClaimJoinCode(ctx context.Context, code, agentID string) (*deliberation.JoinCode, error) {
 	jc := &deliberation.JoinCode{}
 	var expiresAt, createdAt time.Time
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT code, deliberation_id, role, expires_at, COALESCE(used_by, ''), created_at, max_uses, use_count FROM join_codes WHERE code = $1`, code,
 	).Scan(&jc.Code, &jc.DeliberationID, &jc.Role, &expiresAt, &jc.UsedBy, &createdAt, &jc.MaxUses, &jc.UseCount)
 	if err != nil {
@@ -621,7 +656,7 @@ func (s *DB) ClaimJoinCode(code, agentID string) (*deliberation.JoinCode, error)
 		return nil, fmt.Errorf("join code has reached maximum uses (%d)", jc.MaxUses)
 	}
 
-	res, err := s.db.Exec(
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE join_codes SET use_count = use_count + 1, used_by = $1 WHERE code = $2 AND use_count < max_uses`,
 		agentID, code,
 	)
@@ -638,10 +673,10 @@ func (s *DB) ClaimJoinCode(code, agentID string) (*deliberation.JoinCode, error)
 	return jc, nil
 }
 
-func (s *DB) LookupJoinCode(code string) (*deliberation.JoinCode, error) {
+func (s *DB) LookupJoinCode(ctx context.Context, code string) (*deliberation.JoinCode, error) {
 	jc := &deliberation.JoinCode{}
 	var expiresAt, createdAt time.Time
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT code, deliberation_id, role, expires_at, COALESCE(used_by, ''), created_at, max_uses, use_count FROM join_codes WHERE code = $1`, code,
 	).Scan(&jc.Code, &jc.DeliberationID, &jc.Role, &expiresAt, &jc.UsedBy, &createdAt, &jc.MaxUses, &jc.UseCount)
 	if err != nil {
@@ -653,36 +688,36 @@ func (s *DB) LookupJoinCode(code string) (*deliberation.JoinCode, error) {
 	return jc, nil
 }
 
-func (s *DB) AddToACL(deliberationID, keyID string) error {
-	_, err := s.db.Exec(
+func (s *DB) AddToACL(ctx context.Context, deliberationID, keyID string) error {
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO deliberation_acl (deliberation_id, key_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		deliberationID, keyID,
 	)
 	return err
 }
 
-func (s *DB) CheckACL(deliberationID, keyID string) (bool, error) {
+func (s *DB) CheckACL(ctx context.Context, deliberationID, keyID string) (bool, error) {
 	var count int
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM deliberation_acl WHERE deliberation_id = $1 AND key_id = $2`,
 		deliberationID, keyID,
 	).Scan(&count)
 	return count > 0, err
 }
 
-func (s *DB) CreateInvitation(inv *deliberation.Invitation) error {
+func (s *DB) CreateInvitation(ctx context.Context, inv *deliberation.Invitation) error {
 	inv.ID = uuid.New().String()
 	inv.CreatedAt = time.Now().UTC()
 	inv.Status = "pending"
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO invitations (id, deliberation_id, invited_by, invited_agent, role, reason, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		inv.ID, inv.DeliberationID, inv.InvitedBy, inv.InvitedAgent, inv.Role, inv.Reason, inv.Status, inv.CreatedAt,
 	)
 	return err
 }
 
-func (s *DB) GetInvitations(deliberationID string) ([]deliberation.Invitation, error) {
-	rows, err := s.db.Query(
+func (s *DB) GetInvitations(ctx context.Context, deliberationID string) ([]deliberation.Invitation, error) {
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, deliberation_id, invited_by, invited_agent, COALESCE(role, ''), reason, status, created_at FROM invitations WHERE deliberation_id = $1 ORDER BY created_at`,
 		deliberationID,
 	)
@@ -703,23 +738,23 @@ func (s *DB) GetInvitations(deliberationID string) ([]deliberation.Invitation, e
 	return result, rows.Err()
 }
 
-func (s *DB) UpdateInvitationStatus(id, status string) error {
-	_, err := s.db.Exec(`UPDATE invitations SET status = $1 WHERE id = $2`, status, id)
+func (s *DB) UpdateInvitationStatus(ctx context.Context, id, status string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE invitations SET status = $1 WHERE id = $2`, status, id)
 	return err
 }
 
-func (s *DB) CreateDispute(d *deliberation.Dispute) error {
+func (s *DB) CreateDispute(ctx context.Context, d *deliberation.Dispute) error {
 	d.ID = uuid.New().String()
 	d.CreatedAt = time.Now().UTC()
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO disputes (id, deliberation_id, agent_id, crux_claim, correction, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
 		d.ID, d.DeliberationID, d.AgentID, d.CruxClaim, d.Correction, d.CreatedAt,
 	)
 	return err
 }
 
-func (s *DB) GetDisputes(deliberationID string) ([]deliberation.Dispute, error) {
-	rows, err := s.db.Query(
+func (s *DB) GetDisputes(ctx context.Context, deliberationID string) ([]deliberation.Dispute, error) {
+	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, deliberation_id, agent_id, crux_claim, correction, created_at FROM disputes WHERE deliberation_id = $1 ORDER BY created_at`,
 		deliberationID,
 	)
@@ -845,9 +880,9 @@ func (r *rowsWrapper) Scan(dest ...any) error { return r.rows.Scan(dest...) }
 func (r *rowsWrapper) Err() error             { return r.rows.Err() }
 
 // GetStatusChangedAt returns the time of the last status change for a deliberation.
-func (s *DB) GetStatusChangedAt(deliberationID string) (time.Time, error) {
+func (s *DB) GetStatusChangedAt(ctx context.Context, deliberationID string) (time.Time, error) {
 	var ts sql.NullTime
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT status_changed_at FROM deliberations WHERE id = $1`, deliberationID,
 	).Scan(&ts)
 	if err != nil {
@@ -860,8 +895,8 @@ func (s *DB) GetStatusChangedAt(deliberationID string) (time.Time, error) {
 }
 
 // RecordContextAccess tracks that an agent called get_context for a given round.
-func (s *DB) RecordContextAccess(deliberationID, agentID string, round int) error {
-	_, err := s.db.Exec(
+func (s *DB) RecordContextAccess(ctx context.Context, deliberationID, agentID string, round int) error {
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO context_access (deliberation_id, agent_id, round) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
 		deliberationID, agentID, round,
 	)
@@ -869,9 +904,9 @@ func (s *DB) RecordContextAccess(deliberationID, agentID string, round int) erro
 }
 
 // HasContextAccess checks if an agent has called get_context for a given round.
-func (s *DB) HasContextAccess(deliberationID, agentID string, round int) (bool, error) {
+func (s *DB) HasContextAccess(ctx context.Context, deliberationID, agentID string, round int) (bool, error) {
 	var count int
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM context_access WHERE deliberation_id = $1 AND agent_id = $2 AND round = $3`,
 		deliberationID, agentID, round,
 	).Scan(&count)
@@ -908,8 +943,8 @@ func (s *DB) GetAuditLog(deliberationID string, limit int) ([]map[string]string,
 }
 
 // CreateAbuseReport stores an abuse report for manual review.
-func (s *DB) CreateAbuseReport(deliberationID, reporterKey, reason string) error {
-	_, err := s.db.Exec(
+func (s *DB) CreateAbuseReport(ctx context.Context, deliberationID, reporterKey, reason string) error {
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO abuse_reports (id, deliberation_id, reporter_key, reason) VALUES ($1, $2, $3, $4)`,
 		uuid.New().String(), deliberationID, reporterKey, reason,
 	)
@@ -974,8 +1009,8 @@ func (s *DB) PurgeSoftDeleted(maxAge time.Duration) (int, error) {
 }
 
 // CreateShareToken stores a share token for a group.
-func (s *DB) CreateShareToken(token, groupID string, expiresAt time.Time) error {
-	_, err := s.db.Exec(
+func (s *DB) CreateShareToken(ctx context.Context, token, groupID string, expiresAt time.Time) error {
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO share_tokens (token, group_id, expires_at) VALUES ($1, $2, $3)`,
 		token, groupID, expiresAt,
 	)
@@ -983,10 +1018,10 @@ func (s *DB) CreateShareToken(token, groupID string, expiresAt time.Time) error 
 }
 
 // LookupShareToken returns the group ID for a valid (non-expired) share token.
-func (s *DB) LookupShareToken(token string) (string, error) {
+func (s *DB) LookupShareToken(ctx context.Context, token string) (string, error) {
 	var groupID string
 	var expiresAt sql.NullTime
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT group_id, expires_at FROM share_tokens WHERE token = $1`, token,
 	).Scan(&groupID, &expiresAt)
 	if err != nil {
@@ -999,8 +1034,8 @@ func (s *DB) LookupShareToken(token string) (string, error) {
 }
 
 // WithdrawPositions marks all positions by an agent in a deliberation as drafts (invisible).
-func (s *DB) WithdrawPositions(deliberationID, agentID string) error {
-	_, err := s.db.Exec(
+func (s *DB) WithdrawPositions(ctx context.Context, deliberationID, agentID string) error {
+	_, err := s.db.ExecContext(ctx,
 		`UPDATE positions SET draft = 1 WHERE deliberation_id = $1 AND agent_id = $2`,
 		deliberationID, agentID,
 	)
@@ -1008,8 +1043,8 @@ func (s *DB) WithdrawPositions(deliberationID, agentID string) error {
 }
 
 // DeleteVotesByAgent removes all votes by an agent in a deliberation.
-func (s *DB) DeleteVotesByAgent(deliberationID, agentID string) error {
-	_, err := s.db.Exec(
+func (s *DB) DeleteVotesByAgent(ctx context.Context, deliberationID, agentID string) error {
+	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM votes WHERE deliberation_id = $1 AND agent_id = $2`,
 		deliberationID, agentID,
 	)
@@ -1017,8 +1052,8 @@ func (s *DB) DeleteVotesByAgent(deliberationID, agentID string) error {
 }
 
 // DeleteDelegationsByAgent deactivates all delegations from or to an agent in a deliberation.
-func (s *DB) DeleteDelegationsByAgent(deliberationID, agentID string) error {
-	_, err := s.db.Exec(
+func (s *DB) DeleteDelegationsByAgent(ctx context.Context, deliberationID, agentID string) error {
+	_, err := s.db.ExecContext(ctx,
 		`UPDATE delegations SET active = 0 WHERE deliberation_id = $1 AND (from_agent = $2 OR to_agent = $2)`,
 		deliberationID, agentID,
 	)

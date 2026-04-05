@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -49,7 +50,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Verify the position is now published
-	published, err := db.GetPositionByID(pos.ID)
+	published, err := db.GetPositionByID(context.Background(), pos.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +90,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selfSecondCheck, err := db.GetPositionByID(pos2.ID)
+	selfSecondCheck, err := db.GetPositionByID(context.Background(), pos2.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +183,7 @@ func TestRobertsRulesAmendment(t *testing.T) {
 	}
 
 	// Verify amendment is now published
-	publishedAmendment, err := db.GetPositionByID(amendment.ID)
+	publishedAmendment, err := db.GetPositionByID(context.Background(), amendment.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

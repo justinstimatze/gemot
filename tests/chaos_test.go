@@ -32,7 +32,7 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// 3. Simulate crash mid-analysis: directly set status to "analyzing"
-	if err := db.UpdateDeliberationStatus(d.ID, "analyzing"); err != nil {
+	if err := db.UpdateDeliberationStatus(context.Background(), d.ID, "analyzing"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,7 +124,7 @@ func TestDataPersistsAfterReconnect(t *testing.T) {
 	}
 
 	// Verify data is there (Postgres persists by default)
-	got, err := db1.GetDeliberation(delibID)
+	got, err := db1.GetDeliberation(context.Background(), delibID)
 	if err != nil {
 		t.Fatalf("deliberation not found: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestDataPersistsAfterReconnect(t *testing.T) {
 		t.Fatalf("expected status 'open', got %q", got.Status)
 	}
 
-	positions, err := db1.GetPositions(delibID, nil)
+	positions, err := db1.GetPositions(context.Background(), delibID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestDataPersistsAfterReconnect(t *testing.T) {
 		t.Fatalf("expected 2 positions, got %d", len(positions))
 	}
 
-	votes, err := db1.GetVotes(delibID)
+	votes, err := db1.GetVotes(context.Background(), delibID)
 	if err != nil {
 		t.Fatal(err)
 	}

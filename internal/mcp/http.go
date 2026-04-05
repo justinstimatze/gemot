@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"html"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -159,8 +159,8 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 				"use_count":       jc.UseCount,
 				"max_uses":        jc.MaxUses,
 				"join_endpoint":   "https://gemot.dev/mcp",
-				"join_tool":       "join_deliberation",
-				"join_params":     map[string]string{"code": jc.Code, "agent_id": "<your_agent_id>"},
+				"join_tool":       "coordinate",
+				"join_params":     map[string]string{"action": "join", "code": jc.Code, "agent_id": "<your_agent_id>"},
 			})
 			return
 		}
@@ -520,7 +520,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			deliberation.WithRules(map[string]any{"min_participants": 1}), // override assembly quorum for sandbox
 		)
 		if err != nil {
-			log.Printf("[gemot] sandbox creation failed: %v", err)
+			slog.Error("sandbox creation failed", "error", err)
 			http.Error(w, "Failed to create sandbox — please try again", http.StatusInternalServerError)
 			return
 		}
@@ -528,7 +528,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		// Generate multi-use join code (48h TTL, up to 10 agents)
 		jc, err := svc.GenerateJoinCode(d.ID, "participant", 48*time.Hour, 10)
 		if err != nil {
-			log.Printf("[gemot] join code generation failed: %v", err)
+			slog.Error("join code generation failed", "error", err)
 			http.Error(w, "Failed to generate join code — please try again", http.StatusInternalServerError)
 			return
 		}
@@ -691,10 +691,19 @@ Or if your agent supports MCP, add {"mcpServers":{"gemot":{"type":"sse","url":"h
 		w.Write(indexHTML) //nolint:errcheck
 	})
 
+	// Security headers for all responses
+	secureHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		mux.ServeHTTP(w, r)
+	})
+
 	_, _ = fmt.Fprintf(logWriter, "gemot: listening on %s\n", addr)
 	httpServer := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           secureHandler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      300 * time.Second, // generous for SSE streaming

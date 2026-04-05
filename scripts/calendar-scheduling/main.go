@@ -204,7 +204,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 
 	// ── Step 1: Create a negotiation-type deliberation ─────────────────
 	fmt.Fprintf(os.Stderr, "Creating deliberation...\n")
-	createRes := callTool(ctx, session, "create_deliberation", map[string]any{
+	createRes := callTool(ctx, session, "deliberation", map[string]any{
+		"action":      "create",
 		"topic":       fmt.Sprintf("Schedule 1-hour team sync, week of %s", week),
 		"description": fmt.Sprintf("%d team members negotiate a meeting time by sharing availability windows (not calendar details). Each proposes preferred slots with conviction scores and declares hard constraints as reservations.", len(agents)),
 		"type":        "negotiation",
@@ -225,7 +226,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 
 	for _, a := range agents {
 		fmt.Fprintf(os.Stderr, "  %s submitting availability...\n", a.name)
-		res := callTool(ctx, session, "submit_position", map[string]any{
+		res := callTool(ctx, session, "participate", map[string]any{
+			"action":          "submit_position",
 			"deliberation_id": delib.ID,
 			"agent_id":        a.id,
 			"content":         a.position,
@@ -243,7 +245,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 	// ── Interactive mode: generate join code and wait ─────────────────
 	if interactive {
 		fmt.Fprintf(os.Stderr, "\n  Generating join code...\n")
-		joinRes := callTool(ctx, session, "generate_join_code", map[string]any{
+		joinRes := callTool(ctx, session, "coordinate", map[string]any{
+			"action":          "generate_join_code",
 			"deliberation_id": delib.ID,
 			"role":            "participant",
 		})
@@ -344,7 +347,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 
 	fmt.Fprintf(os.Stderr, "  Agents voting (%d votes)...\n", len(voteMatrix))
 	for _, v := range voteMatrix {
-		callTool(ctx, session, "vote", map[string]any{
+		callTool(ctx, session, "participate", map[string]any{
+			"action":          "vote",
 			"deliberation_id": delib.ID,
 			"agent_id":        v.from,
 			"position_id":     posMap[v.toAgent],
@@ -355,6 +359,7 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 	// ── Step 4: Analyze to find the crux ──────────────────────────────
 	fmt.Fprintf(os.Stderr, "  Running analysis (finding scheduling crux)...\n")
 	callTool(ctx, session, "analyze", map[string]any{
+		"action":          "run",
 		"deliberation_id": delib.ID,
 	})
 
@@ -362,7 +367,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 	fmt.Fprintf(os.Stderr, "  Waiting for analysis...\n")
 	for i := 0; i < 120; i++ {
 		time.Sleep(5 * time.Second)
-		statusRes := callTool(ctx, session, "get_deliberation", map[string]any{
+		statusRes := callTool(ctx, session, "deliberation", map[string]any{
+			"action":          "get",
 			"deliberation_id": delib.ID,
 		})
 		var d struct {
@@ -379,7 +385,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 	// ── Step 5: Get each agent's personalized context ─────────────────
 	fmt.Fprintf(os.Stderr, "  Fetching analysis results...\n")
 	for _, a := range agents {
-		res := callTool(ctx, session, "get_context", map[string]any{
+		res := callTool(ctx, session, "participate", map[string]any{
+			"action":          "get_context",
 			"deliberation_id": delib.ID,
 			"agent_id":        a.id,
 		})
@@ -389,7 +396,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 
 	// ── Step 6: Propose compromise ────────────────────────────────────
 	fmt.Fprintf(os.Stderr, "\n  Generating compromise proposal...\n")
-	compromiseRes := callTool(ctx, session, "propose_compromise", map[string]any{
+	compromiseRes := callTool(ctx, session, "analyze", map[string]any{
+		"action":          "propose_compromise",
 		"deliberation_id": delib.ID,
 	})
 	fmt.Fprintf(os.Stderr, "\n── Compromise Proposal ──\n")
@@ -407,7 +415,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 			// First agent commits conditionally on majority
 			conditional = "if at least 3 of 5 agents also commit"
 		}
-		callTool(ctx, session, "commit", map[string]any{
+		callTool(ctx, session, "decide", map[string]any{
+			"action":          "commit",
 			"deliberation_id": delib.ID,
 			"agent_id":        a.id,
 			"statement":       fmt.Sprintf("%s accepts the meeting time proposed by the compromise for week of %s", a.name, week),
@@ -421,7 +430,8 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 	}
 
 	// ── Step 8: Verify commitments ────────────────────────────────────
-	commitmentsRes := callTool(ctx, session, "get_commitments", map[string]any{
+	commitmentsRes := callTool(ctx, session, "decide", map[string]any{
+		"action":          "get_commitments",
 		"deliberation_id": delib.ID,
 	})
 	fmt.Fprintf(os.Stderr, "\n── Final Commitments ──\n")

@@ -13,10 +13,10 @@ $ hermes --query "Evaluate 3 cache approaches, vote to pick the best..."
   ✓ [1/3] Redis write-through
   ✓ [2/3] In-process LRU + TTL
   ✓ [3/3] CDN edge caching (stale-while-revalidate)
-  ┊ ⚡ mcp_gemot_create_deliberation  (template: assembly)
-  ┊ ⚡ mcp_gemot_submit_position  ×3
-  ┊ ⚡ mcp_gemot_vote  ×6  (cross-voting)
-  ┊ ⚡ mcp_gemot_get_deliberation  → status: open, resolution: ✓
+  ┊ ⚡ mcp_gemot_deliberation  action:create (template: assembly)
+  ┊ ⚡ mcp_gemot_participate  action:submit_position ×3
+  ┊ ⚡ mcp_gemot_participate  action:vote ×6  (cross-voting)
+  ┊ ⚡ mcp_gemot_deliberation  action:get → status: open, resolution: ✓
 ```
 
 **Result** — auto-resolved in <1 second after votes:
@@ -39,12 +39,12 @@ When votes are close or you need to understand *why* agents disagree, trigger an
 
 ```
   ┊ 🔀 delegate  3 parallel tasks  31s
-  ┊ ⚡ mcp_gemot_create_deliberation  (template: review)
-  ┊ ⚡ mcp_gemot_submit_position  ×3
-  ┊ ⚡ mcp_gemot_vote  ×6
-  ┊ ⚡ mcp_gemot_analyze
-  ┊ ⚡ mcp_gemot_get_deliberation  [polling ~25 calls, ~2 min]
-  ┊ ⚡ mcp_gemot_get_analysis_result
+  ┊ ⚡ mcp_gemot_deliberation  action:create (template: review)
+  ┊ ⚡ mcp_gemot_participate  action:submit_position ×3
+  ┊ ⚡ mcp_gemot_participate  action:vote ×6
+  ┊ ⚡ mcp_gemot_analyze  action:run
+  ┊ ⚡ mcp_gemot_deliberation  action:get [polling ~25 calls, ~2 min]
+  ┊ ⚡ mcp_gemot_analyze  action:get_result
 ```
 
 **4 cruxes found** (controversy 0.67–1.0):
@@ -68,10 +68,10 @@ mcp_servers:
 ```
 
 **For decisions (use case #1/#2/#3/#5 from the issue):**
-1. `create_deliberation` → `submit_position` per option → `vote` → check `resolution` field
+1. `deliberation` action:create → `participate` action:submit_position per option → `participate` action:vote → check `resolution` field
 
 **For understanding disagreements (use case #4/#6):**
-1. Same as above, plus `analyze` → `get_analysis_result` for cruxes and clusters
+1. Same as above, plus `analyze` action:run → `analyze` action:get_result for cruxes and clusters
 
 Templates control the voting strategy:
 - `assembly` (67%) — supermajority
@@ -100,7 +100,7 @@ This addresses all 6 use cases from the issue:
 | Quality gating on fan-out | Submit options → vote → auto-resolve |
 | Go/no-go decisions | Submit "merge"/"block" → vote → threshold check |
 | Research synthesis | Submit findings → vote on relevance → winner |
-| Conflict resolution | Vote first, then `analyze` for crux detection |
+| Conflict resolution | Vote first, then `analyze` action:run for crux detection |
 | Cascade routing | Submit "use cheap model"/"escalate" → vote |
 | Weighted expertise | `conviction` field (0.0–1.0) on positions |
 

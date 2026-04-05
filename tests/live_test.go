@@ -72,8 +72,9 @@ func TestLiveDeliberation(t *testing.T) {
 
 	// Create a deliberation
 	createResult, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-		Name: "create_deliberation",
+		Name: "deliberation",
 		Arguments: map[string]any{
+			"action":      "create",
 			"topic":       "Live Test: Best Programming Language",
 			"description": "A live test deliberation to verify the production deployment works end-to-end.",
 		},
@@ -104,8 +105,9 @@ func TestLiveDeliberation(t *testing.T) {
 	positionIDs := map[string]string{}
 	for agentID, content := range agents {
 		result, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-			Name: "submit_position",
+			Name: "participate",
 			Arguments: map[string]any{
+				"action":          "submit_position",
 				"deliberation_id": delib.ID,
 				"agent_id":        agentID,
 				"content":         content,
@@ -144,8 +146,9 @@ func TestLiveDeliberation(t *testing.T) {
 
 	for _, v := range votes {
 		result, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-			Name: "vote",
+			Name: "participate",
 			Arguments: map[string]any{
+				"action":          "vote",
 				"deliberation_id": delib.ID,
 				"agent_id":        v.voter,
 				"position_id":     positionIDs[v.target],
@@ -163,8 +166,8 @@ func TestLiveDeliberation(t *testing.T) {
 
 	// Get deliberation status
 	statusResult, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-		Name:      "get_deliberation",
-		Arguments: map[string]any{"deliberation_id": delib.ID},
+		Name:      "deliberation",
+		Arguments: map[string]any{"action": "get", "deliberation_id": delib.ID},
 	})
 	if err != nil {
 		t.Fatalf("get_deliberation: %v", err)
@@ -173,11 +176,11 @@ func TestLiveDeliberation(t *testing.T) {
 
 	// List deliberations
 	listResult, err := session.CallTool(ctx, &sdkmcp.CallToolParams{
-		Name:      "list_deliberations",
-		Arguments: map[string]any{},
+		Name:      "deliberation",
+		Arguments: map[string]any{"action": "list"},
 	})
 	if err != nil {
-		t.Fatalf("list_deliberations: %v", err)
+		t.Fatalf("deliberation list: %v", err)
 	}
 	t.Logf("Deliberations: %s", truncate(listResult.Content[0].(*sdkmcp.TextContent).Text, 200))
 
@@ -242,7 +245,8 @@ func TestDataPersistsAcrossRequests(t *testing.T) {
 	// --- Session 1: create deliberation + submit position ---
 	session1 := newLiveSession(t, liveURL, apiSecret)
 
-	createText := callToolText(t, session1, "create_deliberation", map[string]any{
+	createText := callToolText(t, session1, "deliberation", map[string]any{
+		"action":      "create",
 		"topic":       uniqueTopic,
 		"description": "Testing data persistence across connections.",
 	})
@@ -254,7 +258,8 @@ func TestDataPersistsAcrossRequests(t *testing.T) {
 	}
 	t.Logf("Session 1: created deliberation %s with topic %q", delib.ID, uniqueTopic)
 
-	posText := callToolText(t, session1, "submit_position", map[string]any{
+	posText := callToolText(t, session1, "participate", map[string]any{
+		"action":          "submit_position",
 		"deliberation_id": delib.ID,
 		"agent_id":        "persist-agent",
 		"content":         "This position must survive a reconnect.",
@@ -276,14 +281,15 @@ func TestDataPersistsAcrossRequests(t *testing.T) {
 	defer session2.Close()
 
 	// Verify deliberation exists in list
-	listText := callToolText(t, session2, "list_deliberations", map[string]any{})
+	listText := callToolText(t, session2, "deliberation", map[string]any{"action": "list"})
 	if !strings.Contains(listText, delib.ID) {
-		t.Fatalf("Session 2: deliberation %s not found in list_deliberations output:\n%s", delib.ID, truncate(listText, 500))
+		t.Fatalf("Session 2: deliberation %s not found in deliberation list output:\n%s", delib.ID, truncate(listText, 500))
 	}
-	t.Log("Session 2: deliberation found in list_deliberations")
+	t.Log("Session 2: deliberation found in list")
 
 	// Verify position is retrievable
-	positionsText := callToolText(t, session2, "get_positions", map[string]any{
+	positionsText := callToolText(t, session2, "participate", map[string]any{
+		"action":          "get_positions",
 		"deliberation_id": delib.ID,
 	})
 	if !strings.Contains(positionsText, pos.ID) {
@@ -315,7 +321,8 @@ func TestLiveAnalysis(t *testing.T) {
 	defer session.Close()
 
 	// Create deliberation
-	createText := callToolText(t, session, "create_deliberation", map[string]any{
+	createText := callToolText(t, session, "deliberation", map[string]any{
+		"action":      "create",
 		"topic":       fmt.Sprintf("Tax Policy Debate %d", time.Now().UnixNano()),
 		"description": "Live analysis test: 3 agents debate tax policy.",
 	})
@@ -336,7 +343,8 @@ func TestLiveAnalysis(t *testing.T) {
 
 	positionIDs := map[string]string{}
 	for agentID, content := range agents {
-		posText := callToolText(t, session, "submit_position", map[string]any{
+		posText := callToolText(t, session, "participate", map[string]any{
+			"action":          "submit_position",
 			"deliberation_id": delib.ID,
 			"agent_id":        agentID,
 			"content":         content,
@@ -365,7 +373,8 @@ func TestLiveAnalysis(t *testing.T) {
 		{"taxes-moderate", "taxes-dove", -1},
 	}
 	for _, v := range votes {
-		callToolText(t, session, "vote", map[string]any{
+		callToolText(t, session, "participate", map[string]any{
+			"action":          "vote",
 			"deliberation_id": delib.ID,
 			"agent_id":        v.voter,
 			"position_id":     positionIDs[v.target],
@@ -377,6 +386,7 @@ func TestLiveAnalysis(t *testing.T) {
 	// Call analyze
 	t.Log("Calling analyze (this will invoke the real LLM)...")
 	analyzeText := callToolText(t, session, "analyze", map[string]any{
+		"action":          "run",
 		"deliberation_id": delib.ID,
 	})
 	t.Logf("Analysis result:\n%s", analyzeText)

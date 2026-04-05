@@ -101,30 +101,34 @@ func cmdServe(httpMode bool, addr string) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if n, err := svc.RecoverStuck(); err != nil {
-					fmt.Fprintf(os.Stderr, "gemot: stuck recovery error: %v\n", err)
-				} else if n > 0 {
-					fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck deliberation(s)\n", n)
-				}
-				if n, err := db.RecoverStuckJobs(10 * time.Minute); err != nil {
-					fmt.Fprintf(os.Stderr, "gemot: stuck job recovery error: %v\n", err)
-				} else if n > 0 {
-					fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck job(s)\n", n)
-				}
-				// Clean up expired sandbox deliberations (48h TTL)
-				if n, err := db.DeleteExpiredSandboxDeliberations(48 * time.Hour); err != nil {
-					fmt.Fprintf(os.Stderr, "gemot: sandbox cleanup error: %v\n", err)
-				} else if n > 0 {
-					fmt.Fprintf(os.Stderr, "gemot: cleaned up %d expired sandbox deliberation(s)\n", n)
-				}
-				// Purge soft-deleted deliberations older than 60 days
-				if n, err := db.PurgeSoftDeleted(60 * 24 * time.Hour); err != nil {
-					fmt.Fprintf(os.Stderr, "gemot: purge error: %v\n", err)
-				} else if n > 0 {
-					fmt.Fprintf(os.Stderr, "gemot: purged %d soft-deleted deliberation(s)\n", n)
-				}
-				// Evict stale cost tracker entries (24h)
-				tracker.Cleanup(24 * time.Hour)
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							fmt.Fprintf(os.Stderr, "gemot: PANIC in janitor (recovered): %v\n", r)
+						}
+					}()
+					if n, err := svc.RecoverStuck(); err != nil {
+						fmt.Fprintf(os.Stderr, "gemot: stuck recovery error: %v\n", err)
+					} else if n > 0 {
+						fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck deliberation(s)\n", n)
+					}
+					if n, err := db.RecoverStuckJobs(10 * time.Minute); err != nil {
+						fmt.Fprintf(os.Stderr, "gemot: stuck job recovery error: %v\n", err)
+					} else if n > 0 {
+						fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck job(s)\n", n)
+					}
+					if n, err := db.DeleteExpiredSandboxDeliberations(48 * time.Hour); err != nil {
+						fmt.Fprintf(os.Stderr, "gemot: sandbox cleanup error: %v\n", err)
+					} else if n > 0 {
+						fmt.Fprintf(os.Stderr, "gemot: cleaned up %d expired sandbox deliberation(s)\n", n)
+					}
+					if n, err := db.PurgeSoftDeleted(60 * 24 * time.Hour); err != nil {
+						fmt.Fprintf(os.Stderr, "gemot: purge error: %v\n", err)
+					} else if n > 0 {
+						fmt.Fprintf(os.Stderr, "gemot: purged %d soft-deleted deliberation(s)\n", n)
+					}
+					tracker.Cleanup(24 * time.Hour)
+				}()
 			}
 		}
 	}()

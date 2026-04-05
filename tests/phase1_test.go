@@ -127,8 +127,8 @@ func TestKeyIDDerivation(t *testing.T) {
 	if k1 != k2 {
 		t.Fatal("same key should produce same ID")
 	}
-	if len(k1) != 8 {
-		t.Fatalf("expected 8-char key_id, got %d", len(k1))
+	if len(k1) != 16 {
+		t.Fatalf("expected 16-char key_id, got %d", len(k1))
 	}
 
 	// Different keys produce different IDs
