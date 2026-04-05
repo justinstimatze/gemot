@@ -390,6 +390,9 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if args.DeliberationID == "" || args.AgentID == "" || args.Content == "" {
 			return errResult(fmt.Errorf("deliberation_id, agent_id, and content are required"))
 		}
+		if len(args.Content) > 65536 {
+			return errResult(fmt.Errorf("content exceeds maximum length of 65536 bytes"))
+		}
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
 		if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
 			return errResult(err)
@@ -863,7 +866,9 @@ func coerceVoteValue(v any) (int, error) {
 
 // scopeAgentID prefixes an agent ID with the caller's key namespace.
 // Admin callers (no key_id) pass through unscoped.
+// Colons are stripped from agentID to prevent impersonation of other key namespaces.
 func scopeAgentID(ctx context.Context, agentID string) string {
+	agentID = strings.ReplaceAll(agentID, ":", "_")
 	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
 	if keyID == "" {
 		return agentID // admin or dev mode — no scoping

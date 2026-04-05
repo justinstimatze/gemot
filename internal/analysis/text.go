@@ -309,7 +309,8 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 
 			extracted, err := a.extractClaimsConstrained(ctx, num, deliberationTopic, sanitized.Text, taxonomyText, claimSchema, smallNPreamble)
 			if err != nil {
-				results[idx] = extractionResult{warnings: sanitized.Warnings}
+				slog.Warn("claim extraction failed for position", "agent", num, "error", err)
+				results[idx] = extractionResult{warnings: append(sanitized.Warnings, "claim extraction failed: "+err.Error())}
 				return
 			}
 			var claims []claim

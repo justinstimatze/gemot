@@ -155,8 +155,9 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			}
 		}
 
-		// Helper to scope agent IDs
+		// Helper to scope agent IDs. Colons stripped to prevent namespace impersonation.
 		scope := func(agentID string) string {
+			agentID = strings.ReplaceAll(agentID, ":", "_")
 			if keyID == "" || agentID == "" {
 				return agentID
 			}
@@ -389,6 +390,10 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				content := str(s, "content")
 				if content == "" {
 					writeA2AError(w, req.ID, -32602, "content is required")
+					return
+				}
+				if len(content) > 65536 {
+					writeA2AError(w, req.ID, -32602, "content exceeds maximum length of 65536 bytes")
 					return
 				}
 				var popts []deliberation.PositionOption

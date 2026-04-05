@@ -99,6 +99,25 @@ func (eb *EventBus) ClientCount() int {
 	return len(eb.clients)
 }
 
+// Shutdown sends a shutdown event to all clients and closes their channels.
+// Clients reading from the channel will receive the event then see channel close.
+func (eb *EventBus) Shutdown() {
+	shutdownEvent := Event{
+		Type:      "server_shutdown",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	for ch := range eb.clients {
+		select {
+		case ch <- shutdownEvent:
+		default:
+		}
+		close(ch)
+		delete(eb.clients, ch)
+	}
+}
+
 // MarshalEvent serializes an event to JSON.
 func MarshalEvent(e Event) ([]byte, error) {
 	return json.Marshal(e)
