@@ -258,6 +258,15 @@ func synthesizeBriefing(power string, year int, results []scopeResult, balance p
 				}
 			}
 
+			// 1b. COMMITMENT RECORD (reputation from cross-deliberation history)
+			if v12.reputations != nil {
+				otherLower := strings.ToLower(other)
+				if rep, ok := v12.reputations[otherLower]; ok && rep.Total > 0 {
+					fmt.Fprintf(&b, "  COMMITMENT RECORD: %s honored %d/%d commitments (%.0f%% reliability)\n",
+						other, rep.Fulfilled, rep.Total, rep.Score*100)
+				}
+			}
+
 			// 2. ACTIVE COMMITMENTS (2d)
 			if len(bc.commitments) > 0 {
 				fmt.Fprintf(&b, "  ACTIVE COMMITMENTS:\n")
@@ -886,6 +895,7 @@ func computeSurvivalCount(scCounts map[string]int) int {
 // --- Commitments Integration (2d) ---
 
 type commitment struct {
+	ID          string `json:"commitment_id"`
 	AgentID     string `json:"agent_id"`
 	Statement   string `json:"statement"`
 	Conditional string `json:"conditional"`

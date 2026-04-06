@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"strings"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // --- Trust Tracking (2a) ---
@@ -196,4 +200,120 @@ func checkPromiseFollowThrough(game *GameState, year int, promises map[string]ma
 	}
 
 	return tracker
+}
+
+// reputation holds cross-deliberation trust data for a power.
+type reputation struct {
+	Total     int     `json:"total_commitments"`
+	Fulfilled int     `json:"fulfilled"`
+	Broken    int     `json:"broken"`
+	Pending   int     `json:"pending"`
+	Score     float64 `json:"trust_score"` // fulfilled / (fulfilled + broken)
+}
+
+// auditCommitments cross-references existing commitments with trust data and
+// calls fulfill/break on the gemot server. Returns reputation per power.
+func auditCommitments(ctx context.Context, url, secret string, results []scopeResult, trust *trustTracker) map[string]reputation {
+	reputations := make(map[string]reputation)
+
+	for _, r := range results {
+		if r.scope.scopeTag != "bilateral" || len(r.commitments) == 0 {
+			continue
+		}
+		powers := r.scope.powers
+		if len(powers) != 2 {
+			continue
+		}
+
+		for _, c := range r.commitments {
+			if c.Status != "pending" && c.Status != "active" && c.Status != "" {
+				continue // already resolved
+			}
+			if c.ID == "" {
+				continue // can't fulfill/break without ID
+			}
+
+			// Determine which power made this commitment
+			agentPower := strings.TrimSuffix(c.AgentID, "-agent")
+			agentPower = strings.ToUpper(agentPower)
+
+			// Find the counterpart
+			var counterpart string
+			for _, p := range powers {
+				if strings.ToUpper(p) != agentPower {
+					counterpart = strings.ToUpper(p)
+				}
+			}
+			if counterpart == "" {
+				continue
+			}
+
+			// Check trust record for this power → counterpart
+			rec := trust.get(agentPower, counterpart)
+			if rec.promisedSupports == 0 {
+				continue // no promises to evaluate
+			}
+
+			// Determine outcome: fulfilled if they honored all promises, broken if any broken
+			rs := connectForCall(ctx, url, secret)
+			if rs == nil {
+				continue
+			}
+			if rec.honoredSupports > 0 && len(rec.brokenPromises) == 0 {
+				callToolSoft(ctx, rs, "decide", map[string]any{
+					"action":        "fulfill",
+					"commitment_id": c.ID,
+					"verified_by":   "diplomacy-script",
+				})
+				fmt.Fprintf(os.Stderr, "  commitment %s: FULFILLED (%s honored %d/%d supports to %s)\n",
+					c.ID[:8], agentPower, rec.honoredSupports, rec.promisedSupports, counterpart)
+			} else if len(rec.brokenPromises) > 0 {
+				reason := fmt.Sprintf("broken promises: %s", strings.Join(rec.brokenPromises, "; "))
+				if len(reason) > 500 {
+					reason = reason[:497] + "..."
+				}
+				callToolSoft(ctx, rs, "decide", map[string]any{
+					"action":        "break",
+					"commitment_id": c.ID,
+					"reason":        reason,
+					"verified_by":   "diplomacy-script",
+				})
+				fmt.Fprintf(os.Stderr, "  commitment %s: BROKEN (%s broke %d promise(s) to %s)\n",
+					c.ID[:8], agentPower, len(rec.brokenPromises), counterpart)
+			}
+			rs.Close() //nolint:errcheck
+		}
+	}
+
+	// Fetch reputation for each power
+	for _, power := range []string{"AUSTRIA", "ENGLAND", "FRANCE", "GERMANY", "ITALY", "RUSSIA", "TURKEY"} {
+		rs := connectForCall(ctx, url, secret)
+		if rs == nil {
+			continue
+		}
+		agentID := strings.ToLower(power) + "-agent"
+		repJSON := callToolSoft(ctx, rs, "decide", map[string]any{
+			"action":   "reputation",
+			"agent_id": agentID,
+		})
+		rs.Close() //nolint:errcheck
+		if repJSON != "" {
+			var rep reputation
+			mustParseSoft(repJSON, &rep)
+			if rep.Total > 0 {
+				reputations[strings.ToLower(power)] = rep
+			}
+		}
+	}
+
+	return reputations
+}
+
+// connectForCall creates a short-lived session for a single tool call.
+func connectForCall(ctx context.Context, url, secret string) *sdkmcp.ClientSession {
+	s, err := connect(ctx, url, secret)
+	if err != nil {
+		return nil
+	}
+	return s
 }
