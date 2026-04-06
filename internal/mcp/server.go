@@ -876,19 +876,6 @@ func scopeAgentID(ctx context.Context, agentID string) string {
 	return keyID + ":" + agentID
 }
 
-// unscopeAgentID strips the key namespace prefix, returning the agent's local name.
-func unscopeAgentID(ctx context.Context, scopedID string) string {
-	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
-	if keyID == "" {
-		return scopedID
-	}
-	prefix := keyID + ":"
-	if strings.HasPrefix(scopedID, prefix) {
-		return scopedID[len(prefix):]
-	}
-	return scopedID // different namespace — show full ID
-}
-
 func textResult(text string) *sdkmcp.CallToolResult {
 	return &sdkmcp.CallToolResult{
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},

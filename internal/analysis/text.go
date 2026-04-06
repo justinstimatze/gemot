@@ -21,7 +21,7 @@ import (
 
 // ClaimCache provides optional caching for claim extraction LLM calls.
 type ClaimCache interface {
-	Get(key string) string       // returns "" if not found/expired
+	Get(key string) string // returns "" if not found/expired
 	Put(key, value, model string)
 }
 
@@ -589,7 +589,10 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	effectiveWeights := map[string]float64{}
 	convictionByAgent := map[string]float64{}
 	// Track distinct rounds per agent for conviction time-weight
-	type agentRound struct{ agent string; round int }
+	type agentRound struct {
+		agent string
+		round int
+	}
 	seenRounds := map[agentRound]bool{}
 	roundCount := map[string]int{}
 	for _, p := range positions {
@@ -755,7 +758,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	var compromiseProposal string
 	if !refused && len(cruxes) > 0 && (len(consensus) > 0 || len(bridging) > 0) {
 		tempResult := &deliberation.AnalysisResult{
-			Cruxes:             cruxes,
+			Cruxes:              cruxes,
 			ConsensusStatements: consensus,
 			BridgingStatements:  bridging,
 			Clusters:            clusters,
@@ -766,33 +769,33 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	}
 
 	result := &deliberation.AnalysisResult{
-		Clusters:            clusters,
-		Coalitions:          coalitions,
-		ConstitutionalRules: constitutionalRules,
-		CompromiseProposal:  compromiseProposal,
-		FailureScenarios:    failureScenarios,
-		ZOPA:                zopa,
-		CriteriaResults:     criteriaResults,
-		EmergentNorms:       emergentNorms,
-		RuleViolations:      ruleViolations,
-		Cruxes:              cruxes,
-		ConsensusStatements: consensus,
-		BridgingStatements:  bridging,
-		TopicSummaries:      summaries,
-		AgentCount:          len(agents),
-		PositionCount:       len(positions),
-		VoteCount:           len(votes),
-		Confidence:          confidence,
-		TrustWeights:        trustWeights,
-		CorrelationWeights:  correlationWeights,
-		EffectiveWeights:    effectiveWeights,
+		Clusters:             clusters,
+		Coalitions:           coalitions,
+		ConstitutionalRules:  constitutionalRules,
+		CompromiseProposal:   compromiseProposal,
+		FailureScenarios:     failureScenarios,
+		ZOPA:                 zopa,
+		CriteriaResults:      criteriaResults,
+		EmergentNorms:        emergentNorms,
+		RuleViolations:       ruleViolations,
+		Cruxes:               cruxes,
+		ConsensusStatements:  consensus,
+		BridgingStatements:   bridging,
+		TopicSummaries:       summaries,
+		AgentCount:           len(agents),
+		PositionCount:        len(positions),
+		VoteCount:            len(votes),
+		Confidence:           confidence,
+		TrustWeights:         trustWeights,
+		CorrelationWeights:   correlationWeights,
+		EffectiveWeights:     effectiveWeights,
 		IntegrityWarnings:    warnings,
 		AuditLog:             audit,
 		ParticipationRate:    participationRate(len(agents), len(positions), len(votes)),
 		PerspectiveDiversity: perspectiveDiversity(len(clusters), len(agents)),
-		ParetoEfficient:     paretoEfficient,
-		DominatedProposals:  dominatedProposals,
-		AnalyzedAt:          time.Now().UTC(),
+		ParetoEfficient:      paretoEfficient,
+		DominatedProposals:   dominatedProposals,
+		AnalyzedAt:           time.Now().UTC(),
 	}
 	result.RecommendedAction = recommendAction(result)
 

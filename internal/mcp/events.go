@@ -163,7 +163,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 
 		// Send initial connected event
 		connected, _ := json.Marshal(map[string]string{"type": "connected"})
-		fmt.Fprintf(w, "data: %s\n\n", connected)
+		fmt.Fprintf(w, "data: %s\n\n", connected) //nolint:errcheck
 		flusher.Flush()
 
 		for {
@@ -182,10 +182,10 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 				if err != nil {
 					continue
 				}
-				fmt.Fprintf(w, "data: %s\n\n", data)
+				fmt.Fprintf(w, "data: %s\n\n", data) //nolint:errcheck
 				flusher.Flush()
 			case <-ping.C:
-				fmt.Fprintf(w, "data: {\"type\":\"ping\"}\n\n")
+				fmt.Fprintf(w, "data: {\"type\":\"ping\"}\n\n") //nolint:errcheck
 				flusher.Flush()
 			case <-r.Context().Done():
 				return

@@ -9,8 +9,8 @@ import (
 // ZOPAResult describes the Zone of Possible Agreement.
 type ZOPAResult struct {
 	Feasible       bool     `json:"feasible"`
-	CommonGround   []string `json:"common_ground"`     // positions all agents can accept
-	BlockingAgents []string `json:"blocking_agents"`    // agents whose reservations conflict with all proposals
+	CommonGround   []string `json:"common_ground"`       // positions all agents can accept
+	BlockingAgents []string `json:"blocking_agents"`     // agents whose reservations conflict with all proposals
 	Conflicts      []string `json:"conflicts,omitempty"` // specific reservation-proposal conflicts
 }
 

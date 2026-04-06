@@ -123,7 +123,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 							return
 						}
 						ctx := context.WithValue(r.Context(), ContextKeyAPIKey{}, token)
-							ctx = context.WithValue(ctx, ContextKeyKeyID{}, KeyID(token))
+						ctx = context.WithValue(ctx, ContextKeyKeyID{}, KeyID(token))
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
 					}
@@ -157,7 +157,6 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 			}
 			ctx := context.WithValue(r.Context(), ContextKeySandbox{}, true)
 			next.ServeHTTP(w, r.WithContext(ctx))
-			return
 		})
 	}
 }
@@ -191,39 +190,6 @@ type receipt struct {
 	Method    string `json:"method"`
 	Timestamp string `json:"timestamp"`
 	Reference string `json:"reference"`
-}
-
-func writeChallenge(w http.ResponseWriter, cfg Config) {
-	req := paymentRequest{
-		Amount:             fmt.Sprintf("%d", cfg.PricePerAnalyze),
-		Currency:           cfg.Currency,
-		Decimals:           2,
-		Description:        "Gemot deliberation analysis",
-		PaymentMethodTypes: []string{"card", "link"},
-	}
-	reqJSON, _ := json.Marshal(req)
-	reqB64 := base64.RawURLEncoding.EncodeToString(reqJSON)
-
-	expires := time.Now().Add(5 * time.Minute).Format(time.RFC3339)
-
-	id := generateChallengeID(cfg.HMACSecret, cfg.Realm, "stripe", "charge", reqB64, expires)
-
-	wwwAuth := fmt.Sprintf(
-		`Payment id="%s", realm="%s", method="stripe", intent="charge", request="%s", expires="%s", description="Pay $%.2f for deliberation analysis"`,
-		id, cfg.Realm, reqB64, expires, float64(cfg.PricePerAnalyze)/100,
-	)
-
-	w.Header().Set("WWW-Authenticate", wwwAuth)
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(http.StatusPaymentRequired)
-
-	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-		"type":   "https://paymentauth.org/problems/payment-required",
-		"title":  "Payment Required",
-		"status": 402,
-		"detail": fmt.Sprintf("Payment of $%.2f is required for deliberation analysis. Send an MPP credential or use a Bearer API key.", float64(cfg.PricePerAnalyze)/100),
-	})
 }
 
 func writePaymentError(w http.ResponseWriter, cfg Config, errType, detail string) {

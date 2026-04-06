@@ -255,7 +255,7 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 		}
 		mustParse(joinRes, &jc)
 
-		fmt.Fprintf(os.Stderr, "\n"+strings.Repeat("=", 60)+"\n")
+		fmt.Fprint(os.Stderr, "\n"+strings.Repeat("=", 60)+"\n")
 		fmt.Fprintf(os.Stderr, "  YOU ARE EVE — part-time, Mon-Wed only\n")
 		fmt.Fprintf(os.Stderr, "  4 agents have submitted their availability.\n\n")
 		fmt.Fprintf(os.Stderr, "  Join this deliberation with your MCP client:\n")
@@ -270,7 +270,7 @@ I'm part-time and only work Monday through Wednesday. Strong preference for late
 		fmt.Fprintf(os.Stderr, "    6. get_context to see your personalized analysis\n")
 		fmt.Fprintf(os.Stderr, "    7. propose_compromise for a group-acceptable time\n")
 		fmt.Fprintf(os.Stderr, "    8. commit to the proposed time\n")
-		fmt.Fprintf(os.Stderr, strings.Repeat("=", 60)+"\n")
+		fmt.Fprint(os.Stderr, strings.Repeat("=", 60)+"\n")
 		fmt.Fprintf(os.Stderr, "\n  Deliberation ID: %s\n", delib.ID)
 		fmt.Fprintf(os.Stderr, "  Waiting for you to join and participate...\n")
 		fmt.Fprintf(os.Stderr, "  (Press Ctrl+C when done)\n\n")

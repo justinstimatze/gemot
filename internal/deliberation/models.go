@@ -3,17 +3,17 @@ package deliberation
 import "time"
 
 type Deliberation struct {
-	ID          string    `json:"deliberation_id"`
-	Topic       string    `json:"topic"`
-	Description string    `json:"description"`
-	Round       int       `json:"round_number"`
-	Status      string    `json:"status"`                      // open | analyzing | resolved | closed
-	SubStatus   string    `json:"sub_status,omitempty"`        // taxonomy | extracting | deduplicating | crux_detection | summarizing | complete
-	Type        string    `json:"type,omitempty"`              // reasoning | knowledge | negotiation | policy (affects consensus threshold)
-	Criteria        []Criterion `json:"criteria,omitempty"`           // evaluation dimensions for multi-criteria voting
-	Visibility      string      `json:"visibility,omitempty"`        // open (default) | private | link
-	CreatorKey      string `json:"creator_key,omitempty"`      // key_id of the creator (for access control)
-	MaxParticipants int    `json:"max_participants,omitempty"` // 0 = unlimited
+	ID              string         `json:"deliberation_id"`
+	Topic           string         `json:"topic"`
+	Description     string         `json:"description"`
+	Round           int            `json:"round_number"`
+	Status          string         `json:"status"`                     // open | analyzing | resolved | closed
+	SubStatus       string         `json:"sub_status,omitempty"`       // taxonomy | extracting | deduplicating | crux_detection | summarizing | complete
+	Type            string         `json:"type,omitempty"`             // reasoning | knowledge | negotiation | policy (affects consensus threshold)
+	Criteria        []Criterion    `json:"criteria,omitempty"`         // evaluation dimensions for multi-criteria voting
+	Visibility      string         `json:"visibility,omitempty"`       // open (default) | private | link
+	CreatorKey      string         `json:"creator_key,omitempty"`      // key_id of the creator (for access control)
+	MaxParticipants int            `json:"max_participants,omitempty"` // 0 = unlimited
 	Template        string         `json:"template,omitempty"`         // governance template (assembly, jury, etc.)
 	Rules           map[string]any `json:"rules,omitempty"`            // governance rules (quorum, timelock, etc.)
 	GroupID         string         `json:"group_id,omitempty"`         // links related deliberations (experiment, workflow, session)
@@ -24,42 +24,42 @@ type Deliberation struct {
 
 // Resolution captures the outcome when a deliberation's votes meet its template threshold.
 type Resolution struct {
-	PositionID   string         `json:"position_id"`            // winning position
-	PositionText string         `json:"position_text"`          // content of winning position
-	AgentID      string         `json:"agent_id"`               // who submitted the winning position
-	Strategy     string         `json:"strategy"`               // template name that defined the threshold
-	Threshold    float64        `json:"threshold"`              // threshold that was met
-	Approval     float64        `json:"approval"`               // actual approval ratio
-	VoteBreakdown []VoteTally   `json:"vote_breakdown"`         // per-position tallies
-	ResolvedAt   time.Time      `json:"resolved_at"`
+	PositionID    string      `json:"position_id"`    // winning position
+	PositionText  string      `json:"position_text"`  // content of winning position
+	AgentID       string      `json:"agent_id"`       // who submitted the winning position
+	Strategy      string      `json:"strategy"`       // template name that defined the threshold
+	Threshold     float64     `json:"threshold"`      // threshold that was met
+	Approval      float64     `json:"approval"`       // actual approval ratio
+	VoteBreakdown []VoteTally `json:"vote_breakdown"` // per-position tallies
+	ResolvedAt    time.Time   `json:"resolved_at"`
 }
 
 // VoteTally summarizes votes for a single position.
 type VoteTally struct {
 	PositionID string  `json:"position_id"`
-	AgentID    string  `json:"agent_id"`     // who submitted this position
-	Content    string  `json:"content"`      // position text (truncated)
+	AgentID    string  `json:"agent_id"` // who submitted this position
+	Content    string  `json:"content"`  // position text (truncated)
 	Agree      int     `json:"agree"`
 	Disagree   int     `json:"disagree"`
 	Pass       int     `json:"pass"`
-	Approval   float64 `json:"approval"`     // agree / (agree + disagree), ignoring pass
+	Approval   float64 `json:"approval"` // agree / (agree + disagree), ignoring pass
 }
 
 type Position struct {
-	ID             string    `json:"position_id"`
-	DeliberationID string    `json:"deliberation_id"`
-	AgentID        string    `json:"agent_id"`
-	Content        string  `json:"content"`
-	ModelFamily    string  `json:"model_family,omitempty"`  // optional: "claude", "gpt", "gemini", etc.
-	Group          string  `json:"group,omitempty"`         // optional: sub-group for decentralized deliberation
-	Conviction     float64 `json:"conviction,omitempty"`    // 0.0-1.0, strength of belief (default 0.5)
-	Reservation    string  `json:"reservation,omitempty"`   // what outcome is unacceptable to this agent
-	OnBehalfOf     string  `json:"on_behalf_of,omitempty"`  // principal this agent represents
-	Interests      string  `json:"interests,omitempty"`     // what this agent optimizes for (transparent objectives)
-	Draft            bool    `json:"draft,omitempty"`             // if true, not yet visible to others
-	ParentPositionID string  `json:"parent_position_id,omitempty"` // amendment to this position
-	Round            int     `json:"round_number"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID               string    `json:"position_id"`
+	DeliberationID   string    `json:"deliberation_id"`
+	AgentID          string    `json:"agent_id"`
+	Content          string    `json:"content"`
+	ModelFamily      string    `json:"model_family,omitempty"`       // optional: "claude", "gpt", "gemini", etc.
+	Group            string    `json:"group,omitempty"`              // optional: sub-group for decentralized deliberation
+	Conviction       float64   `json:"conviction,omitempty"`         // 0.0-1.0, strength of belief (default 0.5)
+	Reservation      string    `json:"reservation,omitempty"`        // what outcome is unacceptable to this agent
+	OnBehalfOf       string    `json:"on_behalf_of,omitempty"`       // principal this agent represents
+	Interests        string    `json:"interests,omitempty"`          // what this agent optimizes for (transparent objectives)
+	Draft            bool      `json:"draft,omitempty"`              // if true, not yet visible to others
+	ParentPositionID string    `json:"parent_position_id,omitempty"` // amendment to this position
+	Round            int       `json:"round_number"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // JoinCode is a short-lived code for joining a deliberation without an API key.
@@ -67,9 +67,9 @@ type Position struct {
 type JoinCode struct {
 	Code           string    `json:"code"`
 	DeliberationID string    `json:"deliberation_id"`
-	Role           string    `json:"role,omitempty"`   // suggested role: "contributor", "reviewer", etc.
+	Role           string    `json:"role,omitempty"` // suggested role: "contributor", "reviewer", etc.
 	ExpiresAt      time.Time `json:"expires_at"`
-	Used           bool      `json:"used"`             // true when use_count >= max_uses
+	Used           bool      `json:"used"`              // true when use_count >= max_uses
 	UsedBy         string    `json:"used_by,omitempty"` // last agent_id that claimed it
 	UseCount       int       `json:"use_count"`
 	MaxUses        int       `json:"max_uses"` // how many agents can use this code (1 = single-use)
@@ -90,10 +90,10 @@ type Commitment struct {
 	ID             string     `json:"commitment_id"`
 	DeliberationID string     `json:"deliberation_id"`
 	AgentID        string     `json:"agent_id"`
-	AnalysisRound  int        `json:"analysis_round"`                // which round's results they're committing to
-	Statement      string     `json:"statement"`                     // what specifically they commit to
-	Conditional    string     `json:"conditional,omitempty"`         // "if agents X,Y also commit"
-	Status         string     `json:"status"`                        // pending | active | fulfilled | broken
+	AnalysisRound  int        `json:"analysis_round"`        // which round's results they're committing to
+	Statement      string     `json:"statement"`             // what specifically they commit to
+	Conditional    string     `json:"conditional,omitempty"` // "if agents X,Y also commit"
+	Status         string     `json:"status"`                // pending | active | fulfilled | broken
 	CreatedAt      time.Time  `json:"created_at"`
 	FulfilledAt    *time.Time `json:"fulfilled_at,omitempty"`
 	BrokenAt       *time.Time `json:"broken_at,omitempty"`
@@ -142,7 +142,7 @@ type Vote struct {
 	DeliberationID string    `json:"deliberation_id"`
 	AgentID        string    `json:"agent_id"`
 	PositionID     string    `json:"position_id"`
-	Value          int       `json:"value"`                     // -1, 0, 1
-	CriterionID    string    `json:"criterion_id,omitempty"`    // optional: which criterion this vote is for
+	Value          int       `json:"value"`                  // -1, 0, 1
+	CriterionID    string    `json:"criterion_id,omitempty"` // optional: which criterion this vote is for
 	CreatedAt      time.Time `json:"created_at"`
 }

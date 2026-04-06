@@ -12,7 +12,7 @@ var ErrTooManyClients = errors.New("too many event stream clients")
 
 // Event represents a state change in a deliberation.
 type Event struct {
-	Type           string `json:"type"`            // position_submitted, vote_cast, analysis_started, analysis_progress, analysis_complete, deliberation_created
+	Type           string `json:"type"` // position_submitted, vote_cast, analysis_started, analysis_progress, analysis_complete, deliberation_created
 	DeliberationID string `json:"deliberation_id"`
 	AgentID        string `json:"agent_id,omitempty"`
 	Detail         string `json:"detail,omitempty"` // sub_status for progress, position_id for submissions, etc.
