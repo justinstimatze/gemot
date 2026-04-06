@@ -501,50 +501,79 @@
 <details class="demo-card" id="demo-diplomacy">
 <summary>
   <div>
-    <div class="demo-card-title">Diplomacy &mdash; 7 AI powers, 7 years of negotiation</div>
-    <div class="demo-card-desc">7 Sonnet agents play Diplomacy for 7 years, forming alliances and coordinating support orders. Without gemot, one alliance steamrolls the board. With gemot briefings, power stays balanced. Spread drops from 10 to 5.</div>
+    <div class="demo-card-title">Diplomacy &mdash; 7 AI powers, per-season intelligence briefings</div>
+    <div class="demo-card-desc">7 Sonnet agents play Diplomacy for 7 years. Without gemot: Germany eliminated, Gini 0.34. With per-season briefings: all 7 survive, Gini held at 0.09 for 8 consecutive cycles before late-game breakaway.</div>
   </div>
 </summary>
 <div class="demo-card-body">
 
-<p style="color:#475569; margin-bottom:1.5rem;">Agents are encouraged to form alliances and coordinate military support orders &mdash; just like human Diplomacy players. Each year, gemot analyzes every bilateral negotiation and the global diplomatic table, identifies shared ground and cruxes, and produces cooperation-first briefings with power balance warnings. Same seed, same prompts, same model &mdash; the only difference is whether agents receive gemot briefings.</p>
+<p style="color:#475569; margin-bottom:1.5rem;">Each season, gemot analyzes every bilateral negotiation and the global diplomatic table, detecting cruxes, shared ground, and deception. Briefings surface intelligence that was already in the negotiations but hard to see. Three conditions compared: no analysis, per-year analysis, and per-season analysis.</p>
 
-<h3>Without gemot</h3>
-<div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin:0.75rem 0 1.5rem; font-size:0.8rem; text-align:center;">
-  <div><div style="background:#e11d48;color:#fff;border-radius:6px;padding:0.3rem;">FRA</div><div style="font-weight:700;">10</div></div>
-  <div><div style="background:#e11d48;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div style="font-weight:700;">10</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">ENG</div><div>6</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">RUS</div><div>4</div></div>
-  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">AUS</div><div>2</div></div>
-  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">TUR</div><div>2</div></div>
+<h3>Control (no gemot)</h3>
+<div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin:0.75rem 0 0.5rem; font-size:0.8rem; text-align:center;">
+  <div><div style="background:#e11d48;color:#fff;border-radius:6px;padding:0.3rem;">ENG</div><div style="font-weight:700;">9</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">TUR</div><div>8</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">FRA</div><div>7</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">AUS</div><div>4</div></div>
+  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div>3</div></div>
+  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div>3</div></div>
   <div><div style="background:#1e293b;color:#fff;border-radius:6px;padding:0.3rem;">GER</div><div style="font-weight:700;">0</div></div>
 </div>
-<p style="color:#94a3b8; font-size:0.8rem;">Spread: 10 &middot; France-Italy alliance dominates, Germany eliminated</p>
+<p style="color:#94a3b8; font-size:0.8rem;">Gini: 0.34 &middot; Spread: 9 &middot; Germany eliminated Y6</p>
 
-<h3>With gemot briefings</h3>
-<div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin:0.75rem 0 1.5rem; font-size:0.8rem; text-align:center;">
-  <div><div style="background:#4f46e5;color:#fff;border-radius:6px;padding:0.3rem;">ENG</div><div style="font-weight:700;">7</div></div>
-  <div><div style="background:#4f46e5;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div style="font-weight:700;">7</div></div>
+<h3>Per-season gemot briefings</h3>
+<div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin:0.75rem 0 0.5rem; font-size:0.8rem; text-align:center;">
+  <div><div style="background:#4f46e5;color:#fff;border-radius:6px;padding:0.3rem;">ENG</div><div style="font-weight:700;">9</div></div>
   <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">FRA</div><div>6</div></div>
-  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div>6</div></div>
+  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div>6</div></div>
+  <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div>4</div></div>
   <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">TUR</div><div>4</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">AUS</div><div>2</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">AUS</div><div>3</div></div>
   <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">GER</div><div>2</div></div>
 </div>
-<p style="color:#94a3b8; font-size:0.8rem;">Spread: 5 &middot; No dominant alliance, everyone survives</p>
+<p style="color:#94a3b8; font-size:0.8rem;">Gini: 0.24 &middot; Spread: 7 &middot; All 7 survive &middot; Gini held at 0.09 through Y5</p>
 
 <h3>How it works</h3>
-<p style="color:#475569; font-size:0.88rem; line-height:1.6;">Each year, gemot processes ~150 diplomatic messages across 22 deliberation scopes (21 bilateral + 1 global assembly). For each scope, it:</p>
+<p style="color:#475569; font-size:0.88rem; line-height:1.6;">Each season, gemot processes ~70 messages across 21+ deliberation scopes. For each scope, it:</p>
 <ol style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
   <li>Extracts claims and detects cruxes from negotiations</li>
-  <li>Identifies shared ground and potential compromises (LLM agreement detection)</li>
-  <li>Produces a cooperation-first briefing leading with agreements, not threats</li>
-  <li>Flags power balance shifts and runaway leaders</li>
+  <li>Checks cross-bilateral consistency (catches agents saying contradictory things to different powers)</li>
+  <li>Scores proposal asymmetry (bait detection) and tracks trust via promise follow-through</li>
+  <li>Produces briefings leading with shared ground, flagging power balance shifts and stab risks</li>
 </ol>
 
-<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">The briefings don't tell agents what to do &mdash; they surface information that was already in the negotiations but hard to see. When agents understand their counterparts' actual positions, they make decisions that balance the board rather than letting one alliance run away with it.</p>
+<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">Incremental analysis skips re-processing prior seasons' messages &mdash; only new positions trigger LLM extraction, with prior claims carried forward. A 5-expert adversarial panel identified N=1 as the main limitation; replicated runs planned.</p>
 
-<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">7-year experiment &middot; Claude Sonnet 4.6 agents &middot; same seed, same prompts</p>
+<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">14-cycle per-season experiment &middot; Claude Sonnet 4.6 &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/diplomacy/">source</a></p>
+
+</div>
+</details>
+
+<details class="demo-card" id="demo-panel">
+<summary>
+  <div>
+    <div class="demo-card-title">Adversarial Expert Panel &mdash; pressure-test any document</div>
+    <div class="demo-card-desc">5 expert agents (methodologist, domain expert, statistician, systems engineer, devil's advocate) critique a research writeup. Gemot finds the 8 cruxes where experts actually disagree &mdash; not just a list of concerns.</div>
+  </div>
+</summary>
+<div class="demo-card-body">
+
+<p style="color:#475569; margin-bottom:1rem;">Feed any document &mdash; a research plan, product spec, grant proposal, experiment results &mdash; to an adversarial panel. Each expert critiques from their perspective. Gemot's crux detection surfaces where the experts genuinely disagree, not just where they have different concerns.</p>
+
+<h3>What you get</h3>
+<ul style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
+  <li><strong>Topic summaries:</strong> What each area of critique covers (statistical validity, causal isolation, structural biases...)</li>
+  <li><strong>Cruxes:</strong> The specific claims experts split on, with sides labeled. "Is the confounded design fatal or just a limitation?" &mdash; methodologist says fatal, statistician says limitation.</li>
+  <li><strong>Follow-up plan:</strong> Ranked next steps that address the strongest objections first.</li>
+</ul>
+
+<h3>One command</h3>
+<pre><code>go run scripts/expert-panel/ --document my-plan.md</code></pre>
+<p style="color:#64748b; font-size:0.85rem; margin-top:0.5rem;">Custom experts via <code>--experts panel.json</code>. Default panel: methodologist, domain expert, statistician, systems critic, devil's advocate.</p>
+
+<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">Unlike asking a single model to critique your work (which produces a flat list of concerns), the panel structure forces genuine adversarial tension. The crux detection algorithm finds where the <em>experts disagree with each other</em> about the severity or interpretation of issues &mdash; that's where your real decision points are.</p>
+
+<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">Assembly template &middot; 5 agents &middot; ~5 min analysis &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/expert-panel/">source</a></p>
 
 </div>
 </details>
