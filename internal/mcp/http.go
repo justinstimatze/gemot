@@ -421,17 +421,18 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
+		// Extract token for access control (used later even without auth)
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
-		if !strings.HasPrefix(auth, "Bearer ") || (apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1) {
-			// Also allow customer API keys
-			if creditStore != nil {
-				if valid, _ := creditStore.ValidateKey(token); !valid {
-					http.Error(w, `{"error":"provide API key as Bearer token"}`, http.StatusUnauthorized)
-					return
-				}
-			} else {
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		// Auth check: skip in dev mode (no apiSecret), require valid token otherwise
+		if apiSecret != "" {
+			validAdmin := strings.HasPrefix(auth, "Bearer ") && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
+			validKey := false
+			if !validAdmin && creditStore != nil && strings.HasPrefix(auth, "Bearer ") {
+				validKey, _ = creditStore.ValidateKey(token)
+			}
+			if !validAdmin && !validKey {
+				http.Error(w, `{"error":"provide API key as Bearer token"}`, http.StatusUnauthorized)
 				return
 			}
 		}
