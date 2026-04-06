@@ -1166,7 +1166,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 			skipped := 0
 			for i, pp := range interleaved {
 				if i > 0 {
-					time.Sleep(200 * time.Millisecond)
+					time.Sleep(50 * time.Millisecond)
 				}
 				// Skip if this exact content was already submitted to this deliberation
 				if hashes, ok := existingContent[pp.deliberationID]; ok {
@@ -2576,32 +2576,119 @@ Declare coalitions as JSON:
 	return parsed.Coalitions, nil
 }
 
-// declareAllCoalitions runs coalition declarations for all powers in parallel.
+// declareAllCoalitions runs coalition declarations for all powers in a single batched LLM call.
 func declareAllCoalitions(ctx context.Context, apiKey string, year int, results []scopeResult, balance powerBalance) map[string][]coalitionDecl {
-	declarations := make(map[string][]coalitionDecl)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
+	// Build intelligence summary for all powers in one prompt
+	var allIntel strings.Builder
 	for _, power := range powers {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-			decls, err := declareCoalitionsForPower(ctx, apiKey, p, year, results, balance)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  [coalition] %s: declaration failed: %v\n", p, err)
-				return
-			}
-			mu.Lock()
-			declarations[p] = decls
-			mu.Unlock()
-			fmt.Fprintf(os.Stderr, "  [coalition] %s: declared %d coalition(s)\n", p, len(decls))
-			for _, d := range decls {
-				fmt.Fprintf(os.Stderr, "    %s — %s\n", strings.Join(d.Members, "+"), d.Purpose)
-			}
-		}(power)
+		intel := buildPowerIntel(power, results, balance)
+		if intel == "" {
+			continue
+		}
+		fmt.Fprintf(&allIntel, "\n======== %s's INTELLIGENCE ========\n%s\n", power, intel)
 	}
-	wg.Wait()
-	return declarations
+
+	system := `You are a strategic advisor analyzing ALL powers in a Diplomacy game simultaneously. For each power, based on their diplomatic intelligence, declare coalitions they should pursue.
+
+A coalition is a group of 2+ powers with a shared strategic purpose. Coalitions can overlap.
+
+Rules:
+- Only declare coalitions where genuine mutual interest exists
+- Be specific about the purpose
+- Include the declaring power in every coalition's member list
+
+Respond with ONLY valid JSON, no other text:`
+
+	prompt := fmt.Sprintf(`Year: %d
+
+%s
+
+For EACH power, declare their coalitions as JSON:
+{"declarations": {"AUSTRIA": [{"members": ["AUSTRIA", "RUSSIA"], "purpose": "..."}], "ENGLAND": [...], ...}}`, 1900+year, allIntel.String())
+
+	resp, err := llmCall(ctx, apiKey, system, prompt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  [coalition] batched declaration failed: %v\n", err)
+		return map[string][]coalitionDecl{}
+	}
+
+	var parsed struct {
+		Declarations map[string][]coalitionDecl `json:"declarations"`
+	}
+	if err := json.Unmarshal([]byte(extractJSON(resp)), &parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "  [coalition] parsing batched declarations: %v\n", err)
+		return map[string][]coalitionDecl{}
+	}
+
+	// Normalize
+	for power, decls := range parsed.Declarations {
+		for i := range decls {
+			for j := range decls[i].Members {
+				decls[i].Members[j] = strings.ToUpper(decls[i].Members[j])
+			}
+			sort.Strings(decls[i].Members)
+		}
+		fmt.Fprintf(os.Stderr, "  [coalition] %s: declared %d coalition(s)\n", power, len(decls))
+		for _, d := range decls {
+			fmt.Fprintf(os.Stderr, "    %s — %s\n", strings.Join(d.Members, "+"), d.Purpose)
+		}
+		parsed.Declarations[strings.ToUpper(power)] = decls
+	}
+
+	return parsed.Declarations
+}
+
+// buildPowerIntel assembles diplomatic intelligence for a single power from scope results.
+func buildPowerIntel(power string, results []scopeResult, balance powerBalance) string {
+	powerLower := strings.ToLower(power)
+	var intel strings.Builder
+
+	for _, r := range results {
+		if r.scope.scopeTag != "bilateral" {
+			continue
+		}
+		ctxJSON, ok := r.contexts[powerLower]
+		if !ok {
+			continue
+		}
+		var ac agentContext
+		mustParseSoft(ctxJSON, &ac)
+
+		other := ""
+		for _, p := range r.scope.powers {
+			if strings.ToLower(p) != powerLower {
+				other = p
+			}
+		}
+
+		fmt.Fprintf(&intel, "\n--- With %s ---\n", other)
+		if len(ac.BridgingStatements) > 0 {
+			for _, bs := range ac.BridgingStatements {
+				fmt.Fprintf(&intel, "  Shared: %s (%.0f%%)\n", truncateRunes(bs.Content, 150), bs.BridgingScore*100)
+			}
+		}
+		if ac.CompromiseProposal != "" {
+			fmt.Fprintf(&intel, "  Compromise: %s\n", truncateRunes(ac.CompromiseProposal, 200))
+		}
+		if len(ac.RelevantCruxes) > 0 {
+			fmt.Fprintf(&intel, "  Issues: %d unresolved\n", len(ac.RelevantCruxes))
+		}
+	}
+
+	if intel.Len() == 0 {
+		return ""
+	}
+
+	// Add balance context
+	fmt.Fprintf(&intel, "\nSC counts: ")
+	for _, p := range powers {
+		marker := ""
+		if strings.EqualFold(p, power) {
+			marker = "*"
+		}
+		fmt.Fprintf(&intel, "%s:%d%s ", p[:3], balance.current[p], marker)
+	}
+	return intel.String()
 }
 
 // matchCoalitions finds coalitions where ALL members mutually declared each other.
@@ -2715,93 +2802,84 @@ type inconsistency struct {
 	Explanation string `json:"explanation"`
 }
 
-// detectInconsistencies compares each power's statements across bilaterals.
+// detectInconsistencies compares all powers' statements across bilaterals in a single batched LLM call.
 func detectInconsistencies(ctx context.Context, apiKey string, messages []Message, year int) map[string][]inconsistency {
-	result := make(map[string][]inconsistency)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
+	// Build all powers' cross-bilateral messages in one prompt
+	var allMsgDumps strings.Builder
+	powersWithData := 0
 
 	for _, power := range powers {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-			// Gather messages this power sent, grouped by recipient
-			byRecipient := make(map[string][]string)
-			for _, msg := range messages {
-				if !strings.EqualFold(msg.Sender, p) {
-					continue
-				}
-				if strings.EqualFold(msg.Recipient, "GLOBAL") {
-					continue
-				}
-				recipient := strings.ToUpper(msg.Recipient)
-				byRecipient[recipient] = append(byRecipient[recipient],
-					fmt.Sprintf("[to %s, %s] %s", recipient, msg.Phase, msg.Content))
+		byRecipient := make(map[string][]string)
+		for _, msg := range messages {
+			if !strings.EqualFold(msg.Sender, power) {
+				continue
 			}
-
-			if len(byRecipient) < 2 {
-				return // need at least 2 bilateral conversations to find contradictions
+			if strings.EqualFold(msg.Recipient, "GLOBAL") {
+				continue
 			}
-
-			var msgDump strings.Builder
-			for recipient, msgs := range byRecipient {
-				fmt.Fprintf(&msgDump, "\n=== Messages to %s ===\n", recipient)
-				for _, m := range msgs {
-					fmt.Fprintf(&msgDump, "%s\n", m)
-				}
+			recipient := strings.ToUpper(msg.Recipient)
+			byRecipient[recipient] = append(byRecipient[recipient],
+				fmt.Sprintf("[to %s, %s] %s", recipient, msg.Phase, truncateRunes(msg.Content, 500)))
+		}
+		if len(byRecipient) < 2 {
+			continue
+		}
+		powersWithData++
+		fmt.Fprintf(&allMsgDumps, "\n======== %s's MESSAGES ========\n", power)
+		for recipient, msgs := range byRecipient {
+			fmt.Fprintf(&allMsgDumps, "--- To %s ---\n", recipient)
+			for _, m := range msgs {
+				fmt.Fprintf(&allMsgDumps, "%s\n", m)
 			}
+		}
+	}
 
-			system := `You are analyzing a Diplomacy player's messages for contradictions. Compare what this power said to different powers. Look for:
-- Contradictory promises (promised the same territory to two different powers)
+	if powersWithData == 0 {
+		return map[string][]inconsistency{}
+	}
+
+	system := `You are analyzing ALL Diplomacy players' messages for contradictions. For each power, compare what they said to different recipients. Look for:
+- Contradictory promises (same territory promised to two powers)
 - Conflicting strategic commitments (told A they'd attack B, told B they'd attack A)
-- Inconsistent threat assessments (told A that C is dangerous, told C that A is dangerous)
-- Playing both sides of a dispute
+- Inconsistent threat assessments
+- Playing both sides
 
-Only report genuine contradictions, not normal diplomatic ambiguity. False positives waste the analyst's time.
+Only report genuine contradictions. Respond with ONLY valid JSON.`
 
-Respond with ONLY valid JSON, no other text.`
+	prompt := fmt.Sprintf(`Year: %d
 
-			prompt := fmt.Sprintf(`Power: %s
-Year: %d
-
-Messages sent by %s to different powers:
 %s
 
-Find contradictions. Respond as JSON:
-{"inconsistencies": [{"said_to": "POWER_A", "said_about": "topic or POWER_B", "statement_to_one": "what they said to A", "statement_to_other": "contradicting statement to another power", "explanation": "why this is contradictory"}]}
+For each power with contradictions, list them. Respond as JSON:
+{"all_inconsistencies": {"AUSTRIA": [{"said_to": "POWER_A", "said_about": "topic", "statement_to_one": "...", "statement_to_other": "...", "explanation": "..."}], "ENGLAND": [], ...}}
 
-If no contradictions found, respond: {"inconsistencies": []}`, p, 1900+year, p, msgDump.String())
+Omit powers with no contradictions.`, 1900+year, allMsgDumps.String())
 
-			resp, err := llmCall(ctx, apiKey, system, prompt)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  [consistency] %s: failed: %v\n", p, err)
-				return
-			}
-
-			var parsed struct {
-				Inconsistencies []inconsistency `json:"inconsistencies"`
-			}
-			if err := json.Unmarshal([]byte(extractJSON(resp)), &parsed); err != nil {
-				fmt.Fprintf(os.Stderr, "  [consistency] %s: parse error: %v\n", p, err)
-				return
-			}
-
-			// Tag with power name
-			for i := range parsed.Inconsistencies {
-				parsed.Inconsistencies[i].Power = p
-			}
-
-			if len(parsed.Inconsistencies) > 0 {
-				mu.Lock()
-				result[p] = parsed.Inconsistencies
-				mu.Unlock()
-				fmt.Fprintf(os.Stderr, "  [consistency] %s: %d contradiction(s) detected\n", p, len(parsed.Inconsistencies))
-			} else {
-				fmt.Fprintf(os.Stderr, "  [consistency] %s: no contradictions\n", p)
-			}
-		}(power)
+	resp, err := llmCall(ctx, apiKey, system, prompt)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  [consistency] batched detection failed: %v\n", err)
+		return map[string][]inconsistency{}
 	}
-	wg.Wait()
+
+	var parsed struct {
+		AllInconsistencies map[string][]inconsistency `json:"all_inconsistencies"`
+	}
+	if err := json.Unmarshal([]byte(extractJSON(resp)), &parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "  [consistency] parse error: %v\n", err)
+		return map[string][]inconsistency{}
+	}
+
+	result := make(map[string][]inconsistency)
+	for power, incs := range parsed.AllInconsistencies {
+		power = strings.ToUpper(power)
+		for i := range incs {
+			incs[i].Power = power
+		}
+		if len(incs) > 0 {
+			result[power] = incs
+			fmt.Fprintf(os.Stderr, "  [consistency] %s: %d contradiction(s) detected\n", power, len(incs))
+		}
+	}
 	return result
 }
 
