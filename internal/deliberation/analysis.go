@@ -102,6 +102,18 @@ type AuditEntry struct {
 	Count  int    `json:"count,omitempty"`
 }
 
+// ExtractedClaim is a serializable claim from the extraction pipeline.
+// Stored in AnalysisResult so subsequent rounds can skip re-extracting
+// claims from positions that were already processed (incremental analysis).
+type ExtractedClaim struct {
+	AgentID      string `json:"agent_id"`
+	PositionID   string `json:"position_id"`
+	Claim        string `json:"claim"`
+	Quote        string `json:"quote"`
+	TopicName    string `json:"topic_name"`
+	SubtopicName string `json:"subtopic_name"`
+}
+
 type AnalysisResult struct {
 	DeliberationID      string               `json:"deliberation_id"`
 	Round               int                  `json:"round_number"`
@@ -136,4 +148,6 @@ type AnalysisResult struct {
 	// Freshness + decision guidance
 	AnalyzedAt        time.Time `json:"analyzed_at,omitempty"`        // when this analysis was produced
 	RecommendedAction string    `json:"recommended_action,omitempty"` // machine-readable next step for agents
+	// Incremental analysis: claims extracted this round, persisted so next round skips them
+	ExtractedClaims []ExtractedClaim `json:"extracted_claims,omitempty"`
 }
