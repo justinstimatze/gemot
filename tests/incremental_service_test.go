@@ -2,11 +2,13 @@ package tests
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
+	"github.com/justinstimatze/gemot/internal/mcp"
 )
 
 // capturingAnalyzer records the context and positions passed to Analyze,
@@ -550,5 +552,166 @@ func TestSetTemplateReplacesRules(t *testing.T) {
 	// since assembly doesn't define them
 	if _, hasCooling := d2.Rules["cooling_period_minutes"]; hasCooling {
 		t.Fatal("cooling_period_minutes from jury should be removed when switching to assembly")
+	}
+}
+
+func TestExpertPanelCore(t *testing.T) {
+	db := tempDB(t)
+	analyzer := &capturingAnalyzer{}
+	svc := deliberation.NewService(db, analyzer)
+
+	ctx := context.Background()
+
+	// Run expert panel with default experts
+	result, err := mcp.CoreRunExpertPanel(ctx, svc, "This is a test document with some claims about AI safety.", "Test panel", "", "test-group", "", "", "")
+	if err != nil {
+		t.Fatalf("expert panel failed: %v", err)
+	}
+
+	// Verify result structure
+	if result.DeliberationID == "" {
+		t.Error("expected deliberation_id")
+	}
+	if result.Topic != "Test panel" {
+		t.Errorf("expected topic 'Test panel', got %q", result.Topic)
+	}
+	if result.ExpertCount != 5 {
+		t.Errorf("expected 5 default experts, got %d", result.ExpertCount)
+	}
+	if result.Result == nil {
+		t.Fatal("expected analysis result")
+	}
+
+	// Verify the analyzer received all 5 positions
+	call := analyzer.lastCall()
+	if len(call.Positions) != 5 {
+		t.Errorf("expected 5 positions from 5 experts, got %d", len(call.Positions))
+	}
+	if len(call.Agents) != 5 {
+		t.Errorf("expected 5 agents, got %d", len(call.Agents))
+	}
+
+	// Verify each expert's position contains the document
+	for _, p := range call.Positions {
+		if !strings.Contains(p.Content, "test document with some claims") {
+			t.Errorf("position from %s doesn't contain document text", p.AgentID)
+		}
+	}
+
+	// Verify the deliberation was created with assembly template
+	d, err := svc.GetDeliberation(result.DeliberationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Template != "assembly" {
+		t.Errorf("expected assembly template, got %q", d.Template)
+	}
+	if d.GroupID != "test-group" {
+		t.Errorf("expected group_id 'test-group', got %q", d.GroupID)
+	}
+	if d.Type != "reasoning" {
+		t.Errorf("expected type 'reasoning', got %q", d.Type)
+	}
+}
+
+func TestExpertPanelCustomExperts(t *testing.T) {
+	db := tempDB(t)
+	analyzer := &capturingAnalyzer{}
+	svc := deliberation.NewService(db, analyzer)
+
+	ctx := context.Background()
+	customExperts := `[{"id":"economist","role":"Behavioral economist","interests":"incentive design","reservation":"ignoring second-order effects"},{"id":"ethicist","role":"Applied ethicist","interests":"fairness and equity","reservation":"utilitarian shortcuts"}]`
+
+	result, err := mcp.CoreRunExpertPanel(ctx, svc, "Test document content.", "Custom panel", customExperts, "", "", "", "")
+	if err != nil {
+		t.Fatalf("expert panel failed: %v", err)
+	}
+	if result.ExpertCount != 2 {
+		t.Errorf("expected 2 custom experts, got %d", result.ExpertCount)
+	}
+
+	call := analyzer.lastCall()
+	agentIDs := map[string]bool{}
+	for _, p := range call.Positions {
+		agentIDs[p.AgentID] = true
+	}
+	if !agentIDs["economist"] || !agentIDs["ethicist"] {
+		t.Errorf("expected economist and ethicist agents, got %v", agentIDs)
+	}
+}
+
+func TestExpertPanelSourceType(t *testing.T) {
+	db := tempDB(t)
+	analyzer := &capturingAnalyzer{}
+	svc := deliberation.NewService(db, analyzer)
+	ctx := context.Background()
+
+	// code_review source_type should use code review experts
+	result, err := mcp.CoreRunExpertPanel(ctx, svc, "func main() { fmt.Println(\"hello\") }", "Review main.go", "", "", "", "", "code_review")
+	if err != nil {
+		t.Fatalf("expert panel failed: %v", err)
+	}
+	if result.ExpertCount != 5 {
+		t.Errorf("expected 5 code review experts, got %d", result.ExpertCount)
+	}
+
+	// Verify code review experts (not research defaults)
+	call := analyzer.lastCall()
+	agentIDs := map[string]bool{}
+	for _, p := range call.Positions {
+		agentIDs[p.AgentID] = true
+	}
+	if !agentIDs["security-reviewer"] {
+		t.Error("code_review should include security-reviewer expert")
+	}
+	if agentIDs["methodologist"] {
+		t.Error("code_review should NOT include methodologist (that's the research panel)")
+	}
+
+	// Verify code review prompt framing
+	for _, p := range call.Positions {
+		if strings.Contains(p.Content, "FATAL FLAWS") {
+			t.Errorf("code_review should use code review prompt, not research prompt (found FATAL FLAWS in %s)", p.AgentID)
+		}
+		if !strings.Contains(p.Content, "BLOCKING") {
+			t.Errorf("code_review prompt should use BLOCKING category for %s", p.AgentID)
+		}
+	}
+
+	// Invalid source_type
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "", "", "", "", "invalid_type")
+	if err == nil {
+		t.Error("expected error for invalid source_type")
+	}
+}
+
+func TestExpertPanelValidation(t *testing.T) {
+	db := tempDB(t)
+	analyzer := &capturingAnalyzer{}
+	svc := deliberation.NewService(db, analyzer)
+	ctx := context.Background()
+
+	// Empty document
+	_, err := mcp.CoreRunExpertPanel(ctx, svc, "", "Test", "", "", "", "", "")
+	if err == nil {
+		t.Error("expected error for empty document")
+	}
+
+	// Document too large
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, strings.Repeat("x", 50001), "Test", "", "", "", "", "")
+	if err == nil {
+		t.Error("expected error for document > 50000 chars")
+	}
+
+	// Invalid experts JSON
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "not json", "", "", "", "")
+	if err == nil {
+		t.Error("expected error for invalid experts JSON")
+	}
+
+	// Empty experts array
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "[]", "", "", "", "")
+	if err == nil {
+		t.Error("expected error for empty experts array")
 	}
 }

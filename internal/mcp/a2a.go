@@ -142,7 +142,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			writeOps := map[string]map[string]bool{
 				"gemot/deliberation": {"create": true, "delete": true, "set_template": true},
 				"gemot/participate":  {"submit_position": true, "vote": true, "withdraw": true},
-				"gemot/analyze":      {"run": true, "propose_compromise": true, "dispute_crux": true, "challenge": true},
+				"gemot/analyze":      {"run": true, "propose_compromise": true, "dispute_crux": true, "challenge": true, "expert_panel": true},
 				"gemot/decide":       {"commit": true},
 				"gemot/coordinate":   {"delegate": true, "invite": true, "generate_join_code": true, "join": true},
 				"gemot/admin":        {"report_abuse": true},
@@ -614,6 +614,23 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					return
 				}
 				writeA2AResult(w, req.ID, d)
+
+			case "expert_panel":
+				model := str(s, "model")
+				creditCost, err := deductCredits(model)
+				if err != nil {
+					writeA2AError(w, req.ID, -32000, err.Error())
+					return
+				}
+				result, err := CoreRunExpertPanel(r.Context(), svc, str(s, "document"), str(s, "topic"), str(s, "experts"), str(s, "group_id"), model, keyID, str(s, "source_type"))
+				if err != nil {
+					if creditCost > 0 && creditStore != nil {
+						_, _ = creditStore.AddCredits(keyID, creditCost)
+					}
+					writeA2AError(w, req.ID, -32000, err.Error())
+					return
+				}
+				writeA2AResult(w, req.ID, result)
 
 			default:
 				writeA2AError(w, req.ID, -32602, fmt.Sprintf("unknown action %q for gemot/analyze", action))
