@@ -16,6 +16,7 @@
 | v10 | 5 | 6 | Alliance-aware prompts — control improves dramatically, gemot eliminates Turkey |
 | v13 | 9 | 7 | First clean Sonnet 4.6 paired comparison; 7/7 vs 6/7 survival |
 | v14 | (v13 control) | 7 | Per-season analysis; Gini plateau at 0.09 for 8 cycles |
+| v15 | 10 | TBD | Seed 2027, commitment accountability, 2×2 factorial |
 
 "Spread" = max SCs - min SCs across all 7 powers. Lower is more balanced.
 
@@ -202,6 +203,22 @@ Comparing A vs B isolates incremental analysis. Comparing A vs C isolates freque
 ### Additional features being tested
 
 v15 is also the first run with commitment accountability, trust tracking, elimination warnings, coalition risk warnings, and affected party warnings. These are bundled (not factored) — isolating each would require too many conditions.
+
+## v15 Control Results (seed 2027)
+
+| Power | SCs |
+|-------|-----|
+| England | 10 |
+| Turkey | 9 |
+| France | 7 |
+| Germany | 4 |
+| Italy | 3 |
+| Russia | 1 |
+| Austria | 0 (eliminated) |
+
+**Survival: 6/7, Spread: 10, Gini: 0.378**
+
+Seed 2027 produces a different game than seed 2026: Austria is eliminated instead of Germany, Turkey is the second power instead of trailing. But the same macro-pattern holds — one power dominates (England at 10), one is eliminated, spread is high. England again leads, though with 10 SCs instead of the 9 seen in all seed-2026 runs. This weakens the "England always gets exactly 9" hypothesis from v14 but strengthens the "England has a structural advantage" hypothesis.
 
 ## Shipped but untested: commitment accountability
 
