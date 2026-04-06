@@ -396,11 +396,11 @@ h1{font-size:2rem;font-weight:700;letter-spacing:-0.02em;margin-bottom:0.5rem;}
   <div class="pack-right"><div class="price">$5</div><a href="/checkout?pack=Starter" class="pack-btn">Buy</a></div>
 </div>
 <div class="pack">
-  <div class="pack-info"><h3>Standard</h3><p>4,500 credits · ~75 Sonnet analyses · 10%% bonus</p></div>
+  <div class="pack-info"><h3>Standard</h3><p>4,500 credits · ~75 Sonnet analyses · 10% bonus</p></div>
   <div class="pack-right"><div class="price">$20</div><a href="/checkout?pack=Standard" class="pack-btn">Buy</a></div>
 </div>
 <div class="pack">
-  <div class="pack-info"><h3>Pro</h3><p>12,000 credits · ~200 Sonnet analyses · 20%% bonus</p></div>
+  <div class="pack-info"><h3>Pro</h3><p>12,000 credits · ~200 Sonnet analyses · 20% bonus</p></div>
   <div class="pack-right"><div class="price">$50</div><a href="/checkout?pack=Pro" class="pack-btn">Buy</a></div>
 </div>
 </div>
