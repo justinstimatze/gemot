@@ -1331,18 +1331,8 @@ func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSessio
 		deliberationID = existingID
 		fmt.Fprintf(os.Stderr, "  [%s] %s: reusing deliberation %s (round %d)\n",
 			sc.scopeTag, sc.name, deliberationID[:8], year)
-
-		// Re-set the template in case the scope's template requirements changed
-		// (e.g., alliance grew from 2 to 3 members, switching negotiation → consensus)
-		if sc.template != "" {
-			callToolSoft(ctx, session, "deliberation", map[string]any{
-				"action":          "set_template",
-				"deliberation_id": deliberationID,
-				"template":        sc.template,
-			})
-		}
 	} else {
-		// Create new deliberation
+		// Create new deliberation — pass template inline to avoid a separate set_template call
 		var topic, desc string
 		switch sc.scopeTag {
 		case "global":
@@ -1364,6 +1354,9 @@ func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSessio
 			"description": desc,
 			"type":        sc.delibType,
 		}
+		if sc.template != "" {
+			createArgs["template"] = sc.template
+		}
 		if experimentID != "" {
 			createArgs["group_id"] = experimentID
 		}
@@ -1375,15 +1368,6 @@ func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSessio
 		}
 		mustParse(createJSON, &createResp)
 		deliberationID = createResp.DeliberationID
-
-		// Set template for scope-appropriate rules and analysis framing
-		if sc.template != "" {
-			callToolSoft(ctx, session, "deliberation", map[string]any{
-				"action":          "set_template",
-				"deliberation_id": deliberationID,
-				"template":        sc.template,
-			})
-		}
 
 		// Save to persistent state
 		state.mu.Lock()
