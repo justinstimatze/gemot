@@ -19,6 +19,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -94,6 +96,7 @@ type scopeResult struct {
 func main() {
 	gameFile := flag.String("game", "", "Path to lmvsgame.json")
 	year := flag.Int("year", 1, "Game year number (1-based, e.g. 1 = 1901)")
+	throughPhase := flag.String("through-phase", "", "Collect messages up through this phase (e.g. S1901M for spring only, F1901M for full year). Default: full year.")
 	outputDir := flag.String("output", "", "Output directory for briefing files")
 	gemotURL := flag.String("url", "", "Gemot MCP URL (default: GEMOT_LIVE_URL env)")
 	alliancesFlag := flag.String("alliances", "", "Explicit alliances: ENGLAND+FRANCE+RUSSIA,AUSTRIA+TURKEY (comma-separated groups)")
@@ -131,14 +134,22 @@ func main() {
 	var game GameState
 	fatal(json.Unmarshal(data, &game), "parsing game JSON")
 
-	// Determine phases for this year
+	// Determine which phases to collect messages from.
+	// Default: both spring and fall of the target year.
+	// With --through-phase: only messages from that specific phase (for per-season mode).
+	// Prior seasons' messages are already in the deliberation from earlier rounds.
 	gameYear := 1900 + *year
-	targetPhases := map[string]bool{
-		fmt.Sprintf("S%dM", gameYear): true,
-		fmt.Sprintf("F%dM", gameYear): true,
+	targetPhases := map[string]bool{}
+	if *throughPhase != "" {
+		// Per-season: only collect messages from the target phase
+		targetPhases[*throughPhase] = true
+	} else {
+		// Per-year: collect both spring and fall
+		targetPhases[fmt.Sprintf("S%dM", gameYear)] = true
+		targetPhases[fmt.Sprintf("F%dM", gameYear)] = true
 	}
 
-	// Collect all messages for this year
+	// Collect messages from target phases
 	var yearMessages []Message
 	for _, phase := range game.Phases {
 		if !targetPhases[phase.Name] {
@@ -1121,9 +1132,48 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Stage B: ERROR connecting for submissions: %v\n", err)
 		} else {
+			// Dedup: fetch existing positions per deliberation to avoid re-submitting on rerun.
+			existingContent := map[string]map[string]bool{} // deliberation_id -> set of content hashes
+			dedupSession, dedupErr := connect(ctx, url, secret)
+			if dedupErr == nil {
+				for _, ar := range stageAResults {
+					if ar.err != nil || ar.deliberationID == "" {
+						continue
+					}
+					posJSON := callToolSoft(ctx, dedupSession, "participate", map[string]any{
+						"action":          "get_positions",
+						"deliberation_id": ar.deliberationID,
+					})
+					if posJSON != "" {
+						var positions []struct {
+							Content string `json:"content"`
+						}
+						if idx := strings.Index(posJSON, "\n\n---\n"); idx != -1 {
+							posJSON = posJSON[:idx]
+						}
+						json.Unmarshal([]byte(posJSON), &positions) //nolint:errcheck
+						hashes := map[string]bool{}
+						for _, p := range positions {
+							h := sha256Short(p.Content)
+							hashes[h] = true
+						}
+						existingContent[ar.deliberationID] = hashes
+					}
+				}
+				dedupSession.Close() //nolint:errcheck
+			}
+
+			skipped := 0
 			for i, pp := range interleaved {
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
+				}
+				// Skip if this exact content was already submitted to this deliberation
+				if hashes, ok := existingContent[pp.deliberationID]; ok {
+					if hashes[sha256Short(pp.content)] {
+						skipped++
+						continue
+					}
 				}
 				result := callToolSoft(ctx, submitSession, "participate", map[string]any{
 					"action":          "submit_position",
@@ -1148,6 +1198,10 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 						"interests":       pp.interests,
 					})
 				}
+			}
+
+			if skipped > 0 {
+				fmt.Fprintf(os.Stderr, "  Stage B: skipped %d duplicate positions (already submitted)\n", skipped)
 			}
 
 			// Alliance voting — fresh session per alliance to avoid connection issues.
@@ -3341,6 +3395,11 @@ func callToolSoft(ctx context.Context, s *sdkmcp.ClientSession, name string, arg
 		return ""
 	}
 	return res.Content[0].(*sdkmcp.TextContent).Text
+}
+
+func sha256Short(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:8])
 }
 
 func mustParse(jsonStr string, v any) {
