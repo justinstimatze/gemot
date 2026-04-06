@@ -605,7 +605,9 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		}
 	}
 
-	// Integrity gate: refuse to produce consensus/bridging if process is too compromised
+	// Integrity gate: refuse to produce consensus/bridging if process is too compromised.
+	// DEGENERATE cruxes (one-sided after validation) are a quality issue — they get discarded
+	// but don't indicate manipulation. Only SYBIL and VOTE_DOMINATION signal real integrity problems.
 	criticalCount := 0
 	hasSybil := false
 	for _, w := range warnings {
@@ -613,7 +615,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 			hasSybil = true
 			criticalCount++
 		}
-		if strings.Contains(w, "DEGENERATE") || strings.Contains(w, "VOTE_DOMINATION") {
+		if strings.Contains(w, "VOTE_DOMINATION") {
 			criticalCount++
 		}
 	}
