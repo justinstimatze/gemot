@@ -375,12 +375,13 @@ var validSourceTypes = map[string]bool{
 	"proposal":     true,
 }
 
-// ExpertPanelResult wraps analysis results with panel metadata.
+// ExpertPanelResult is returned immediately after creating the panel and submitting positions.
+// Analysis runs async — poll deliberation action:get for status, then analyze action:get_result.
 type ExpertPanelResult struct {
-	DeliberationID string                    `json:"deliberation_id"`
-	Topic          string                    `json:"topic"`
-	ExpertCount    int                       `json:"expert_count"`
-	Result         *deliberation.AnalysisResult `json:"result"`
+	DeliberationID string `json:"deliberation_id"`
+	Topic          string `json:"topic"`
+	ExpertCount    int    `json:"expert_count"`
+	Model          string `json:"model,omitempty"`
 }
 
 // CoreRunExpertPanel creates a deliberation, submits expert positions, runs
@@ -479,21 +480,10 @@ Provide your critique with:
 		}
 	}
 
-	// Set model if specified
-	if model != "" {
-		ctx = context.WithValue(ctx, llm.ContextKeyModel{}, model)
-	}
-
-	// Run analysis synchronously — blocks until complete
-	result, err := svc.Analyze(ctx, d.ID)
-	if err != nil {
-		return nil, fmt.Errorf("analysis failed: %w", err)
-	}
-
 	return &ExpertPanelResult{
 		DeliberationID: d.ID,
 		Topic:          topic,
 		ExpertCount:    len(experts),
-		Result:         result,
+		Model:          model,
 	}, nil
 }
