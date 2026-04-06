@@ -141,7 +141,8 @@ func newServer(s *server) *sdkmcp.Server {
 - propose_compromise: Generate a compromise statement (deliberation_id; optional: model)
 - reframe: Restate a position emphasizing common ground (deliberation_id, position_id; optional: model)
 - challenge: Challenge an analysis result (deliberation_id, agent_id, reason)
-- dispute_crux: Dispute a crux classification (deliberation_id, agent_id, crux_claim, correction)`,
+- dispute_crux: Dispute a crux classification (deliberation_id, agent_id, crux_claim, correction)
+- expert_panel: Run an adversarial expert panel review (document; optional: topic, source_type, experts, group_id, model). Creates a deliberation, submits expert critiques, runs analysis, returns structured results synchronously. source_type selects specialized experts and prompts: "code_review" (security, API, reliability, maintainability), "architecture" (scalability, security, operations, simplicity), "experiment" (methodology, statistics, validity — default), "proposal" (feasibility, user value, tech debt, business case). Custom experts via JSON override source_type. Takes 1-3 minutes.`,
 	}, s.handleAnalyzeTool)
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
@@ -231,6 +232,12 @@ type analyzeToolParams struct {
 	Reason         string `json:"reason,omitempty"`
 	CruxClaim      string `json:"crux_claim,omitempty"`
 	Correction     string `json:"correction,omitempty"`
+	// expert_panel fields
+	Document   string `json:"document,omitempty"`
+	Experts    string `json:"experts,omitempty"`
+	Topic      string `json:"topic,omitempty"`
+	GroupID    string `json:"group_id,omitempty"`
+	SourceType string `json:"source_type,omitempty"`
 }
 
 type decideParams struct {
@@ -673,8 +680,35 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		s.audit(ctx, "analyze:dispute_crux", args.DeliberationID, args.AgentID)
 		return jsonResult(d)
 
+	case "expert_panel":
+		if args.Document == "" {
+			return errResult(fmt.Errorf("document is required — pass the content to review"))
+		}
+		if args.Model != "" && !llm.AllowedModels[args.Model] {
+			return errResult(fmt.Errorf("unsupported model %q — allowed: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5", args.Model))
+		}
+		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
+		var creditCost int
+		if apiKey != "" && s.credits != nil {
+			creditCost = payments.CreditCost(args.Model)
+			if _, err := s.credits.Deduct(apiKey, creditCost); err != nil {
+				balance, _ := s.credits.GetBalance(apiKey)
+				return errResult(fmt.Errorf("insufficient credits: have %d, need %d — buy more at https://gemot.dev/pricing", balance, creditCost))
+			}
+		}
+		s.audit(ctx, "analyze:expert_panel", "", "")
+		result, err := CoreRunExpertPanel(ctx, s.svc, args.Document, args.Topic, args.Experts, args.GroupID, args.Model, keyID, args.SourceType)
+		if err != nil {
+			if creditCost > 0 && s.credits != nil {
+				_, _ = s.credits.AddCredits(apiKey, creditCost)
+			}
+			return errResult(err)
+		}
+		s.audit(ctx, "analyze:expert_panel:complete", result.DeliberationID, "")
+		return jsonResult(result)
+
 	default:
-		return errResult(fmt.Errorf("unknown action %q — use: run, get_result, cancel, propose_compromise, reframe, challenge, dispute_crux", args.Action))
+		return errResult(fmt.Errorf("unknown action %q — use: run, get_result, cancel, propose_compromise, reframe, challenge, dispute_crux, expert_panel", args.Action))
 	}
 }
 

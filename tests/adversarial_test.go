@@ -145,10 +145,10 @@ func TestInputLengthLimits(t *testing.T) {
 
 	// Content too long
 	d, _ := svc.CreateDeliberation("test", "")
-	longContent := strings.Repeat("x", 10001)
+	longContent := strings.Repeat("x", 50001)
 	_, err = svc.SubmitPosition(d.ID, "agent", longContent)
 	if err == nil {
-		t.Error("expected error for content > 10000 chars")
+		t.Error("expected error for content > 50000 chars")
 	}
 
 	// Agent ID too long
