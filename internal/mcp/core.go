@@ -260,4 +260,3 @@ func CoreWithdraw(svc *deliberation.Service, deliberationID, agentID, keyID stri
 	}
 	return svc.WithdrawAgent(deliberationID, agentID)
 }
-

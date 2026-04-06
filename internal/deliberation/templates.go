@@ -86,12 +86,12 @@ var templates = map[string]Template{
 		SuggestedThreshold: 0.51,
 		AnalysisHint:       "Parliamentary procedure: motions require a second to be debatable. Unsupported motions are tabled. Amendments modify the original motion — analyze the amended version. Report the procedural state: which motions are on the floor, which are tabled, which have been decided.",
 		DefaultRules: map[string]any{
-			"min_participants":    5,
+			"min_participants":       5,
 			"cooling_period_minutes": 15,
-			"position_cost":      3,
-			"require_second":     true,
-			"allow_amendments":   true,
-			"speaking_time_limit": 500,
+			"position_cost":          3,
+			"require_second":         true,
+			"allow_amendments":       true,
+			"speaking_time_limit":    500,
 		},
 	},
 }

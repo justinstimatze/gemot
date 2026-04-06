@@ -136,7 +136,7 @@ func TestLiveDeliberation(t *testing.T) {
 		value         int
 	}
 	votes := []voteEntry{
-		{"rustacean", "gopher", 1},     // rust respects go
+		{"rustacean", "gopher", 1},      // rust respects go
 		{"rustacean", "pythonista", -1}, // rust dislikes python's lack of types
 		{"gopher", "rustacean", 0},      // go is neutral on rust
 		{"gopher", "pythonista", -1},    // go dislikes python's GIL
