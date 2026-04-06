@@ -142,7 +142,8 @@ func newServer(s *server) *sdkmcp.Server {
 - reframe: Restate a position emphasizing common ground (deliberation_id, position_id; optional: model)
 - challenge: Challenge an analysis result (deliberation_id, agent_id, reason)
 - dispute_crux: Dispute a crux classification (deliberation_id, agent_id, crux_claim, correction)
-- expert_panel: Run an adversarial expert panel review (document; optional: topic, source_type, experts, group_id, model). Creates a deliberation, submits expert critiques, triggers analysis. Returns deliberation_id immediately — poll with deliberation action:get for status, then analyze action:get_result. source_type selects specialized experts and prompts: "code_review" (security, API, reliability, maintainability), "architecture" (scalability, security, operations, simplicity), "experiment" (methodology, statistics, validity — default), "proposal" (feasibility, user value, tech debt, business case). Custom experts via JSON override source_type.`,
+- expert_panel: Run an adversarial expert panel review (document; optional: topic, source_type, experts, group_id, model). Creates a deliberation, submits expert critiques, triggers analysis. Returns deliberation_id immediately — poll with deliberation action:get for status, then analyze action:get_result. source_type selects specialized experts and prompts: "code_review" (security, API, reliability, maintainability), "architecture" (scalability, security, operations, simplicity), "experiment" (methodology, statistics, validity — default), "proposal" (feasibility, user value, tech debt, business case). Custom experts via JSON override source_type.
+- follow_up: Submit follow-up expert positions responding to round 1 cruxes, then trigger round 2 analysis (deliberation_id; optional: model). Experts review the cruxes and consensus, flag misclassifications, and identify missed issues. Requires round 1 to be complete.`,
 	}, s.handleAnalyzeTool)
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
@@ -715,8 +716,37 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 			fmt.Sprintf("Panel created with %d experts. Analysis started — poll deliberation action:get (deliberation_id: %s) for status, then analyze action:get_result for results.",
 				result.ExpertCount, result.DeliberationID))
 
+	case "follow_up":
+		if args.DeliberationID == "" {
+			return errResult(fmt.Errorf("deliberation_id is required — pass the deliberation from a previous expert_panel"))
+		}
+		if args.Model != "" && !llm.AllowedModels[args.Model] {
+			return errResult(fmt.Errorf("unsupported model %q", args.Model))
+		}
+		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
+		var creditCost int
+		if apiKey != "" && s.credits != nil {
+			creditCost = payments.CreditCost(args.Model)
+			if _, err := s.credits.Deduct(apiKey, creditCost); err != nil {
+				balance, _ := s.credits.GetBalance(apiKey)
+				return errResult(fmt.Errorf("insufficient credits: have %d, need %d", balance, creditCost))
+			}
+		}
+		result, err := CoreFollowUpExpertPanel(ctx, s.svc, args.DeliberationID, args.Model, keyID)
+		if err != nil {
+			if creditCost > 0 && s.credits != nil {
+				_, _ = s.credits.AddCredits(apiKey, creditCost)
+			}
+			return errResult(err)
+		}
+		s.audit(ctx, "analyze:follow_up", result.DeliberationID, "")
+		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost)
+		return jsonResultWithHints(result,
+			fmt.Sprintf("Follow-up round started with %d experts. Poll deliberation action:get for status, then analyze action:get_result.",
+				result.ExpertCount))
+
 	default:
-		return errResult(fmt.Errorf("unknown action %q — use: run, get_result, cancel, propose_compromise, reframe, challenge, dispute_crux, expert_panel", args.Action))
+		return errResult(fmt.Errorf("unknown action %q — use: run, get_result, cancel, propose_compromise, reframe, challenge, dispute_crux, expert_panel, follow_up", args.Action))
 	}
 }
 

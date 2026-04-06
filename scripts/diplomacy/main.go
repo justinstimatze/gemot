@@ -204,6 +204,17 @@ func main() {
 	trust := checkPromiseFollowThrough(&game, *year, promises)
 	territory := buildTerritorialContext(&game, *year)
 
+	// Audit commitments against actual orders (year 2+ only — year 1 has no prior commitments)
+	var reputations map[string]reputation
+	if *year > 1 {
+		fmt.Fprintf(os.Stderr, "\n=== Commitment Accountability ===\n")
+		reputations = auditCommitments(ctx, url, secret, results, trust)
+		for power, rep := range reputations {
+			fmt.Fprintf(os.Stderr, "  %s: %d/%d fulfilled (%.0f%%)\n",
+				strings.ToUpper(power), rep.Fulfilled, rep.Total, rep.Score*100)
+		}
+	}
+
 	// ========================================
 	// Phase 2: V12 Enrichments (parallel LLM calls)
 	// ========================================
@@ -284,6 +295,7 @@ func main() {
 		inconsistencies:       inconsistencies,
 		baitScores:            baitScores,
 		relStates:             relStates,
+		reputations:           reputations,
 	}
 
 	var wg sync.WaitGroup
@@ -1167,7 +1179,37 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 		}
 	}
 
-	// Fetch commitments for this deliberation
+	// Submit compromise proposals as conditional commitments (bilateral scopes only)
+	if sc.scopeTag == "bilateral" && len(sc.powers) == 2 {
+		for _, p := range sc.powers {
+			ctxJSON, ok := contexts[strings.ToLower(p)]
+			if !ok {
+				continue
+			}
+			var agentCtx struct {
+				CompromiseProposal string `json:"compromise_proposal"`
+			}
+			mustParseSoft(ctxJSON, &agentCtx)
+			if agentCtx.CompromiseProposal == "" {
+				continue
+			}
+			otherPower := sc.powers[0]
+			if strings.EqualFold(otherPower, p) {
+				otherPower = sc.powers[1]
+			}
+			agentID := strings.ToLower(p) + "-agent"
+			otherAgentID := strings.ToLower(otherPower) + "-agent"
+			callToolSoft(ctx, session, "decide", map[string]any{
+				"action":          "commit",
+				"deliberation_id": deliberationID,
+				"agent_id":        agentID,
+				"statement":       agentCtx.CompromiseProposal,
+				"conditional":     fmt.Sprintf("if %s also commits", otherAgentID),
+			})
+		}
+	}
+
+	// Fetch commitments for this deliberation (including any just created)
 	var commitments []commitment
 	commJSON := callToolSoft(ctx, session, "decide", map[string]any{
 		"action":          "get_commitments",
@@ -1187,6 +1229,7 @@ type v12Enrichments struct {
 	inconsistencies       map[string][]inconsistency
 	baitScores            map[string][]baitScore
 	relStates             map[string]map[string]relationshipState
+	reputations           map[string]reputation // power (lowercase) -> reputation
 }
 
 // powerBalance holds SC counts for the briefing header.
