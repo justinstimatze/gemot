@@ -424,6 +424,11 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						popts = append(popts, deliberation.WithDraft())
 					}
 				}
+				if md, ok := s["metadata"]; ok {
+					if m, ok := md.(map[string]any); ok && len(m) > 0 {
+						popts = append(popts, deliberation.WithMetadata(m))
+					}
+				}
 				var posCost int
 				if !isDraft && !isAdmin {
 					if dd, err := svc.GetDeliberation(str(s, "deliberation_id")); err == nil {
