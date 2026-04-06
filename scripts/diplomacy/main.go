@@ -358,7 +358,9 @@ func buildScopes(messages []Message, alliances [][]string, year int) []scope {
 		})
 	}
 
-	// Alliance scopes → negotiation type + consensus template
+	// Alliance scopes → negotiation type
+	// 3+ members use consensus template; 2-member alliances use negotiation template
+	// (consensus template requires min 3 participants)
 	for _, alliance := range alliances {
 		var msgs []Message
 		for i := 0; i < len(alliance); i++ {
@@ -368,10 +370,14 @@ func buildScopes(messages []Message, alliances [][]string, year int) []scope {
 			}
 		}
 		if len(msgs) > 0 {
+			tmpl := "consensus"
+			if len(alliance) < 3 {
+				tmpl = "negotiation"
+			}
 			scopes = append(scopes, scope{
 				name:      strings.Join(alliance, "+"),
 				scopeTag:  "alliance",
-				template:  "consensus",
+				template:  tmpl,
 				delibType: "negotiation",
 				powers:    alliance,
 				messages:  msgs,
@@ -1110,7 +1116,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 	interleaved := interleaveByScope(grouped)
 
 	if len(interleaved) > 0 {
-		// Single session for all position submissions.
+		// Submit positions with reconnection on failure.
 		submitSession, err := connect(ctx, url, secret)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Stage B: ERROR connecting for submissions: %v\n", err)
@@ -1119,29 +1125,55 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 				if i > 0 {
 					time.Sleep(200 * time.Millisecond)
 				}
-				callToolSoft(ctx, submitSession, "participate", map[string]any{
+				result := callToolSoft(ctx, submitSession, "participate", map[string]any{
 					"action":          "submit_position",
 					"deliberation_id": pp.deliberationID,
 					"agent_id":        pp.agentID,
 					"content":         pp.content,
 					"interests":       pp.interests,
 				})
+				if result == "" {
+					// Connection may have died — reconnect and retry
+					submitSession.Close() //nolint:errcheck
+					submitSession, err = connect(ctx, url, secret)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "  Stage B: reconnect failed: %v\n", err)
+						break
+					}
+					callToolSoft(ctx, submitSession, "participate", map[string]any{
+						"action":          "submit_position",
+						"deliberation_id": pp.deliberationID,
+						"agent_id":        pp.agentID,
+						"content":         pp.content,
+						"interests":       pp.interests,
+					})
+				}
 			}
 
-			// Alliance voting (sequential, same session).
+			// Alliance voting — fresh session per alliance to avoid connection issues.
+			submitSession.Close() //nolint:errcheck
 			for _, ar := range stageAResults {
 				if ar.err != nil || ar.sc.scopeTag != "alliance" || len(ar.sc.messages) == 0 {
 					continue
 				}
-				posJSON := callTool(ctx, submitSession, "participate", map[string]any{
+				voteSession, voteErr := connect(ctx, url, secret)
+				if voteErr != nil {
+					fmt.Fprintf(os.Stderr, "  Stage B: ERROR connecting for alliance votes: %v\n", voteErr)
+					continue
+				}
+				posJSON := callToolSoft(ctx, voteSession, "participate", map[string]any{
 					"action":          "get_positions",
 					"deliberation_id": ar.deliberationID,
 				})
+				if posJSON == "" {
+					voteSession.Close() //nolint:errcheck
+					continue
+				}
 				var positions []struct {
 					ID      string `json:"position_id"`
 					AgentID string `json:"agent_id"`
 				}
-				mustParse(posJSON, &positions)
+				mustParseSoft(posJSON, &positions)
 
 				for _, pos := range positions {
 					for _, p := range ar.sc.powers {
@@ -1149,7 +1181,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 						if voterAgent == pos.AgentID {
 							continue
 						}
-						callToolSoft(ctx, submitSession, "participate", map[string]any{
+						callToolSoft(ctx, voteSession, "participate", map[string]any{
 							"action":          "vote",
 							"deliberation_id": ar.deliberationID,
 							"agent_id":        voterAgent,
@@ -1158,9 +1190,8 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 						})
 					}
 				}
+				voteSession.Close() //nolint:errcheck
 			}
-
-			submitSession.Close() //nolint:errcheck
 		}
 	}
 
@@ -1246,6 +1277,16 @@ func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSessio
 		deliberationID = existingID
 		fmt.Fprintf(os.Stderr, "  [%s] %s: reusing deliberation %s (round %d)\n",
 			sc.scopeTag, sc.name, deliberationID[:8], year)
+
+		// Re-set the template in case the scope's template requirements changed
+		// (e.g., alliance grew from 2 to 3 members, switching negotiation → consensus)
+		if sc.template != "" {
+			callToolSoft(ctx, session, "deliberation", map[string]any{
+				"action":          "set_template",
+				"deliberation_id": deliberationID,
+				"template":        sc.template,
+			})
+		}
 	} else {
 		// Create new deliberation
 		var topic, desc string
@@ -1384,13 +1425,36 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 
 	// Poll for completion using first power's context.
 	// If the analysis fails (status resets to "open"), re-trigger up to 2 more times.
+	// If the connection drops, reconnect and keep polling.
 	firstPower := strings.ToLower(sc.powers[0]) + "-agent"
 	time.Sleep(5 * time.Second)
 	completed := false
 	analyzeRetries := 0
+	reconnects := 0
 	const maxAnalyzeRetries = 2
-	for i := 0; i < 200; i++ {
+	const maxReconnects = 10
+
+	reconnect := func() {
+		session.Close() //nolint:errcheck
+		reconnects++
+		if reconnects > maxReconnects {
+			fmt.Fprintf(os.Stderr, "%s too many reconnects (%d), giving up\n", prefix, reconnects)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "%s reconnecting (%d)...\n", prefix, reconnects)
 		time.Sleep(3 * time.Second)
+		var reconnErr error
+		session, reconnErr = connect(ctx, url, secret)
+		if reconnErr != nil {
+			fmt.Fprintf(os.Stderr, "%s reconnect failed: %v\n", prefix, reconnErr)
+		}
+	}
+
+	for i := 0; i < 300; i++ {
+		time.Sleep(3 * time.Second)
+		if reconnects > maxReconnects {
+			break
+		}
 
 		result := callToolSoft(ctx, session, "participate", map[string]any{
 			"action":          "get_context",
@@ -1399,44 +1463,49 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 		})
 
 		if result == "" {
-			// Check deliberation status to understand what happened
+			// First: try to get status on a fresh connection (the current one may be dead)
+			reconnect()
+			if session == nil {
+				continue
+			}
+
 			statusJSON := callToolSoft(ctx, session, "deliberation", map[string]any{
 				"action":          "get",
 				"deliberation_id": deliberationID,
 			})
-			if statusJSON != "" {
-				var s struct {
-					Status    string `json:"status"`
-					SubStatus string `json:"sub_status"`
-				}
-				json.Unmarshal([]byte(strings.SplitN(statusJSON, "\n\n---\n", 2)[0]), &s) //nolint:errcheck
-				fmt.Fprintf(os.Stderr, "%s %s/%s\n", prefix, s.Status, s.SubStatus)
+			if statusJSON == "" {
+				// Still can't connect — keep retrying
+				continue
+			}
 
-				// If status reset to "open", analysis failed — retry
-				if s.Status == "open" && analyzeRetries < maxAnalyzeRetries {
-					analyzeRetries++
-					fmt.Fprintf(os.Stderr, "%s analysis failed, retrying (%d/%d)...\n", prefix, analyzeRetries, maxAnalyzeRetries)
-					time.Sleep(5 * time.Second)
-					retryResult := callToolSoft(ctx, session, "analyze", map[string]any{
-						"action":          "run",
-						"deliberation_id": deliberationID,
-					})
-					if retryResult == "" {
-						return nil, fmt.Errorf("analyze retry failed")
-					}
-					continue
+			var s struct {
+				Status    string `json:"status"`
+				SubStatus string `json:"sub_status"`
+			}
+			json.Unmarshal([]byte(strings.SplitN(statusJSON, "\n\n---\n", 2)[0]), &s) //nolint:errcheck
+			fmt.Fprintf(os.Stderr, "%s %s/%s\n", prefix, s.Status, s.SubStatus)
+
+			if s.Status == "analyzing" {
+				// Analysis still running on the server — just keep polling
+				continue
+			}
+
+			// If status reset to "open", analysis failed — retry
+			if s.Status == "open" && analyzeRetries < maxAnalyzeRetries {
+				analyzeRetries++
+				fmt.Fprintf(os.Stderr, "%s analysis failed, retrying (%d/%d)...\n", prefix, analyzeRetries, maxAnalyzeRetries)
+				time.Sleep(5 * time.Second)
+				retryResult := callToolSoft(ctx, session, "analyze", map[string]any{
+					"action":          "run",
+					"deliberation_id": deliberationID,
+				})
+				if retryResult == "" {
+					return nil, fmt.Errorf("analyze retry failed")
 				}
-				if s.Status == "open" {
-					return nil, fmt.Errorf("analysis failed after %d retries", maxAnalyzeRetries)
-				}
-			} else {
-				// Can't get status — try reconnecting
-				session.Close() //nolint:errcheck
-				var reconnErr error
-				session, reconnErr = connect(ctx, url, secret)
-				if reconnErr != nil {
-					fmt.Fprintf(os.Stderr, "%s reconnect failed: %v\n", prefix, reconnErr)
-				}
+				continue
+			}
+			if s.Status == "open" {
+				return nil, fmt.Errorf("analysis failed after %d retries", maxAnalyzeRetries)
 			}
 			continue
 		}
