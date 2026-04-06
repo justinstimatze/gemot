@@ -450,19 +450,9 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if p.Draft {
 			hint = "Draft saved. Next: participate action:publish_position when ready."
 		}
-		// Quorum hint: tell the agent how many more participants are needed
-		if d, err := s.svc.GetDeliberation(args.DeliberationID); err == nil {
-			if minP := deliberation.RuleInt(d, "min_participants", 0); minP > 0 {
-				positions, _ := s.svc.GetPositions(args.DeliberationID, nil, nil)
-				uniqueAgents := map[string]bool{}
-				for _, pos := range positions {
-					uniqueAgents[pos.AgentID] = true
-				}
-				if len(uniqueAgents) < minP {
-					hint += fmt.Sprintf(" Note: %d more participant(s) needed before analysis can run (have %d, need %d).",
-						minP-len(uniqueAgents), len(uniqueAgents), minP)
-				}
-			}
+		// Quorum hint: tell the agent if more participants are needed
+		if err := s.svc.CheckQuorum(args.DeliberationID); err != nil {
+			hint += " Note: " + err.Error() + "."
 		}
 		return jsonResultWithHints(p, hint)
 
@@ -583,26 +573,18 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 				return errResult(fmt.Errorf("insufficient credits: have %d, need %d — buy more at https://gemot.dev/pricing", balance, creditCost))
 			}
 		}
-		d, err := s.svc.GetDeliberation(args.DeliberationID)
-		if err != nil {
+		if _, err := s.svc.GetDeliberation(args.DeliberationID); err != nil {
 			if creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
 			}
 			return errResult(fmt.Errorf("deliberation not found: %w", err))
 		}
 		// Pre-check quorum before launching async analysis — fail fast with a clear message
-		if minP := deliberation.RuleInt(d, "min_participants", 0); minP > 0 {
-			positions, _ := s.svc.GetPositions(args.DeliberationID, nil, nil)
-			uniqueAgents := map[string]bool{}
-			for _, p := range positions {
-				uniqueAgents[p.AgentID] = true
+		if err := s.svc.CheckQuorum(args.DeliberationID); err != nil {
+			if creditCost > 0 && s.credits != nil {
+				_, _ = s.credits.AddCredits(apiKey, creditCost)
 			}
-			if len(uniqueAgents) < minP {
-				if creditCost > 0 && s.credits != nil {
-					_, _ = s.credits.AddCredits(apiKey, creditCost)
-				}
-				return errResult(fmt.Errorf("quorum not met: %d participant(s), need %d — submit more positions before analyzing", len(uniqueAgents), minP))
-			}
+			return errResult(fmt.Errorf("%w — submit more positions before analyzing", err))
 		}
 		s.audit(ctx, "analyze:run", args.DeliberationID, "")
 		RunAnalysisAsync(s.svc, s.db, s.credits, args.DeliberationID, args.Model, apiKey, creditCost)

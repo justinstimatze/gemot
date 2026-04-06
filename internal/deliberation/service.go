@@ -502,6 +502,31 @@ func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) erro
 	return s.store.UpdateDeliberationRules(context.TODO(), deliberationID, rules)
 }
 
+// CheckQuorum returns an error if the deliberation has a min_participants rule
+// and not enough distinct agents have submitted positions.
+func (s *Service) CheckQuorum(deliberationID string) error {
+	d, err := s.store.GetDeliberation(context.TODO(), deliberationID)
+	if err != nil {
+		return err
+	}
+	minP := RuleInt(d, "min_participants", 0)
+	if minP <= 0 {
+		return nil
+	}
+	positions, err := s.store.GetPositions(context.TODO(), deliberationID, nil)
+	if err != nil {
+		return err
+	}
+	uniqueAgents := map[string]bool{}
+	for _, p := range positions {
+		uniqueAgents[p.AgentID] = true
+	}
+	if len(uniqueAgents) < minP {
+		return fmt.Errorf("quorum not met: %d participant(s), need %d", len(uniqueAgents), minP)
+	}
+	return nil
+}
+
 // DeleteDeliberation removes a deliberation and all its data.
 // Only the creator or an admin can delete.
 func (s *Service) DeleteDeliberation(deliberationID, callerKeyID string, isAdmin bool) error {
@@ -904,19 +929,8 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	}
 
 	// Enforce quorum (minimum participants before analysis)
-	minParticipants := RuleInt(d, "min_participants", 0)
-	if minParticipants > 0 {
-		positions, err := s.store.GetPositions(ctx, deliberationID, nil)
-		if err != nil {
-			return nil, err
-		}
-		uniqueAgents := map[string]bool{}
-		for _, p := range positions {
-			uniqueAgents[p.AgentID] = true
-		}
-		if len(uniqueAgents) < minParticipants {
-			return nil, fmt.Errorf("quorum not met: %d participants, need %d", len(uniqueAgents), minParticipants)
-		}
+	if err := s.CheckQuorum(deliberationID); err != nil {
+		return nil, err
 	}
 
 	// Atomic status transition: prevents concurrent analysis race condition
@@ -951,10 +965,6 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	}
 	if len(agentCheck) < 2 {
 		resetStatus()
-		agentList := make([]string, 0, len(agentCheck))
-		for a := range agentCheck {
-			agentList = append(agentList, a)
-		}
 		thinResult := &AnalysisResult{
 			DeliberationID:    deliberationID,
 			Round:             d.Round,
