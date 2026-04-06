@@ -5,8 +5,10 @@
 //	go run scripts/expert-panel/ --document RESULTS.md
 //	go run scripts/expert-panel/ --document RESULTS.md --experts experts.json
 //	go run scripts/expert-panel/ --document RESULTS.md --topic "Review our Q3 plan" --source-type proposal
+//	go run scripts/expert-panel/ --document RESULTS.md --depth quick
 //
 // Source types: code_review, architecture, experiment (default), proposal.
+// Depth: "quick" (~2min, 3 experts) or "thorough" (~7min, 5 experts, default).
 // Custom experts via --experts JSON file:
 //
 //	[{"id": "economist", "role": "Behavioral economist", "interests": "incentive design", "reservation": "ignoring second-order effects"}]
@@ -35,41 +37,57 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(req)
 }
 
-func connect(url, secret string) *sdkmcp.ClientSession {
+func connect(url, secret string) (*sdkmcp.ClientSession, error) {
 	transport := &sdkmcp.SSEClientTransport{
 		Endpoint: url,
 		HTTPClient: &http.Client{
 			Transport: &authTransport{base: http.DefaultTransport, token: secret},
-			Timeout:   5 * time.Minute,
 		},
 	}
 	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "expert-panel", Version: "2.0"}, nil)
-	session, err := client.Connect(context.Background(), transport, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect failed: %v\n", err)
-		os.Exit(1)
-	}
-	return session
+	return client.Connect(context.Background(), transport, nil)
 }
 
-func call(session *sdkmcp.ClientSession, name string, args map[string]any) (string, error) {
+// callSoft calls a tool and returns "" on error instead of exiting.
+func callSoft(session *sdkmcp.ClientSession, name string, args map[string]any) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	res, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", name, err)
+		fmt.Fprintf(os.Stderr, "  [soft] %s: %v\n", name, err)
+		return ""
 	}
-	if res.IsError && len(res.Content) > 0 {
-		return "", fmt.Errorf("%s: %s", name, res.Content[0].(*sdkmcp.TextContent).Text)
-	}
-	if len(res.Content) == 0 {
-		return "", nil
+	if res.IsError || len(res.Content) == 0 {
+		return ""
 	}
 	text := res.Content[0].(*sdkmcp.TextContent).Text
 	if idx := strings.Index(text, "\n\n---\n"); idx != -1 {
 		text = text[:idx]
 	}
-	return text, nil
+	return text
+}
+
+// call calls a tool and exits on error.
+func call(session *sdkmcp.ClientSession, name string, args map[string]any) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	res, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s failed: %v\n", name, err)
+		os.Exit(1)
+	}
+	if res.IsError && len(res.Content) > 0 {
+		fmt.Fprintf(os.Stderr, "%s error: %s\n", name, res.Content[0].(*sdkmcp.TextContent).Text)
+		os.Exit(1)
+	}
+	if len(res.Content) == 0 {
+		return ""
+	}
+	text := res.Content[0].(*sdkmcp.TextContent).Text
+	if idx := strings.Index(text, "\n\n---\n"); idx != -1 {
+		text = text[:idx]
+	}
+	return text
 }
 
 func main() {
@@ -77,12 +95,13 @@ func main() {
 	expertsFile := flag.String("experts", "", "Path to experts JSON file (optional, uses defaults)")
 	topic := flag.String("topic", "", "Deliberation topic (default: derived from document filename)")
 	sourceType := flag.String("source-type", "", "Panel type: code_review, architecture, experiment, proposal")
+	depth := flag.String("depth", "", "Panel depth: quick (~2min, 3 experts) or thorough (~7min, 5 experts, default)")
 	url := flag.String("url", "", "Gemot MCP URL (default: GEMOT_LIVE_URL env or https://gemot.dev/mcp)")
 	groupID := flag.String("group", "expert-panel", "Group ID for gemotvis")
 	flag.Parse()
 
 	if *docFile == "" {
-		fmt.Fprintf(os.Stderr, "Usage: expert-panel --document <path> [--experts <path>] [--topic <topic>] [--source-type <type>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: expert-panel --document <path> [--experts <path>] [--topic <topic>] [--source-type <type>] [--depth quick|thorough]\n")
 		os.Exit(1)
 	}
 
@@ -116,7 +135,6 @@ func main() {
 		deliberationTopic = "Expert review: " + *docFile
 	}
 
-	// Load custom experts JSON if provided
 	var expertsJSON string
 	if *expertsFile != "" {
 		data, err := os.ReadFile(*expertsFile)
@@ -130,7 +148,11 @@ func main() {
 	// Step 1: Create panel (returns immediately with deliberation_id)
 	fmt.Fprintf(os.Stderr, "Creating expert panel...\n")
 	start := time.Now()
-	session := connect(mcpURL, secret)
+	session, err := connect(mcpURL, secret)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "connect failed: %v\n", err)
+		os.Exit(1)
+	}
 	args := map[string]any{
 		"action":   "expert_panel",
 		"document": string(document),
@@ -140,15 +162,14 @@ func main() {
 	if *sourceType != "" {
 		args["source_type"] = *sourceType
 	}
+	if *depth != "" {
+		args["depth"] = *depth
+	}
 	if expertsJSON != "" {
 		args["experts"] = expertsJSON
 	}
-	panelJSON, err := call(session, "analyze", args)
+	panelJSON := call(session, "analyze", args)
 	session.Close()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "expert_panel failed: %v\n", err)
-		os.Exit(1)
-	}
 	var panel struct {
 		DeliberationID string `json:"deliberation_id"`
 		ExpertCount    int    `json:"expert_count"`
@@ -156,18 +177,44 @@ func main() {
 	json.Unmarshal([]byte(panelJSON), &panel)
 	fmt.Fprintf(os.Stderr, "Panel: %s (%d experts, analysis started)\n", panel.DeliberationID, panel.ExpertCount)
 
-	// Step 2: Poll for completion with reconnect
-	s := connect(mcpURL, secret)
-	for i := 0; i < 180; i++ { // 15 minutes max
+	// Step 2: Poll for completion with robust reconnect
+	const maxReconnects = 10
+	reconnects := 0
+	s, err := connect(mcpURL, secret)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "poll connect failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	reconnect := func() bool {
+		s.Close()
+		reconnects++
+		if reconnects > maxReconnects {
+			fmt.Fprintf(os.Stderr, "  max reconnects (%d) exceeded\n", maxReconnects)
+			return false
+		}
+		fmt.Fprintf(os.Stderr, "  reconnecting (%d/%d)...\n", reconnects, maxReconnects)
+		time.Sleep(3 * time.Second)
+		var err error
+		s, err = connect(mcpURL, secret)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  reconnect failed: %v\n", err)
+			return false
+		}
+		return true
+	}
+
+	analysisComplete := false
+	for i := 0; i < 300; i++ { // 25 minutes max (300 * 5s)
 		time.Sleep(5 * time.Second)
-		statusJSON, err := call(s, "deliberation", map[string]any{
+		statusJSON := callSoft(s, "deliberation", map[string]any{
 			"action":          "get",
 			"deliberation_id": panel.DeliberationID,
 		})
-		if err != nil {
-			s.Close()
-			fmt.Fprintf(os.Stderr, "  reconnecting...\n")
-			s = connect(mcpURL, secret)
+		if statusJSON == "" {
+			if !reconnect() {
+				break
+			}
 			continue
 		}
 		var status struct {
@@ -176,6 +223,7 @@ func main() {
 		}
 		json.Unmarshal([]byte(statusJSON), &status)
 		if status.Status == "open" {
+			analysisComplete = true
 			break
 		}
 		if i%6 == 0 {
@@ -184,16 +232,26 @@ func main() {
 	}
 	s.Close()
 
+	if !analysisComplete {
+		fmt.Fprintf(os.Stderr, "analysis did not complete within timeout\n")
+		fmt.Fprintf(os.Stderr, "deliberation_id: %s (check manually)\n", panel.DeliberationID)
+		os.Exit(1)
+	}
+
 	// Step 3: Fetch and display results
-	s = connect(mcpURL, secret)
-	resultJSON, err := call(s, "analyze", map[string]any{
+	s, err = connect(mcpURL, secret)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "result connect failed: %v\n", err)
+		os.Exit(1)
+	}
+	resultJSON := call(s, "analyze", map[string]any{
 		"action":          "get_result",
 		"deliberation_id": panel.DeliberationID,
 		"round":           1,
 	})
 	s.Close()
-	if err != nil || resultJSON == "" {
-		fmt.Fprintf(os.Stderr, "no results: %v\n", err)
+	if resultJSON == "" {
+		fmt.Fprintf(os.Stderr, "no results returned\n")
 		os.Exit(1)
 	}
 
