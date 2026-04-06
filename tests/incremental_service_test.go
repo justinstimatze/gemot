@@ -509,3 +509,46 @@ func TestAnalysisCancellation(t *testing.T) {
 	// returned promptly, which we already verified above.
 	t.Logf("status after cancel: %s", d2.Status)
 }
+
+func TestSetTemplateReplacesRules(t *testing.T) {
+	db := tempDB(t)
+	analyzer := &capturingAnalyzer{}
+	svc := deliberation.NewService(db, analyzer)
+
+	// Create with jury template (min_participants: 6, cooling_period_minutes: 15)
+	d, err := svc.CreateDeliberation("Template switch", "",
+		deliberation.WithTemplate("jury"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify jury rules
+	d1, _ := svc.GetDeliberation(d.ID)
+	if d1.Rules == nil {
+		t.Fatal("expected rules to be set")
+	}
+	minP, _ := d1.Rules["min_participants"].(float64)
+	if int(minP) != 6 {
+		t.Fatalf("jury should have min_participants=6, got %v", d1.Rules["min_participants"])
+	}
+
+	// Switch to assembly (min_participants: 3)
+	err = svc.SetTemplate(d.ID, "assembly", "")
+	if err != nil {
+		t.Fatalf("set_template: %v", err)
+	}
+
+	// Verify assembly rules replaced jury's min_participants
+	d2, _ := svc.GetDeliberation(d.ID)
+	minP2, _ := d2.Rules["min_participants"].(float64)
+	if int(minP2) != 3 {
+		t.Fatalf("after switching to assembly, min_participants should be 3, got %v", d2.Rules["min_participants"])
+	}
+
+	// Verify jury-only rules (cooling_period_minutes) are removed
+	// since assembly doesn't define them
+	if _, hasCooling := d2.Rules["cooling_period_minutes"]; hasCooling {
+		t.Fatal("cooling_period_minutes from jury should be removed when switching to assembly")
+	}
+}
