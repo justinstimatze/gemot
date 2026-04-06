@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-04-06 (afternoon)
+
+### New Features
+
+- **Expert panel MCP tool**: `analyze action:expert_panel` creates a deliberation, submits expert critiques, and triggers async analysis in a single call. Returns deliberation_id immediately — poll for completion.
+- **Source-type specialization**: `source_type` parameter selects expert panels tuned to the review context: `code_review` (security, API, reliability, maintainability), `architecture` (scalability, security, operations, simplicity), `experiment` (methodology, statistics, validity), `proposal` (feasibility, user value, tech debt, business case). Custom experts via JSON override source_type.
+- **Position metadata**: Positions now support an extensible `metadata` JSON field. Used by the diplomacy script to pass lat/lon coordinates for gemotvis world map rendering.
+
+### Improvements
+
+- **Parallel crux detection**: Subtopic crux detection (dedup + getCrux) now runs 5 concurrent goroutines per topic. Reduces crux detection from ~20 minutes to ~4 minutes for panels with 18+ subtopics. Context cancellation and API rate limits respected.
+- **Graceful deploys**: Switched from bluegreen to rolling deploy strategy with 10-minute drain timeout. In-flight analyses survive deploys instead of being killed mid-analysis. Go HTTP shutdown timeout increased from 5s to 10 minutes.
+- **Position content limit**: Increased from 10K to 50K characters to support larger documents in expert panels and general use.
+- **Diplomacy lat/lon**: Agent positions now include capital city coordinates (Vienna, London, Paris, Berlin, Rome, Moscow, Istanbul) as metadata, enabling automatic world map rendering in gemotvis without manual config.
+- **Expert panel script**: Simplified from manual 5-step orchestration to single `expert_panel` MCP tool call + poll + fetch.
+
+### Bug Fixes
+
+- **Deploy killing in-flight analysis**: Old bluegreen strategy destroyed machines while analysis was running. Rolling deploy with drain timeout preserves in-flight work.
+- **A2A audit trail**: `fulfill` and `break` commitment actions now logged in audit trail.
+
+### Tests
+
+- 4 new expert panel tests: core flow, custom experts, source_type specialization, validation.
+
 ## 2026-04-06
 
 ### Breaking Changes

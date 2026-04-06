@@ -2,11 +2,11 @@
 //
 // Usage:
 //
-//	go run scripts/expert-panel/main.go --document RESULTS.md
-//	go run scripts/expert-panel/main.go --document RESULTS.md --experts experts.json
-//	go run scripts/expert-panel/main.go --document RESULTS.md --topic "Review our Q3 plan"
+//	go run scripts/expert-panel/ --document RESULTS.md
+//	go run scripts/expert-panel/ --document RESULTS.md --experts experts.json
+//	go run scripts/expert-panel/ --document RESULTS.md --topic "Review our Q3 plan" --source-type proposal
 //
-// Default experts: methodologist, domain expert, statistician, systems engineer, devil's advocate.
+// Source types: code_review, architecture, experiment (default), proposal.
 // Custom experts via --experts JSON file:
 //
 //	[{"id": "economist", "role": "Behavioral economist", "interests": "incentive design", "reservation": "ignoring second-order effects"}]
@@ -35,21 +35,6 @@ func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(req)
 }
 
-type expert struct {
-	ID          string `json:"id"`
-	Role        string `json:"role"`
-	Interests   string `json:"interests"`
-	Reservation string `json:"reservation"`
-}
-
-var defaultExperts = []expert{
-	{ID: "methodologist", Role: "Research methodology expert (causal inference, experimental design)", Interests: "Internal validity, confound elimination, proper controls", Reservation: "Drawing causal conclusions without adequate controls"},
-	{ID: "domain-expert", Role: "Domain expert with deep practical experience", Interests: "Whether claims match real-world dynamics, practical feasibility", Reservation: "Attributing outcomes to the intervention vs background noise"},
-	{ID: "statistician", Role: "Statistician (small-sample analysis, effect sizes)", Interests: "Statistical rigor, appropriate claims given sample size, multiple comparisons", Reservation: "Any claim of significance without adequate replication"},
-	{ID: "systems-critic", Role: "Systems engineer focused on reliability and failure modes", Interests: "Infrastructure reliability, data integrity, hidden failure modes", Reservation: "Trusting results from systems with known issues"},
-	{ID: "devils-advocate", Role: "Devil's advocate — finds the strongest counterargument to every claim", Interests: "Alternative explanations, unfalsifiable claims, confirmation bias", Reservation: "Accepting conclusions when simpler explanations exist"},
-}
-
 func connect(url, secret string) *sdkmcp.ClientSession {
 	transport := &sdkmcp.SSEClientTransport{
 		Endpoint: url,
@@ -58,7 +43,7 @@ func connect(url, secret string) *sdkmcp.ClientSession {
 			Timeout:   5 * time.Minute,
 		},
 	}
-	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "expert-panel", Version: "1.0"}, nil)
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "expert-panel", Version: "2.0"}, nil)
 	session, err := client.Connect(context.Background(), transport, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect failed: %v\n", err)
@@ -91,12 +76,13 @@ func main() {
 	docFile := flag.String("document", "", "Path to document to review (required)")
 	expertsFile := flag.String("experts", "", "Path to experts JSON file (optional, uses defaults)")
 	topic := flag.String("topic", "", "Deliberation topic (default: derived from document filename)")
+	sourceType := flag.String("source-type", "", "Panel type: code_review, architecture, experiment, proposal")
 	url := flag.String("url", "", "Gemot MCP URL (default: GEMOT_LIVE_URL env or https://gemot.dev/mcp)")
 	groupID := flag.String("group", "expert-panel", "Group ID for gemotvis")
 	flag.Parse()
 
 	if *docFile == "" {
-		fmt.Fprintf(os.Stderr, "Usage: expert-panel --document <path> [--experts <path>] [--topic <topic>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: expert-panel --document <path> [--experts <path>] [--topic <topic>] [--source-type <type>]\n")
 		os.Exit(1)
 	}
 
@@ -125,132 +111,84 @@ func main() {
 		}
 	}
 
-	// Load experts
-	experts := defaultExperts
+	deliberationTopic := *topic
+	if deliberationTopic == "" {
+		deliberationTopic = "Expert review: " + *docFile
+	}
+
+	// Load custom experts JSON if provided
+	var expertsJSON string
 	if *expertsFile != "" {
 		data, err := os.ReadFile(*expertsFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "reading experts: %v\n", err)
 			os.Exit(1)
 		}
-		if err := json.Unmarshal(data, &experts); err != nil {
-			fmt.Fprintf(os.Stderr, "parsing experts JSON: %v\n", err)
-			os.Exit(1)
-		}
+		expertsJSON = string(data)
 	}
 
-	deliberationTopic := *topic
-	if deliberationTopic == "" {
-		deliberationTopic = "Expert review: " + *docFile
-	}
-
-	// Step 1: Create deliberation
-	fmt.Fprintf(os.Stderr, "Creating deliberation...\n")
+	// Step 1: Create panel (returns immediately with deliberation_id)
+	fmt.Fprintf(os.Stderr, "Creating expert panel...\n")
+	start := time.Now()
 	session := connect(mcpURL, secret)
-	createJSON, err := call(session, "deliberation", map[string]any{
-		"action":      "create",
-		"topic":       deliberationTopic,
-		"description": fmt.Sprintf("Adversarial expert panel reviewing: %s", deliberationTopic),
-		"type":        "reasoning",
-		"template":    "assembly",
-		"group_id":    *groupID,
-	})
+	args := map[string]any{
+		"action":   "expert_panel",
+		"document": string(document),
+		"topic":    deliberationTopic,
+		"group_id": *groupID,
+	}
+	if *sourceType != "" {
+		args["source_type"] = *sourceType
+	}
+	if expertsJSON != "" {
+		args["experts"] = expertsJSON
+	}
+	panelJSON, err := call(session, "analyze", args)
 	session.Close()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "create failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "expert_panel failed: %v\n", err)
 		os.Exit(1)
 	}
-	var created struct {
+	var panel struct {
 		DeliberationID string `json:"deliberation_id"`
+		ExpertCount    int    `json:"expert_count"`
 	}
-	json.Unmarshal([]byte(createJSON), &created)
-	delibID := created.DeliberationID
-	fmt.Fprintf(os.Stderr, "Deliberation: %s\n", delibID)
+	json.Unmarshal([]byte(panelJSON), &panel)
+	fmt.Fprintf(os.Stderr, "Panel: %s (%d experts, analysis started)\n", panel.DeliberationID, panel.ExpertCount)
 
-	// Step 2: Submit expert positions (fresh session per expert for reliability)
-	for _, e := range experts {
-		fmt.Fprintf(os.Stderr, "  %s submitting...\n", e.ID)
-		s := connect(mcpURL, secret)
-		position := fmt.Sprintf(`You are a %s.
-
-Adversarially critique the following document. Find every weakness, amateur mistake, unjustified claim, and missing control. Be specific and constructive.
-
-Your interests: %s
-Your hard constraint: %s
-
-Provide your critique with:
-1. FATAL FLAWS: issues that invalidate the conclusions
-2. MAJOR CONCERNS: issues that significantly weaken the findings
-3. MINOR ISSUES: things to fix but don't invalidate results
-4. WHAT'S GOOD: acknowledge strengths honestly
-5. RECOMMENDED FOLLOW-UPS: specific next steps ranked by value/effort
-
-=== DOCUMENT ===
-%s`, e.Role, e.Interests, e.Reservation, string(document))
-
-		_, err := call(s, "participate", map[string]any{
-			"action":          "submit_position",
-			"deliberation_id": delibID,
-			"agent_id":        e.ID,
-			"content":         position,
-			"interests":       e.Interests,
-			"reservation":     e.Reservation,
-		})
-		s.Close()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  %s: submit failed: %v\n", e.ID, err)
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	// Step 3: Trigger analysis
-	fmt.Fprintf(os.Stderr, "Analyzing...\n")
+	// Step 2: Poll for completion with reconnect
 	s := connect(mcpURL, secret)
-	_, err = call(s, "analyze", map[string]any{
-		"action":          "run",
-		"deliberation_id": delibID,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "analyze failed: %v\n", err)
-		s.Close()
-		os.Exit(1)
-	}
-
-	// Step 4: Poll with reconnect
 	for i := 0; i < 180; i++ { // 15 minutes max
 		time.Sleep(5 * time.Second)
 		statusJSON, err := call(s, "deliberation", map[string]any{
 			"action":          "get",
-			"deliberation_id": delibID,
+			"deliberation_id": panel.DeliberationID,
 		})
 		if err != nil {
-			// Connection died — reconnect
 			s.Close()
 			fmt.Fprintf(os.Stderr, "  reconnecting...\n")
 			s = connect(mcpURL, secret)
 			continue
 		}
-
 		var status struct {
 			Status    string `json:"status"`
 			SubStatus string `json:"sub_status"`
 		}
 		json.Unmarshal([]byte(statusJSON), &status)
-
 		if status.Status == "open" {
 			break
 		}
 		if i%6 == 0 {
-			fmt.Fprintf(os.Stderr, "  %s/%s\n", status.Status, status.SubStatus)
+			fmt.Fprintf(os.Stderr, "  %s/%s (%ds)\n", status.Status, status.SubStatus, int(time.Since(start).Seconds()))
 		}
 	}
 	s.Close()
 
-	// Step 5: Fetch and display results
+	// Step 3: Fetch and display results
 	s = connect(mcpURL, secret)
 	resultJSON, err := call(s, "analyze", map[string]any{
 		"action":          "get_result",
-		"deliberation_id": delibID,
+		"deliberation_id": panel.DeliberationID,
 		"round":           1,
 	})
 	s.Close()
@@ -279,9 +217,10 @@ Provide your critique with:
 	json.Unmarshal([]byte(resultJSON), &result)
 
 	// Output
+	elapsed := time.Since(start)
 	fmt.Println("# Expert Panel Results")
-	fmt.Printf("\nDeliberation: %s\n", delibID)
-	fmt.Printf("Experts: %d\n", len(experts))
+	fmt.Printf("\nDeliberation: %s\n", panel.DeliberationID)
+	fmt.Printf("Experts: %d | Time: %ds\n", panel.ExpertCount, int(elapsed.Seconds()))
 
 	if len(result.TopicSummaries) > 0 {
 		fmt.Println("\n## Summaries\n")
