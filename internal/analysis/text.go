@@ -500,36 +500,61 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		}
 
 		reportProgress(ctx, "crux_detection")
-		foundSubtopicCrux := false
+		// Parallelize subtopic crux detection — bounded concurrency to respect API rate limits
+		type cruxResult struct {
+			crux *deliberation.Crux
+		}
+		sem := make(chan struct{}, 5) // max 5 concurrent LLM calls
+		var subtopicMu sync.Mutex
+		var subtopicCruxes []cruxResult
+		var wg sync.WaitGroup
+
 		for _, subtopic := range topic.Subtopics {
-			// Filter claims for this subtopic
 			subtopicClaims := filterClaimsBySubtopic(allClaims, topic.TopicName, subtopic.SubtopicName)
 			if len(subtopicClaims) < 2 || len(uniqueSpeakers(subtopicClaims)) < 2 {
 				continue
 			}
 
-			// Deduplicate claims within this subtopic (soft-fail: use raw claims if dedup fails)
-			deduped, err := a.deduplicateClaims(ctx, deliberationTopic, subtopic.SubtopicName, subtopicClaims)
-			if err != nil {
-				slog.Warn("dedup failed, using raw claims", "subtopic", subtopic.SubtopicName, "error", err)
-				deduped = subtopicClaims
-			}
+			wg.Add(1)
+			go func(st subtopicResult, claims []claim) {
+				defer wg.Done()
+				// Respect context cancellation while waiting for semaphore
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-sem }()
 
-			if len(uniqueSpeakers(deduped)) < 2 {
-				continue
-			}
+				deduped, err := a.deduplicateClaims(ctx, deliberationTopic, st.SubtopicName, claims)
+				if err != nil {
+					slog.Warn("dedup failed, using raw claims", "subtopic", st.SubtopicName, "error", err)
+					deduped = claims
+				}
+				if len(uniqueSpeakers(deduped)) < 2 {
+					return
+				}
 
-			claimsText := formatClaimsForCrux(deduped)
-			crux, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, subtopic.SubtopicName, subtopic.SubtopicDescription, claimsText, numToAgent)
-			if err != nil {
-				continue
-			}
-			crux.Topic = topic.TopicName
-			crux.Subtopic = subtopic.SubtopicName
-			crux.SourcePositionIDs = collectPositionIDs(subtopicClaims)
-			crux.SourceQuotes = collectSourceQuotes(subtopicClaims)
-			cruxes = append(cruxes, *crux)
-			foundSubtopicCrux = true
+				claimsText := formatClaimsForCrux(deduped)
+				crux, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, st.SubtopicName, st.SubtopicDescription, claimsText, numToAgent)
+				if err != nil {
+					return
+				}
+				crux.Topic = topic.TopicName
+				crux.Subtopic = st.SubtopicName
+				crux.SourcePositionIDs = collectPositionIDs(claims)
+				crux.SourceQuotes = collectSourceQuotes(claims)
+
+				subtopicMu.Lock()
+				subtopicCruxes = append(subtopicCruxes, cruxResult{crux: crux})
+				subtopicMu.Unlock()
+			}(subtopic, subtopicClaims)
+		}
+		wg.Wait()
+
+		foundSubtopicCrux := len(subtopicCruxes) > 0
+		for _, sr := range subtopicCruxes {
+			cruxes = append(cruxes, *sr.crux)
 		}
 
 		// Fallback: run topic-level crux detection if orphaned claims exist.
