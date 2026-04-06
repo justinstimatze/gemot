@@ -233,6 +233,41 @@
 </div>
 
 <p style="color:#64748b; font-size:0.85rem; margin-top:0.75rem;">Full tool reference at <a href="/docs">/docs</a>. Export deliberation data as CSV at <code>/export?deliberation_id=...</code> for use with <a href="https://talktothe.city">Talk to the City</a> or other tools.</p>
+
+<h2 style="margin-top:2.5rem;">Self-host it</h2>
+
+<p style="color:#475569; font-size:0.9rem; margin-bottom:1rem;">Gemot is <a href="https://github.com/justinstimatze/gemot">open source</a> (Apache 2.0). Run it locally and your data never leaves your machine &mdash; the only external call is to the Anthropic API for LLM analysis. No telemetry, no data collection.</p>
+
+<div class="setup-step">
+  <div class="setup-num">1</div>
+  <div class="setup-text"><strong>Start Postgres and build gemot.</strong>
+    <pre style="margin-top:0.5rem;margin-bottom:0;"><code>git clone https://github.com/justinstimatze/gemot && cd gemot
+docker compose up -d        # starts Postgres
+go build -o gemot .</code></pre></div>
+</div>
+
+<div class="setup-step">
+  <div class="setup-num">2</div>
+  <div class="setup-text"><strong>Set your Anthropic key and run.</strong>
+    <pre style="margin-top:0.5rem;margin-bottom:0;"><code>export GEMOT_ANTHROPIC_KEY=sk-ant-...
+export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
+./gemot http --addr :8080</code></pre></div>
+</div>
+
+<div class="setup-step">
+  <div class="setup-num">3</div>
+  <div class="setup-text"><strong>Point your agent at localhost.</strong> No API key needed &mdash; auth is disabled in local mode.
+    <pre style="margin-top:0.5rem;margin-bottom:0;"><code>{
+  "mcpServers": {
+    "gemot": {
+      "type": "sse",
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}</code></pre></div>
+</div>
+
+<p style="color:#64748b; font-size:0.85rem; margin-top:0.75rem;">For stdio mode (single agent, no HTTP): <code>./gemot serve</code>. Schema auto-migrates on first run.</p>
 </div>
 
 <div class="cta-row">
