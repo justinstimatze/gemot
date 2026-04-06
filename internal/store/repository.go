@@ -274,9 +274,15 @@ func (s *DB) CreatePosition(ctx context.Context, p *deliberation.Position) error
 	if p.Draft {
 		draft = 1
 	}
+	metadataJSON := "{}"
+	if p.Metadata != nil {
+		if b, err := json.Marshal(p.Metadata); err == nil {
+			metadataJSON = string(b)
+		}
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, interests, draft, round_number, created_at, parent_position_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, p.Interests, draft, p.Round, p.CreatedAt, p.ParentPositionID,
+		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, interests, draft, round_number, created_at, parent_position_id, metadata) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, p.Interests, draft, p.Round, p.CreatedAt, p.ParentPositionID, metadataJSON,
 	)
 	return err
 }
@@ -285,7 +291,7 @@ func (s *DB) GetPositions(ctx context.Context, deliberationID string, round *int
 	var rows *rowsWrapper
 	if round != nil {
 		r, err := s.db.QueryContext(ctx,
-			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE deliberation_id = $1 AND round_number = $2 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
+			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}') FROM positions WHERE deliberation_id = $1 AND round_number = $2 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID, *round,
 		)
 		if err != nil {
@@ -294,7 +300,7 @@ func (s *DB) GetPositions(ctx context.Context, deliberationID string, round *int
 		rows = &rowsWrapper{r}
 	} else {
 		r, err := s.db.QueryContext(ctx,
-			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE deliberation_id = $1 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
+			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}') FROM positions WHERE deliberation_id = $1 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID,
 		)
 		if err != nil {
@@ -309,11 +315,15 @@ func (s *DB) GetPositions(ctx context.Context, deliberationID string, round *int
 		var p deliberation.Position
 		var createdAt time.Time
 		var draftInt int
-		if err := rows.Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID); err != nil {
+		var metadataJSON string
+		if err := rows.Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID, &metadataJSON); err != nil {
 			return nil, err
 		}
 		p.Draft = draftInt == 1
 		p.CreatedAt = createdAt
+		if metadataJSON != "" && metadataJSON != "{}" {
+			_ = json.Unmarshal([]byte(metadataJSON), &p.Metadata)
+		}
 		result = append(result, p)
 	}
 	return result, rows.Err()
@@ -323,12 +333,16 @@ func (s *DB) GetPositionByID(ctx context.Context, id string) (*deliberation.Posi
 	p := &deliberation.Position{}
 	var createdAt time.Time
 	var draftInt int
+	var metadataJSON string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, '') FROM positions WHERE id = $1`, id,
-	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID)
+		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}') FROM positions WHERE id = $1`, id,
+	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID, &metadataJSON)
 	p.Draft = draftInt == 1
 	if err != nil {
 		return nil, err
+	}
+	if metadataJSON != "" && metadataJSON != "{}" {
+		_ = json.Unmarshal([]byte(metadataJSON), &p.Metadata)
 	}
 	p.CreatedAt = createdAt
 	return p, nil

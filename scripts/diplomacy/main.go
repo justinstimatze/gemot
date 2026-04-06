@@ -621,6 +621,18 @@ type pendingPosition struct {
 	agentID        string
 	content        string
 	interests      string
+	metadata       map[string]any
+}
+
+// powerCoordinates maps Diplomacy powers to real-world capital lat/lon for gemotvis.
+var powerCoordinates = map[string][2]float64{
+	"austria": {48.21, 16.37},  // Vienna
+	"england": {51.51, -0.13},  // London
+	"france":  {48.86, 2.35},   // Paris
+	"germany": {52.52, 13.40},  // Berlin
+	"italy":   {41.90, 12.50},  // Rome
+	"russia":  {55.76, 37.62},  // Moscow
+	"turkey":  {41.01, 28.98},  // Istanbul
 }
 
 // analyzeScopes processes all scopes through a 3-stage pipeline:
@@ -753,13 +765,17 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 						continue
 					}
 				}
-				result := callToolSoft(ctx, submitSession, "participate", map[string]any{
+				submitArgs := map[string]any{
 					"action":          "submit_position",
 					"deliberation_id": pp.deliberationID,
 					"agent_id":        pp.agentID,
 					"content":         pp.content,
 					"interests":       pp.interests,
-				})
+				}
+				if pp.metadata != nil {
+					submitArgs["metadata"] = pp.metadata
+				}
+				result := callToolSoft(ctx, submitSession, "participate", submitArgs)
 				if result == "" {
 					// Connection may have died — reconnect and retry
 					submitSession.Close() //nolint:errcheck
@@ -768,13 +784,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 						fmt.Fprintf(os.Stderr, "  Stage B: reconnect failed: %v\n", err)
 						break
 					}
-					callToolSoft(ctx, submitSession, "participate", map[string]any{
-						"action":          "submit_position",
-						"deliberation_id": pp.deliberationID,
-						"agent_id":        pp.agentID,
-						"content":         pp.content,
-						"interests":       pp.interests,
-					})
+					callToolSoft(ctx, submitSession, "participate", submitArgs)
 				}
 			}
 
@@ -981,12 +991,18 @@ func collectPositions(sc scope, deliberationID string) []pendingPosition {
 	for _, msg := range sc.messages {
 		sender := strings.ToUpper(msg.Sender)
 		recipient := strings.ToUpper(msg.Recipient)
+		agentID := strings.ToLower(msg.Sender) + "-agent"
+		var md map[string]any
+		if coords, ok := powerCoordinates[strings.ToLower(msg.Sender)]; ok {
+			md = map[string]any{"lat": coords[0], "lon": coords[1]}
+		}
 		positions = append(positions, pendingPosition{
 			scopeName:      sc.name,
 			deliberationID: deliberationID,
-			agentID:        strings.ToLower(msg.Sender) + "-agent",
+			agentID:        agentID,
 			content:        fmt.Sprintf("[%s → %s, %s] %s", sender, recipient, msg.Phase, msg.Content),
 			interests:      fmt.Sprintf("%s's strategic objectives", strings.ToLower(msg.Sender)),
+			metadata:       md,
 		})
 	}
 	return positions

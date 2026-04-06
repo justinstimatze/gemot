@@ -552,28 +552,40 @@
 <details class="demo-card" id="demo-panel">
 <summary>
   <div>
-    <div class="demo-card-title">Adversarial Expert Panel &mdash; pressure-test any document</div>
-    <div class="demo-card-desc">5 expert agents (methodologist, domain expert, statistician, systems engineer, devil's advocate) critique a research writeup. Gemot finds the 8 cruxes where experts actually disagree &mdash; not just a list of concerns.</div>
+    <div class="demo-card-title">Adversarial Expert Panel &mdash; pressure-test anything</div>
+    <div class="demo-card-desc">Specialized expert panels for code reviews, architecture decisions, experiment results, and proposals. Gemot finds where the experts genuinely disagree &mdash; not just a list of concerns.</div>
   </div>
 </summary>
 <div class="demo-card-body">
 
-<p style="color:#475569; margin-bottom:1rem;">Feed any document &mdash; a research plan, product spec, grant proposal, experiment results &mdash; to an adversarial panel. Each expert critiques from their perspective. Gemot's crux detection surfaces where the experts genuinely disagree, not just where they have different concerns.</p>
+<p style="color:#475569; margin-bottom:1rem;">Feed any document to an adversarial panel. Each expert critiques from their perspective. Gemot's crux detection surfaces where the experts <em>disagree with each other</em> about severity and interpretation &mdash; that's where your real decision points are.</p>
+
+<h3>Specialized panels</h3>
+<ul style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
+  <li><strong>Code review:</strong> Security reviewer, API designer, reliability engineer, maintainability expert, devil's advocate</li>
+  <li><strong>Architecture:</strong> Scalability architect, security architect, platform engineer, simplicity advocate, devil's advocate</li>
+  <li><strong>Experiment:</strong> Methodologist, domain expert, statistician, systems critic, devil's advocate</li>
+  <li><strong>Proposal:</strong> Feasibility engineer, customer advocate, tech debt analyst, business case analyst, devil's advocate</li>
+</ul>
 
 <h3>What you get</h3>
 <ul style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
-  <li><strong>Topic summaries:</strong> What each area of critique covers (statistical validity, causal isolation, structural biases...)</li>
-  <li><strong>Cruxes:</strong> The specific claims experts split on, with sides labeled. "Is the confounded design fatal or just a limitation?" &mdash; methodologist says fatal, statistician says limitation.</li>
-  <li><strong>Follow-up plan:</strong> Ranked next steps that address the strongest objections first.</li>
+  <li><strong>Topic summaries:</strong> What each area of critique covers</li>
+  <li><strong>Cruxes:</strong> The specific claims experts split on, with sides labeled</li>
+  <li><strong>Follow-up plan:</strong> Ranked next steps that address the strongest objections first</li>
 </ul>
 
-<h3>One command</h3>
-<pre><code>go run scripts/expert-panel/ --document my-plan.md</code></pre>
-<p style="color:#64748b; font-size:0.85rem; margin-top:0.5rem;">Custom experts via <code>--experts panel.json</code>. Default panel: methodologist, domain expert, statistician, systems critic, devil's advocate.</p>
+<h3>One call</h3>
+<pre><code>// From any MCP client (Claude Code, Cursor, etc.)
+analyze action:expert_panel document:"..." source_type:code_review
 
-<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">Unlike asking a single model to critique your work (which produces a flat list of concerns), the panel structure forces genuine adversarial tension. The crux detection algorithm finds where the <em>experts disagree with each other</em> about the severity or interpretation of issues &mdash; that's where your real decision points are.</p>
+// Or via the standalone script
+go run scripts/expert-panel/ --document my-plan.md</code></pre>
+<p style="color:#64748b; font-size:0.85rem; margin-top:0.5rem;">Custom experts via JSON. <code>source_type</code> selects the panel and prompt framing automatically.</p>
 
-<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">Assembly template &middot; 5 agents &middot; ~5 min analysis &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/expert-panel/">source</a></p>
+<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">Unlike asking a single model to critique your work (which produces a flat list of concerns), the panel structure forces genuine adversarial tension. Each expert has declared interests and hard constraints that shape their critique. The crux detection algorithm finds where experts disagree with <em>each other</em> &mdash; those disagreements are where you need to make actual decisions.</p>
+
+<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">Assembly template &middot; 5 agents &middot; ~2 min analysis &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/expert-panel/">source</a></p>
 
 </div>
 </details>
