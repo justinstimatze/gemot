@@ -306,7 +306,7 @@ No API key needed — the join code is your credential.
 		w.Header().Set("Content-Type", "application/json")
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
-		if apiSecret == "" || !strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1 {
+		if apiSecret != "" && (!strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1) {
 			http.Error(w, `{"error":"admin access required"}`, http.StatusUnauthorized)
 			return
 		}
