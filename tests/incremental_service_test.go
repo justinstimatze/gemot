@@ -563,7 +563,7 @@ func TestExpertPanelCore(t *testing.T) {
 	ctx := context.Background()
 
 	// Run expert panel with default experts (creates deliberation + submits positions)
-	result, err := mcp.CoreRunExpertPanel(ctx, svc, "This is a test document with some claims about AI safety.", "Test panel", "", "test-group", "", "", "")
+	result, err := mcp.CoreRunExpertPanel(ctx, svc, "This is a test document with some claims about AI safety.", "Test panel", "", "test-group", "", "", "", "")
 	if err != nil {
 		t.Fatalf("expert panel failed: %v", err)
 	}
@@ -619,7 +619,7 @@ func TestExpertPanelCustomExperts(t *testing.T) {
 	ctx := context.Background()
 	customExperts := `[{"id":"economist","role":"Behavioral economist","interests":"incentive design","reservation":"ignoring second-order effects"},{"id":"ethicist","role":"Applied ethicist","interests":"fairness and equity","reservation":"utilitarian shortcuts"}]`
 
-	result, err := mcp.CoreRunExpertPanel(ctx, svc, "Test document content.", "Custom panel", customExperts, "", "", "", "")
+	result, err := mcp.CoreRunExpertPanel(ctx, svc, "Test document content.", "Custom panel", customExperts, "", "", "", "", "")
 	if err != nil {
 		t.Fatalf("expert panel failed: %v", err)
 	}
@@ -647,7 +647,7 @@ func TestExpertPanelSourceType(t *testing.T) {
 	ctx := context.Background()
 
 	// code_review source_type should use code review experts
-	result, err := mcp.CoreRunExpertPanel(ctx, svc, "func main() { fmt.Println(\"hello\") }", "Review main.go", "", "", "", "", "code_review")
+	result, err := mcp.CoreRunExpertPanel(ctx, svc, "func main() { fmt.Println(\"hello\") }", "Review main.go", "", "", "", "", "code_review", "")
 	if err != nil {
 		t.Fatalf("expert panel failed: %v", err)
 	}
@@ -682,7 +682,7 @@ func TestExpertPanelSourceType(t *testing.T) {
 	}
 
 	// Invalid source_type
-	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "", "", "", "", "invalid_type")
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "", "", "", "", "invalid_type", "")
 	if err == nil {
 		t.Error("expected error for invalid source_type")
 	}
@@ -695,26 +695,56 @@ func TestExpertPanelValidation(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty document
-	_, err := mcp.CoreRunExpertPanel(ctx, svc, "", "Test", "", "", "", "", "")
+	_, err := mcp.CoreRunExpertPanel(ctx, svc, "", "Test", "", "", "", "", "", "")
 	if err == nil {
 		t.Error("expected error for empty document")
 	}
 
 	// Document too large
-	_, err = mcp.CoreRunExpertPanel(ctx, svc, strings.Repeat("x", 50001), "Test", "", "", "", "", "")
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, strings.Repeat("x", 50001), "Test", "", "", "", "", "", "")
 	if err == nil {
 		t.Error("expected error for document > 50000 chars")
 	}
 
 	// Invalid experts JSON
-	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "not json", "", "", "", "")
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "not json", "", "", "", "", "")
 	if err == nil {
 		t.Error("expected error for invalid experts JSON")
 	}
 
 	// Empty experts array
-	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "[]", "", "", "", "")
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "[]", "", "", "", "", "")
 	if err == nil {
 		t.Error("expected error for empty experts array")
+	}
+
+	// Invalid depth
+	_, err = mcp.CoreRunExpertPanel(ctx, svc, "doc", "Test", "", "", "", "", "", "invalid")
+	if err == nil {
+		t.Error("expected error for invalid depth")
+	}
+}
+
+func TestExpertPanelQuickDepth(t *testing.T) {
+	db := tempDB(t)
+	analyzer := &capturingAnalyzer{}
+	svc := deliberation.NewService(db, analyzer)
+	ctx := context.Background()
+
+	// Quick mode should use only 3 experts
+	result, err := mcp.CoreRunExpertPanel(ctx, svc, "Test document.", "Quick test", "", "", "", "", "", "quick")
+	if err != nil {
+		t.Fatalf("quick expert panel failed: %v", err)
+	}
+	if result.ExpertCount != 3 {
+		t.Errorf("quick mode should use 3 experts, got %d", result.ExpertCount)
+	}
+
+	positions, err := svc.GetPositions(result.DeliberationID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(positions) != 3 {
+		t.Errorf("expected 3 positions in quick mode, got %d", len(positions))
 	}
 }

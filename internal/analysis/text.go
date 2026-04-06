@@ -19,6 +19,10 @@ import (
 	"github.com/justinstimatze/gemot/internal/sanitize"
 )
 
+// Context keys for taxonomy size limits.
+type ContextKeyMaxTopics struct{}
+type ContextKeyMaxSubtopics struct{}
+
 // ClaimCache provides optional caching for claim extraction LLM calls.
 type ClaimCache interface {
 	Get(key string) string // returns "" if not found/expired
@@ -935,18 +939,29 @@ func recommendAction(r *deliberation.AnalysisResult) string {
 // --- LLM call methods ---
 
 func (a *TextAnalyzer) getTaxonomy(ctx context.Context, deliberationTopic, positionText string) (*taxonomyResult, error) {
+	maxTopics := 6
+	maxSubtopics := 5
+	if v, ok := ctx.Value(ContextKeyMaxTopics{}).(int); ok && v > 0 {
+		maxTopics = v
+	}
+	if v, ok := ctx.Value(ContextKeyMaxSubtopics{}).(int); ok && v > 0 {
+		maxSubtopics = v
+	}
+
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"topics": map[string]any{
-				"type": "array",
+				"type":     "array",
+				"maxItems": maxTopics,
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"topic_name":        map[string]any{"type": "string"},
 						"topic_description": map[string]any{"type": "string"},
 						"subtopics": map[string]any{
-							"type": "array",
+							"type":     "array",
+							"maxItems": maxSubtopics,
 							"items": map[string]any{
 								"type": "object",
 								"properties": map[string]any{
@@ -964,11 +979,28 @@ func (a *TextAnalyzer) getTaxonomy(ctx context.Context, deliberationTopic, posit
 		"required": []string{"topics"},
 	}
 
-	prompt := strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{POSITIONS}}", positionText).Replace(taxonomyPrompt)
+	prompt := strings.NewReplacer(
+		"{{TOPIC}}", deliberationTopic,
+		"{{POSITIONS}}", positionText,
+		"{{MAX_TOPICS}}", strconv.Itoa(maxTopics),
+		"{{MAX_SUBTOPICS}}", strconv.Itoa(maxSubtopics),
+	).Replace(taxonomyPrompt)
+
 	var result taxonomyResult
 	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
 		return nil, err
 	}
+
+	// Enforce caps in code (defense in depth — LLM may ignore schema constraints)
+	if len(result.Topics) > maxTopics {
+		result.Topics = result.Topics[:maxTopics]
+	}
+	for i := range result.Topics {
+		if len(result.Topics[i].Subtopics) > maxSubtopics {
+			result.Topics[i].Subtopics = result.Topics[i].Subtopics[:maxSubtopics]
+		}
+	}
+
 	return &result, nil
 }
 

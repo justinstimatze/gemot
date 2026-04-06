@@ -8,6 +8,12 @@ const systemPrompt = `You are a professional research assistant. You have helped
 // taxonomyPrompt: {{TOPIC}} = deliberation topic, {{POSITIONS}} = positions text
 const taxonomyPrompt = `I will give you a list of positions from agents in a deliberation about "{{TOPIC}}". I want you to propose a way to break down the information contained in these positions into topics and subtopics of interest.
 
+SIZE CONSTRAINTS:
+- Maximum {{MAX_TOPICS}} topics
+- Maximum {{MAX_SUBTOPICS}} subtopics per topic
+- Merge closely related areas into a single topic rather than creating separate ones
+- Only create subtopics for genuinely distinct dimensions within a topic
+
 DESCRIPTION LENGTH REQUIREMENTS:
 - Topic names: Keep very concise (2-5 words)
 - Topic descriptions: MUST be 25-35 words. Provide a clear overview of what this topic covers.
