@@ -311,28 +311,28 @@ No API key needed — the join code is your credential.
 			return
 		}
 		var stats struct {
-			Deliberations    int `json:"deliberations"`
-			ActiveDelibs     int `json:"active_deliberations"`
-			Positions        int `json:"positions"`
-			Votes            int `json:"votes"`
-			Analyses         int `json:"analyses"`
-			Disputes         int `json:"disputes"`
-			APIKeys          int `json:"api_keys"`
-			TotalCredits     int `json:"total_credits_remaining"`
-			CacheEntries     int `json:"cache_entries"`
-			UniqueAgents     int `json:"unique_agents"`
+			Deliberations    int     `json:"deliberations"`
+			ActiveDelibs     int     `json:"active_deliberations"`
+			Positions        int     `json:"positions"`
+			Votes            int     `json:"votes"`
+			Analyses         int     `json:"analyses"`
+			Disputes         int     `json:"disputes"`
+			APIKeys          int     `json:"api_keys"`
+			TotalCredits     int     `json:"total_credits_remaining"`
+			CacheEntries     int     `json:"cache_entries"`
+			UniqueAgents     int     `json:"unique_agents"`
 			AvgPositionsPerD float64 `json:"avg_positions_per_deliberation"`
 		}
-		db.QueryRow("SELECT COUNT(*) FROM deliberations").Scan(&stats.Deliberations)                                          //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM deliberations WHERE status IN ('open','analyzing')").Scan(&stats.ActiveDelibs)       //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM positions").Scan(&stats.Positions)                                                   //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM votes").Scan(&stats.Votes)                                                          //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM analysis_results").Scan(&stats.Analyses)                                            //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM disputes").Scan(&stats.Disputes)                                                    //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM api_keys").Scan(&stats.APIKeys)                                                     //nolint:errcheck
-		db.QueryRow("SELECT COALESCE(SUM(credits_remaining), 0) FROM api_keys").Scan(&stats.TotalCredits)                     //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM llm_cache").Scan(&stats.CacheEntries)                                               //nolint:errcheck
-		db.QueryRow("SELECT COUNT(DISTINCT agent_id) FROM positions").Scan(&stats.UniqueAgents)                                //nolint:errcheck
+		db.QueryRow("SELECT COUNT(*) FROM deliberations").Scan(&stats.Deliberations)                                                             //nolint:errcheck
+		db.QueryRow("SELECT COUNT(*) FROM deliberations WHERE status IN ('open','analyzing')").Scan(&stats.ActiveDelibs)                         //nolint:errcheck
+		db.QueryRow("SELECT COUNT(*) FROM positions").Scan(&stats.Positions)                                                                     //nolint:errcheck
+		db.QueryRow("SELECT COUNT(*) FROM votes").Scan(&stats.Votes)                                                                             //nolint:errcheck
+		db.QueryRow("SELECT COUNT(*) FROM analysis_results").Scan(&stats.Analyses)                                                               //nolint:errcheck
+		db.QueryRow("SELECT COUNT(*) FROM disputes").Scan(&stats.Disputes)                                                                       //nolint:errcheck
+		db.QueryRow("SELECT COUNT(*) FROM api_keys").Scan(&stats.APIKeys)                                                                        //nolint:errcheck
+		db.QueryRow("SELECT COALESCE(SUM(credits_remaining), 0) FROM api_keys").Scan(&stats.TotalCredits)                                        //nolint:errcheck
+		db.QueryRow("SELECT COUNT(*) FROM llm_cache").Scan(&stats.CacheEntries)                                                                  //nolint:errcheck
+		db.QueryRow("SELECT COUNT(DISTINCT agent_id) FROM positions").Scan(&stats.UniqueAgents)                                                  //nolint:errcheck
 		db.QueryRow("SELECT COALESCE(AVG(c), 0) FROM (SELECT COUNT(*) c FROM positions GROUP BY deliberation_id)").Scan(&stats.AvgPositionsPerD) //nolint:errcheck
 
 		json.NewEncoder(w).Encode(stats) //nolint:errcheck
@@ -478,9 +478,10 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		agreeCounts := map[string]int{}
 		disagreeCounts := map[string]int{}
 		for _, v := range votes {
-			if v.Value == 1 {
+			switch v.Value {
+			case 1:
 				agreeCounts[v.PositionID]++
-			} else if v.Value == -1 {
+			case -1:
 				disagreeCounts[v.PositionID]++
 			}
 		}
@@ -569,14 +570,14 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		if strings.Contains(accept, "application/json") {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-				"deliberation_id": d.ID,
-				"topic":           topic,
-				"join_code":       jc.Code,
-				"join_url":        "https://gemot.dev/join/" + jc.Code,
-				"try_url":         "https://gemot.dev/try/" + jc.Code,
-				"expires_at":      jc.ExpiresAt.Format(time.RFC3339),
+				"deliberation_id":  d.ID,
+				"topic":            topic,
+				"join_code":        jc.Code,
+				"join_url":         "https://gemot.dev/join/" + jc.Code,
+				"try_url":          "https://gemot.dev/try/" + jc.Code,
+				"expires_at":       jc.ExpiresAt.Format(time.RFC3339),
 				"max_participants": 10,
-				"instructions":    "Tell your agent: Join the gemot deliberation with code " + jc.Code,
+				"instructions":     "Tell your agent: Join the gemot deliberation with code " + jc.Code,
 			})
 			return
 		}
@@ -766,11 +767,24 @@ type syncWriter struct {
 	f  http.Flusher
 }
 
-func (s *syncWriter) Header() http.Header                           { return s.w.Header() } // safe: returns map reference, concurrent map access is ok for reads
-func (s *syncWriter) WriteHeader(statusCode int)                    { s.mu.Lock(); defer s.mu.Unlock(); s.w.WriteHeader(statusCode) }
-func (s *syncWriter) Write(p []byte) (int, error)  { s.mu.Lock(); defer s.mu.Unlock(); return s.w.Write(p) }
-func (s *syncWriter) Flush()                       { s.mu.Lock(); defer s.mu.Unlock(); s.f.Flush() }
-func (s *syncWriter) WriteAndFlush(p []byte)       { s.mu.Lock(); defer s.mu.Unlock(); s.w.Write(p); s.f.Flush() } //nolint:errcheck
+func (s *syncWriter) Header() http.Header { return s.w.Header() } // safe: returns map reference, concurrent map access is ok for reads
+func (s *syncWriter) WriteHeader(statusCode int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.w.WriteHeader(statusCode)
+}
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+func (s *syncWriter) Flush() { s.mu.Lock(); defer s.mu.Unlock(); s.f.Flush() }
+func (s *syncWriter) WriteAndFlush(p []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.w.Write(p)
+	s.f.Flush()
+} //nolint:errcheck
 
 // ClientIP extracts the real client IP from a request, preferring
 // Fly-Client-IP (set by Fly proxy, cannot be forged) over X-Forwarded-For.

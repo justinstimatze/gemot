@@ -124,7 +124,7 @@ func (s *DB) ListByGroup(ctx context.Context, groupID string, limit, offset int,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	return scanDeliberationRows(rows)
 }
 
@@ -145,7 +145,7 @@ func (s *DB) ListByAgent(ctx context.Context, agentID string, limit, offset int,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	return scanDeliberationRows(rows)
 }
 
@@ -459,7 +459,7 @@ func (s *DB) GetStuckAnalyzing(ctx context.Context, maxAge time.Duration) ([]str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer rows.Close() //nolint:errcheck
 	var ids []string
 	for rows.Next() {
 		var id string
@@ -959,13 +959,9 @@ func (s *DB) LogAuditEvent(keyID, ip, method, deliberationID, agentID string) {
 	)
 }
 
-// DeleteExpiredSandboxDeliberations hard-deletes old sandbox deliberations.
-// Sandbox data has no compliance value — safe to purge.
-func (s *DB) DeleteExpiredSandboxDeliberations(maxAge time.Duration) (int, error) {
-	cutoff := time.Now().Add(-maxAge).UTC()
-	rows, err := s.db.Query(
-		`SELECT id FROM deliberations WHERE visibility = 'link' AND template != '' AND created_at < $1`, cutoff,
-	)
+// purgeByQuery finds deliberation IDs matching the query and hard-deletes them.
+func (s *DB) purgeByQuery(query string, args ...any) (int, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -984,28 +980,21 @@ func (s *DB) DeleteExpiredSandboxDeliberations(maxAge time.Duration) (int, error
 	return len(ids), nil
 }
 
+// DeleteExpiredSandboxDeliberations hard-deletes old sandbox deliberations.
+// Sandbox data has no compliance value — safe to purge.
+func (s *DB) DeleteExpiredSandboxDeliberations(maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge).UTC()
+	return s.purgeByQuery(
+		`SELECT id FROM deliberations WHERE visibility = 'link' AND template != '' AND created_at < $1`, cutoff,
+	)
+}
+
 // PurgeSoftDeleted hard-deletes deliberations that were soft-deleted more than maxAge ago.
 func (s *DB) PurgeSoftDeleted(maxAge time.Duration) (int, error) {
 	cutoff := time.Now().Add(-maxAge).UTC()
-	rows, err := s.db.Query(
+	return s.purgeByQuery(
 		`SELECT id FROM deliberations WHERE status = 'deleted' AND status_changed_at < $1`, cutoff,
 	)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close() //nolint:errcheck
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return 0, err
-		}
-		ids = append(ids, id)
-	}
-	for _, id := range ids {
-		s.hardDeleteDeliberation(id) //nolint:errcheck
-	}
-	return len(ids), nil
 }
 
 // CreateShareToken stores a share token for a group.

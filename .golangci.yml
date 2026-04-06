@@ -11,19 +11,25 @@ linters:
     - staticcheck
     - ineffassign
     - unused
+    - dupl
+  settings:
+    dupl:
+      threshold: 150
+    errcheck:
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprint
+        - fmt.Fprintln
+        - (net/http.ResponseWriter).Write
+  exclusions:
+    paths:
+      - testdata
+      - scripts
 
 formatters:
   enable:
     - gofmt
-
-linters-settings:
-  errcheck:
-    exclude-functions:
-      - fmt.Fprintf
-      - fmt.Fprint
-      - (net/http.ResponseWriter).Write
-
-issues:
-  exclude-dirs:
-    - testdata
-    - scripts
+  exclusions:
+    paths:
+      - testdata
+      - scripts

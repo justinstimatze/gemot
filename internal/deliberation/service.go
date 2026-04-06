@@ -201,17 +201,17 @@ func WithParentPosition(id string) PositionOption {
 
 // Service orchestrates deliberation operations.
 type Service struct {
-	store            Store
-	analyzer         Analyzer
-	compromiser      CompromiseGenerator
-	reframer         Reframer
+	store             Store
+	analyzer          Analyzer
+	compromiser       CompromiseGenerator
+	reframer          Reframer
 	contentClassifier sanitize.Classifier
-	events           *EventBus // nil = no event emission
+	events            *EventBus // nil = no event emission
 
 	// Active analysis cancellation: deliberation_id → cancel func.
 	// Used by stuck recovery to kill zombie analysis goroutines.
-	analysisMu      sync.Mutex
-	activeAnalyses  map[string]context.CancelFunc
+	analysisMu     sync.Mutex
+	activeAnalyses map[string]context.CancelFunc
 
 	// Per-deliberation lock for vote+resolution atomicity.
 	// Prevents concurrent votes from computing conflicting resolutions.
@@ -947,6 +947,17 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		resetStatus()
 		return nil, err
 	}
+
+	// Require at least 2 distinct agents — crux analysis needs multiple perspectives
+	agentCheck := map[string]bool{}
+	for _, p := range positions {
+		agentCheck[p.AgentID] = true
+	}
+	if len(agentCheck) < 2 {
+		resetStatus()
+		return nil, fmt.Errorf("analysis requires at least 2 agents, found %d", len(agentCheck))
+	}
+
 	votes, err := s.store.GetVotes(ctx, deliberationID)
 	if err != nil {
 		resetStatus()
@@ -1743,7 +1754,7 @@ func (s *Service) DisputeCrux(deliberationID, agentID, cruxClaim, correction str
 		DeliberationID: deliberationID,
 		AgentID:        agentID,
 		CruxClaim:      cruxClaim,
-		Correction:      correction,
+		Correction:     correction,
 	}
 	if err := s.store.CreateDispute(context.TODO(), d); err != nil {
 		return nil, err
