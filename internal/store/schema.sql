@@ -212,3 +212,6 @@ ALTER TABLE deliberations ADD COLUMN IF NOT EXISTS deadline_at TIMESTAMPTZ;
 
 -- Migration: parent_position_id for Roberts Rules amendments
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS parent_position_id TEXT DEFAULT '';
+
+-- Migration: position metadata (JSON map for agent coordinates, labels, etc.)
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS metadata TEXT DEFAULT '{}';

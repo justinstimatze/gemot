@@ -124,7 +124,7 @@ func newServer(s *server) *sdkmcp.Server {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "participate",
 		Description: `Participate in a deliberation. Actions:
-- submit_position: Submit your position (deliberation_id, agent_id, content; optional: model_family, group, conviction, reservation, on_behalf_of, interests, draft)
+- submit_position: Submit your position (deliberation_id, agent_id, content; optional: model_family, group, conviction, reservation, on_behalf_of, interests, draft, metadata)
 - publish_position: Publish a draft position (position_id)
 - vote: Vote on a position — 1=agree, 0=pass, -1=disagree (deliberation_id, agent_id, position_id, value)
 - get_positions: Get all positions (deliberation_id; optional: round, exclude_agent_id, group, shuffle)
@@ -203,23 +203,24 @@ type deliberationParams struct {
 }
 
 type participateParams struct {
-	Action         string  `json:"action"`
-	DeliberationID string  `json:"deliberation_id,omitempty"`
-	AgentID        string  `json:"agent_id,omitempty"`
-	Content        string  `json:"content,omitempty"`
-	ModelFamily    string  `json:"model_family,omitempty"`
-	Group          string  `json:"group,omitempty"`
-	Conviction     float64 `json:"conviction,omitempty"`
-	Reservation    string  `json:"reservation,omitempty"`
-	OnBehalfOf     string  `json:"on_behalf_of,omitempty"`
-	Interests      string  `json:"interests,omitempty"`
-	Draft          bool    `json:"draft,omitempty"`
-	PositionID     string  `json:"position_id,omitempty"`
-	Value          any     `json:"value,omitempty"`
-	CriterionID    string  `json:"criterion_id,omitempty"`
-	ExcludeAgentID *string `json:"exclude_agent_id,omitempty"`
-	Round          *int    `json:"round,omitempty"`
-	Shuffle        *bool   `json:"shuffle,omitempty"`
+	Action         string         `json:"action"`
+	DeliberationID string         `json:"deliberation_id,omitempty"`
+	AgentID        string         `json:"agent_id,omitempty"`
+	Content        string         `json:"content,omitempty"`
+	ModelFamily    string         `json:"model_family,omitempty"`
+	Group          string         `json:"group,omitempty"`
+	Conviction     float64        `json:"conviction,omitempty"`
+	Reservation    string         `json:"reservation,omitempty"`
+	OnBehalfOf     string         `json:"on_behalf_of,omitempty"`
+	Interests      string         `json:"interests,omitempty"`
+	Draft          bool           `json:"draft,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	PositionID     string         `json:"position_id,omitempty"`
+	Value          any            `json:"value,omitempty"`
+	CriterionID    string         `json:"criterion_id,omitempty"`
+	ExcludeAgentID *string        `json:"exclude_agent_id,omitempty"`
+	Round          *int           `json:"round,omitempty"`
+	Shuffle        *bool          `json:"shuffle,omitempty"`
 }
 
 type analyzeToolParams struct {
@@ -442,6 +443,9 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		}
 		if args.Draft {
 			opts = append(opts, deliberation.WithDraft())
+		}
+		if len(args.Metadata) > 0 {
+			opts = append(opts, deliberation.WithMetadata(args.Metadata))
 		}
 		p, err := s.svc.SubmitPosition(args.DeliberationID, args.AgentID, args.Content, opts...)
 		if err != nil {

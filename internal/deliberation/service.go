@@ -200,6 +200,11 @@ func WithParentPosition(id string) PositionOption {
 	return func(p *Position) { p.ParentPositionID = id }
 }
 
+// WithMetadata sets extensible metadata on a position (lat, lon, label, etc.).
+func WithMetadata(m map[string]any) PositionOption {
+	return func(p *Position) { p.Metadata = m }
+}
+
 // Service orchestrates deliberation operations.
 type Service struct {
 	store             Store

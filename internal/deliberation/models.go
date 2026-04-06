@@ -57,9 +57,10 @@ type Position struct {
 	OnBehalfOf       string    `json:"on_behalf_of,omitempty"`       // principal this agent represents
 	Interests        string    `json:"interests,omitempty"`          // what this agent optimizes for (transparent objectives)
 	Draft            bool      `json:"draft,omitempty"`              // if true, not yet visible to others
-	ParentPositionID string    `json:"parent_position_id,omitempty"` // amendment to this position
-	Round            int       `json:"round_number"`
-	CreatedAt        time.Time `json:"created_at"`
+	ParentPositionID string         `json:"parent_position_id,omitempty"` // amendment to this position
+	Metadata         map[string]any `json:"metadata,omitempty"`           // extensible metadata (lat, lon, label, etc.)
+	Round            int            `json:"round_number"`
+	CreatedAt        time.Time      `json:"created_at"`
 }
 
 // JoinCode is a short-lived code for joining a deliberation without an API key.
