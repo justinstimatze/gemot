@@ -79,15 +79,54 @@ Use v9 as the primary demo (control spread 10 → gemot spread 5). It shows the 
 
 v10 is a research finding, not a product demo. It belongs in a blog post or paper about "what happens when structured deliberation meets adversarial incentives" — which is genuinely interesting and publishable.
 
+## Retroactive Gini Analysis
+
+Following the expert panel's recommendation (consensus: "spread metric is insufficient"), we retroactively computed Gini coefficient and survival count for all runs.
+
+### Paired comparisons (the experiments that matter)
+
+| Metric | v9 Control | v9 Gemot | v10 Control | v10 Gemot | v13 Control | v13 Gemot |
+|--------|-----------|---------|------------|----------|------------|----------|
+| Spread | 10 | 5 | 5 | 6 | 9 | 7 |
+| Gini | 0.420 | 0.227 | 0.185 | 0.176 | 0.345 | 0.252 |
+| Survival | 6/7 | 7/7 | 7/7 | 6/7 | 6/7 | 7/7 |
+
+**v9**: Gemot wins decisively on all three metrics. Gini halved (0.42 → 0.23), all powers survive.
+
+**v10**: Mixed. Gini is essentially equal (0.185 vs 0.176 — within noise). But gemot loses a power (Turkey eliminated). The spread metric made this look like a gemot loss; Gini shows the top of the distribution is actually comparable.
+
+**v13**: Gemot improves on all three metrics, but the gap is smaller than v9. The v13 control was already worse than v10 control (prompt regression? different game seed?), making the comparison less clean.
+
+### Best absolute results
+
+| Run | Spread | Gini | Survival | Notes |
+|-----|--------|------|----------|-------|
+| gemot_v13_sonnet | 1 | 0.048 | 7/7 | Best ever (non-live) |
+| gemot_v8_sonnet | 2 | 0.067 | 7/7 | Best w/ old prompts |
+| t3c_v2 | 2 | 0.083 | 7/7 | T3C baseline |
+| gemot_v4b | 3 | 0.098 | 7/7 | Early gemot |
+
+### Interpretation
+
+Gini tells a more nuanced story than spread:
+- v10 gemot is not actually worse than control — the Gini values are nearly identical. The spread penalty came entirely from Turkey's elimination (0 SCs), which inflates spread but barely affects Gini since the remaining 6 powers were well-balanced.
+- The survival metric captures what Gini misses: whether any power is completely destroyed. The combination of Gini + survival is more informative than spread alone.
+- Across all paired comparisons, gemot consistently improves Gini. The survival impact is +1, +1, -1 — net positive but not conclusive at N=1.
+
 ## Raw data
 
 All experiment results are in `~/Documents/AI_Diplomacy/results/`:
 - `control_v9/`, `gemot_v9_sonnet/` — v9 paired comparison (demo)
 - `control_v10/`, `gemot_v10_sonnet/` — v10 paired comparison (research)
+- `control_v13_live/`, `gemot_v13_live/` — v13 live paired comparison
+- `gemot_v14_seasonal/` — per-season experiment (Gini 0.244, 7/7 survival)
 - `gemot_v8_sonnet/` — best absolute spread (2)
+- `gemot_v13_sonnet/` — best absolute Gini (0.048)
 - Earlier runs: `gemot_v{5,6,7}_sonnet/`
 
 Deliberation data is on gemot.dev, tagged by group:
 - `gemot-v8-sonnet` (22 deliberations)
 - `gemot-v9-sonnet` (22 deliberations)
 - `gemot-v10-sonnet` (22 deliberations)
+- `gemot_v13_live` (22 deliberations)
+- `gemot_v14_seasonal` (22 deliberations per season)

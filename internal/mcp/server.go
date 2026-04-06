@@ -142,7 +142,7 @@ func newServer(s *server) *sdkmcp.Server {
 - reframe: Restate a position emphasizing common ground (deliberation_id, position_id; optional: model)
 - challenge: Challenge an analysis result (deliberation_id, agent_id, reason)
 - dispute_crux: Dispute a crux classification (deliberation_id, agent_id, crux_claim, correction)
-- expert_panel: Run an adversarial expert panel review (document; optional: topic, source_type, experts, group_id, model). Creates a deliberation, submits expert critiques, triggers analysis. Returns deliberation_id immediately — poll with deliberation action:get for status, then analyze action:get_result. source_type selects specialized experts and prompts: "code_review" (security, API, reliability, maintainability), "architecture" (scalability, security, operations, simplicity), "experiment" (methodology, statistics, validity — default), "proposal" (feasibility, user value, tech debt, business case). Custom experts via JSON override source_type.
+- expert_panel: Run an adversarial expert panel review (document; optional: topic, source_type, depth, experts, group_id, model). Creates a deliberation, submits expert critiques, triggers analysis. Returns deliberation_id immediately — poll with deliberation action:get for status, then analyze action:get_result. depth: "quick" (~2 min, 3 experts, tight taxonomy) or "thorough" (~7 min, 5 experts, full taxonomy). source_type selects specialized experts: "code_review", "architecture", "experiment", "proposal".
 - follow_up: Submit follow-up expert positions responding to round 1 cruxes, then trigger round 2 analysis (deliberation_id; optional: model). Experts review the cruxes and consensus, flag misclassifications, and identify missed issues. Requires round 1 to be complete.`,
 	}, s.handleAnalyzeTool)
 
@@ -240,6 +240,7 @@ type analyzeToolParams struct {
 	Topic      string `json:"topic,omitempty"`
 	GroupID    string `json:"group_id,omitempty"`
 	SourceType string `json:"source_type,omitempty"`
+	Depth      string `json:"depth,omitempty"` // "quick" or "thorough" (default: thorough)
 }
 
 type decideParams struct {
@@ -702,7 +703,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 			}
 		}
 		s.audit(ctx, "analyze:expert_panel", "", "")
-		result, err := CoreRunExpertPanel(ctx, s.svc, args.Document, args.Topic, args.Experts, args.GroupID, args.Model, keyID, args.SourceType)
+		result, err := CoreRunExpertPanel(ctx, s.svc, args.Document, args.Topic, args.Experts, args.GroupID, args.Model, keyID, args.SourceType, args.Depth)
 		if err != nil {
 			if creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
