@@ -82,22 +82,25 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			} else if t := r.URL.Query().Get("token"); t != "" {
 				token = t
 			}
-			if token == "" {
+			if apiSecret == "" {
+				// Dev mode: no auth required
+				isAdmin = true
+			} else if token == "" {
 				http.Error(w, "authorization required (Bearer header, ?token=, or ?join_code=)", http.StatusUnauthorized)
 				return
-			}
-
-			isAdmin = apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
-			if !isAdmin {
-				if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
-					http.Error(w, "invalid API key", http.StatusUnauthorized)
-					return
+			} else {
+				isAdmin = subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
+				if !isAdmin {
+					if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
+						http.Error(w, "invalid API key", http.StatusUnauthorized)
+						return
+					}
+					if valid, _ := creditStore.ValidateKey(token); !valid {
+						http.Error(w, "invalid or expired API key", http.StatusUnauthorized)
+						return
+					}
+					keyID = payments.KeyID(token)
 				}
-				if valid, _ := creditStore.ValidateKey(token); !valid {
-					http.Error(w, "invalid or expired API key", http.StatusUnauthorized)
-					return
-				}
-				keyID = payments.KeyID(token)
 			}
 
 			// Rate limit: initial check only (SSE is long-lived)
