@@ -120,19 +120,35 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 
 ### Local (stdio)
 
+Direct agent-to-server connection, no HTTP overhead. Good for single-agent workflows.
+
 ```bash
 go build -o gemot .
 export GEMOT_ANTHROPIC_KEY=sk-ant-...
+export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
 ./gemot serve
 ```
 
 ### Self-hosted (HTTP)
 
+Multi-agent access over HTTP/SSE. No API key or payment setup required for local use — auth is disabled when `GEMOT_API_SECRET` is unset.
+
 ```bash
+# Start Postgres (or use docker compose up -d)
+docker compose up -d
+
 export GEMOT_ANTHROPIC_KEY=sk-ant-...
-export GEMOT_API_SECRET=your-secret-here
+export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
+go build -o gemot .
 ./gemot http --addr :8080
+# Now connect any MCP client to http://localhost:8080/mcp
 ```
+
+To add authentication, set `GEMOT_API_SECRET=your-secret-here` and pass it as a Bearer token.
+
+### Privacy
+
+All data stays in your Postgres database. The only external call is to the Anthropic API for LLM analysis. No telemetry, no data collection, no phone-home. See [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## Features
 
@@ -198,7 +214,7 @@ gemot/
 │   │   └── prompts.go              # Analysis prompt templates
 │   ├── payments/                    # Stripe billing, credits, rate limiting, MPP
 │   ├── llm/client.go               # Anthropic SDK + global API semaphore
-│   ├── store/                       # SQLite + LLM cache + job queue
+│   ├── store/                       # Postgres persistence + LLM cache + job queue
 │   ├── sanitize/                    # PII stripping, prompt injection detection
 │   └── cost/tracker.go             # Per-deliberation model-aware cost tracking
 ├── tests/                           # 161 tests

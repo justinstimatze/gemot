@@ -1,0 +1,29 @@
+# Local development: starts Postgres for gemot.
+#
+#   docker compose up -d
+#   export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
+#   export GEMOT_ANTHROPIC_KEY=sk-ant-...
+#   ./gemot http --addr :8080
+#
+# Data persists in the gemot_data volume between restarts.
+# To reset: docker compose down -v
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: gemot
+      POSTGRES_PASSWORD: gemot
+      POSTGRES_DB: gemot
+    ports:
+      - "5432:5432"
+    volumes:
+      - gemot_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gemot"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  gemot_data:
