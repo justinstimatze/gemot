@@ -233,35 +233,35 @@ func TestSetTemplateAppliesDefaultRules(t *testing.T) {
 	}
 }
 
-func TestSetTemplatePreservesExplicitRules(t *testing.T) {
+func TestSetTemplateReplacesRulesFromOldTemplate(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Create with explicit rule
-	d, err := svc.CreateDeliberation("Test", "Explicit rules",
+	d, err := svc.CreateDeliberation("Test", "Template switch",
 		deliberation.WithRules(map[string]any{"min_participants": 2}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Apply parliament template (which has min_participants=5)
+	// Apply parliament template — should replace ALL rules with parliament's defaults
 	if err := svc.SetTemplate(d.ID, "parliament", ""); err != nil {
 		t.Fatal(err)
 	}
 
-	// Explicit rule should be preserved, not overwritten by template
 	d2, err := svc.GetDeliberation(d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Parliament's min_participants=5 should replace the explicit 2
 	minP := deliberation.RuleInt(d2, "min_participants", 0)
-	if minP != 2 {
-		t.Fatalf("explicit min_participants=2 should be preserved, got %d", minP)
+	if minP != 5 {
+		t.Fatalf("parliament min_participants=5 should replace prior value, got %d", minP)
 	}
-	// But cooling_period (not explicitly set) should come from template
+	// Parliament's cooling_period should be set
 	cooling := deliberation.RuleInt(d2, "cooling_period_minutes", 0)
 	if cooling != 60 {
-		t.Fatalf("template cooling_period=60 should apply for non-explicit rule, got %d", cooling)
+		t.Fatalf("parliament cooling_period=60 should be set, got %d", cooling)
 	}
 }
 
