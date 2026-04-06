@@ -143,7 +143,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				"gemot/deliberation": {"create": true, "delete": true, "set_template": true},
 				"gemot/participate":  {"submit_position": true, "vote": true, "withdraw": true},
 				"gemot/analyze":      {"run": true, "propose_compromise": true, "dispute_crux": true, "challenge": true, "expert_panel": true},
-				"gemot/decide":       {"commit": true},
+				"gemot/decide":       {"commit": true, "fulfill": true, "break": true},
 				"gemot/coordinate":   {"delegate": true, "invite": true, "generate_join_code": true, "join": true},
 				"gemot/admin":        {"report_abuse": true},
 			}
