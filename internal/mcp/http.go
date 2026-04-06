@@ -752,7 +752,9 @@ Or if your agent supports MCP, add {"mcpServers":{"gemot":{"type":"sse","url":"h
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Allow up to 10 minutes for in-flight requests (analysis, expert panels) to complete.
+		// Fly.io drain_timeout should match this value in fly.toml.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		return httpServer.Shutdown(shutdownCtx)
 	}

@@ -21,4 +21,6 @@ primary_region = "sjc"
   path = "/health"
 
 [deploy]
-  strategy = "bluegreen"
+  strategy = "rolling"
+  drain_timeout = "10m"
+  wait_timeout = "10m"
