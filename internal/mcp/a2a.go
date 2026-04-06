@@ -638,6 +638,24 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				RunAnalysisAsync(svc, nil, creditStore, result.DeliberationID, result.Model, keyID, creditCost)
 				writeA2AResult(w, req.ID, result)
 
+			case "follow_up":
+				model := str(s, "model")
+				creditCost, err := deductCredits(model)
+				if err != nil {
+					writeA2AError(w, req.ID, -32000, err.Error())
+					return
+				}
+				result, err := CoreFollowUpExpertPanel(r.Context(), svc, str(s, "deliberation_id"), model, keyID)
+				if err != nil {
+					if creditCost > 0 && creditStore != nil {
+						_, _ = creditStore.AddCredits(keyID, creditCost)
+					}
+					writeA2AError(w, req.ID, -32000, err.Error())
+					return
+				}
+				RunAnalysisAsync(svc, nil, creditStore, result.DeliberationID, result.Model, keyID, creditCost)
+				writeA2AResult(w, req.ID, result)
+
 			default:
 				writeA2AError(w, req.ID, -32602, fmt.Sprintf("unknown action %q for gemot/analyze", action))
 			}

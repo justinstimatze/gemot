@@ -487,3 +487,92 @@ Provide your critique with:
 		Model:          model,
 	}, nil
 }
+
+// CoreFollowUpExpertPanel submits follow-up expert positions that respond to
+// round 1 analysis results, then triggers round 2 analysis. The deliberation
+// must be in "open" status with round > 1 (i.e., round 1 analysis completed).
+func CoreFollowUpExpertPanel(ctx context.Context, svc *deliberation.Service, deliberationID, model, keyID string) (*ExpertPanelResult, error) {
+	if deliberationID == "" {
+		return nil, fmt.Errorf("deliberation_id is required")
+	}
+
+	d, err := svc.GetDeliberation(deliberationID)
+	if err != nil {
+		return nil, fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.Status != "open" {
+		return nil, fmt.Errorf("deliberation is %s, not open — wait for round 1 to complete", d.Status)
+	}
+	if d.Round < 2 {
+		return nil, fmt.Errorf("round 1 has not completed yet (current round: %d)", d.Round)
+	}
+
+	// Get round 1 results
+	prevRound := d.Round - 1
+	result, err := svc.GetAnalysisResult(deliberationID, prevRound)
+	if err != nil || result == nil {
+		return nil, fmt.Errorf("no round %d results found", prevRound)
+	}
+
+	// Get round 1 positions to identify expert agents and their roles
+	round1 := 1
+	positions, err := svc.GetPositions(deliberationID, nil, &round1)
+	if err != nil {
+		return nil, fmt.Errorf("getting round 1 positions: %w", err)
+	}
+
+	// Build crux summary for follow-up prompt
+	var cruxSummary strings.Builder
+	for i, c := range result.Cruxes {
+		fmt.Fprintf(&cruxSummary, "%d. %s (agree: %s, disagree: %s)\n",
+			i+1, c.Claim,
+			strings.Join(c.AgreeAgents, ", "),
+			strings.Join(c.DisagreeAgents, ", "))
+	}
+	var consensusSummary strings.Builder
+	for _, cs := range result.ConsensusStatements {
+		fmt.Fprintf(&consensusSummary, "- %s\n", cs.Content)
+	}
+
+	// Submit follow-up position for each expert from round 1
+	expertCount := 0
+	for _, p := range positions {
+		if p.Round != 1 {
+			continue
+		}
+		content := fmt.Sprintf(`You previously submitted a critique of a document. The panel has now been analyzed.
+
+KEY DISAGREEMENTS among the panel:
+%s
+CONSENSUS the panel reached:
+%s
+Your previous position was attributed to the following sides of these cruxes. Review them:
+- Do you still hold your position on each crux, or has the panel's analysis changed your view?
+- Are there cruxes where you were misclassified?
+- What NEW issues did the panel miss entirely?
+- Which recommended follow-ups are highest priority given the disagreements?
+
+Be specific and constructive. Focus on what changed or what was missed.`, cruxSummary.String(), consensusSummary.String())
+
+		_, err := svc.SubmitPosition(deliberationID, p.AgentID, content,
+			deliberation.WithInterests(p.Interests),
+			deliberation.WithReservation(p.Reservation),
+		)
+		if err != nil {
+			slog.Warn("follow-up submission failed", "agent", p.AgentID, "error", err)
+			continue
+		}
+		expertCount++
+	}
+
+	if expertCount == 0 {
+		return nil, fmt.Errorf("no follow-up positions submitted")
+	}
+
+	return &ExpertPanelResult{
+		DeliberationID: deliberationID,
+		Topic:          d.Topic,
+		ExpertCount:    expertCount,
+		Model:          model,
+	}, nil
+}
