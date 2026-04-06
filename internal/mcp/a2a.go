@@ -73,27 +73,31 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			return
 		}
 
-		// Auth: require bearer token
+		// Auth: dev mode (no apiSecret) grants admin access without a token
 		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		token := strings.TrimPrefix(auth, "Bearer ")
+		isAdmin := false
+		var keyID string
+
+		if apiSecret == "" {
+			// Dev mode: no auth required, treat as admin
+			isAdmin = true
+		} else if !strings.HasPrefix(auth, "Bearer ") {
 			writeA2AError(w, nil, -32000, "Authorization: Bearer <api_key> required")
 			return
-		}
-		token := strings.TrimPrefix(auth, "Bearer ")
-
-		// Validate token
-		isAdmin := apiSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
-		var keyID string
-		if !isAdmin {
-			if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
-				writeA2AError(w, nil, -32000, "Invalid API key")
-				return
+		} else {
+			isAdmin = subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
+			if !isAdmin {
+				if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
+					writeA2AError(w, nil, -32000, "Invalid API key")
+					return
+				}
+				if valid, _ := creditStore.ValidateKey(token); !valid {
+					writeA2AError(w, nil, -32000, "Invalid or expired API key")
+					return
+				}
+				keyID = payments.KeyID(token)
 			}
-			if valid, _ := creditStore.ValidateKey(token); !valid {
-				writeA2AError(w, nil, -32000, "Invalid or expired API key")
-				return
-			}
-			keyID = payments.KeyID(token)
 		}
 
 		// Rate limit A2A requests
