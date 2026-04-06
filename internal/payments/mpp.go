@@ -89,12 +89,19 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 					}
 				}
 				// No auth required in dev mode without bearer secret
+				// Still apply sandbox rate limiting to prevent Anthropic API abuse
 				if bearerSecret == "" {
-					next.ServeHTTP(w, r)
+					ip := clientIP(r)
+					if !limiter.Allow("dev:" + ip) {
+						http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+						return
+					}
+					ctx := context.WithValue(r.Context(), ContextKeySandbox{}, true)
+					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
 				// Allow unauthenticated MCP connections for sandbox mode
-				// Rate-limit by IP to prevent abuse (10 req/min for sandbox)
+				// Rate-limit by IP to prevent abuse (30 req/min for sandbox)
 				ip := clientIP(r)
 				if !limiter.Allow("sandbox:" + ip) {
 					http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)

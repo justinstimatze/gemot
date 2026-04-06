@@ -1,4 +1,6 @@
 gemot
+/expert-panel
+/main
 .gemot/
 *.db
 .env
