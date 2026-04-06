@@ -17,7 +17,7 @@ import (
 const (
 	maxTopicLen       = 500
 	maxDescriptionLen = 5000
-	maxContentLen     = 10000
+	maxContentLen     = 50000
 	maxAgentIDLen     = 200
 	maxPositions      = 1000
 )
