@@ -493,20 +493,13 @@ func (s *Service) SetTemplate(deliberationID, template, callerKeyID string) erro
 	if err := s.store.UpdateDeliberationTemplate(context.TODO(), deliberationID, template); err != nil {
 		return err
 	}
-	// Merge new template's default rules into existing rules (explicit overrides preserved)
-	if tmpl.DefaultRules != nil {
-		rules := d.Rules
-		if rules == nil {
-			rules = make(map[string]any)
-		}
-		for k, v := range tmpl.DefaultRules {
-			if _, exists := rules[k]; !exists {
-				rules[k] = v
-			}
-		}
-		return s.store.UpdateDeliberationRules(context.TODO(), deliberationID, rules)
+	// Replace all rules with the new template's defaults.
+	// Old template's rules are discarded — they're template-specific.
+	rules := make(map[string]any)
+	for k, v := range tmpl.DefaultRules {
+		rules[k] = v
 	}
-	return nil
+	return s.store.UpdateDeliberationRules(context.TODO(), deliberationID, rules)
 }
 
 // DeleteDeliberation removes a deliberation and all its data.
