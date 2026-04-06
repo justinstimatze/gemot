@@ -1088,7 +1088,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 					continue
 				}
 
-				deliberationID, err = createOrReuseDeliberation(ctx, session, sc, year, state, experimentID)
+				deliberationID, err = createOrReuseDeliberation(ctx, session, sc, year, state, experimentID, url, secret)
 				session.Close() //nolint:errcheck
 				if err == nil {
 					lastErr = nil
@@ -1318,7 +1318,7 @@ func analyzeScopes(ctx context.Context, scopes []scope, url, secret string, year
 // createOrReuseDeliberation creates a new deliberation or reuses an existing one from state.
 // It also handles forced acknowledgment for round 2+ deliberations.
 // Returns the deliberation ID.
-func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSession, sc scope, year int, state *persistentState, experimentID string) (string, error) {
+func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSession, sc scope, year int, state *persistentState, experimentID, url, secret string) (string, error) {
 	// Check if we have a persistent deliberation for this scope
 	state.mu.Lock()
 	existingID := state.IDs[sc.name]
@@ -1379,11 +1379,14 @@ func createOrReuseDeliberation(ctx context.Context, session *sdkmcp.ClientSessio
 	}
 
 	// Satisfy forced acknowledgment: call get_context for all agents before submitting
-	// (required for round 2+ deliberations — agents must review cruxes before contributing)
+	// (required for round 2+ deliberations — agents must review cruxes before contributing).
+	// Uses a resilient session — the original session may have died after the create call.
 	if existingID != "" && year > 1 {
+		rs := newResilientSession(url, secret)
+		defer rs.close()
 		for _, p := range sc.powers {
 			agentID := strings.ToLower(p) + "-agent"
-			callToolSoft(ctx, session, "participate", map[string]any{
+			rs.callSoft(ctx, "participate", map[string]any{
 				"action":          "get_context",
 				"deliberation_id": deliberationID,
 				"agent_id":        agentID,
@@ -2457,124 +2460,7 @@ type coalitionGroup struct {
 	Purpose string // merged purpose from declarations
 }
 
-// declareCoalitionsForPower asks one power to declare their coalitions based on bilateral intelligence.
-func declareCoalitionsForPower(ctx context.Context, apiKey string, power string, year int, results []scopeResult, balance powerBalance) ([]coalitionDecl, error) {
-	powerLower := strings.ToLower(power)
-	var intel strings.Builder
 
-	for _, r := range results {
-		if r.scope.scopeTag != "bilateral" {
-			continue
-		}
-		ctxJSON, ok := r.contexts[powerLower]
-		if !ok {
-			continue
-		}
-		var ac agentContext
-		mustParseSoft(ctxJSON, &ac)
-
-		other := ""
-		for _, p := range r.scope.powers {
-			if strings.ToLower(p) != powerLower {
-				other = p
-			}
-		}
-
-		fmt.Fprintf(&intel, "\n--- With %s ---\n", other)
-		if len(ac.BridgingStatements) > 0 {
-			fmt.Fprintf(&intel, "Shared ground:\n")
-			for _, bs := range ac.BridgingStatements {
-				fmt.Fprintf(&intel, "  - %s (%.0f%% support)\n", truncateRunes(bs.Content, 200), bs.BridgingScore*100)
-			}
-		}
-		if ac.CompromiseProposal != "" {
-			fmt.Fprintf(&intel, "Compromise proposal: %s\n", truncateRunes(ac.CompromiseProposal, 300))
-		}
-		if len(ac.RelevantCruxes) > 0 {
-			fmt.Fprintf(&intel, "Unresolved issues: %d\n", len(ac.RelevantCruxes))
-			for _, c := range ac.RelevantCruxes {
-				fmt.Fprintf(&intel, "  - %s\n", truncateRunes(c.Claim, 150))
-			}
-		}
-		if len(ac.AlignmentScores) > 0 {
-			for _, a := range ac.AlignmentScores {
-				fmt.Fprintf(&intel, "Alignment: %.0f%%\n", a.AlignmentScore*100)
-			}
-		}
-	}
-
-	// Add global context
-	for _, r := range results {
-		if r.scope.scopeTag != "global" {
-			continue
-		}
-		ctxJSON, ok := r.contexts[powerLower]
-		if !ok {
-			continue
-		}
-		var ac agentContext
-		mustParseSoft(ctxJSON, &ac)
-		if len(ac.AlignmentScores) > 0 {
-			fmt.Fprintf(&intel, "\n--- Global Alignment ---\n")
-			for _, a := range ac.AlignmentScores {
-				fmt.Fprintf(&intel, "  %s: %.0f%% aligned\n", a.AgentID, a.AlignmentScore*100)
-			}
-		}
-	}
-
-	// Add power balance
-	fmt.Fprintf(&intel, "\n--- Power Balance ---\n")
-	for p, scs := range balance.current {
-		marker := ""
-		if strings.EqualFold(p, power) {
-			marker = " (you)"
-		}
-		fmt.Fprintf(&intel, "  %s: %d SCs%s\n", p, scs, marker)
-	}
-
-	system := `You are a strategic advisor for a power in Diplomacy. Based on the diplomatic intelligence provided, declare coalitions this power should pursue.
-
-A coalition is a group of 2+ powers (including this power) with a shared strategic purpose. Coalitions can overlap — a power can be in multiple coalitions simultaneously with different (even contradictory) purposes. This is normal in Diplomacy.
-
-Rules:
-- Only declare coalitions where genuine mutual interest exists based on the evidence
-- Be specific about the purpose — vague coalitions are worthless
-- Include this power in every coalition's member list
-- A power can be in coalitions that have competing loyalties (e.g., allied with both sides of a future conflict)
-
-Respond with ONLY valid JSON, no other text:`
-
-	prompt := fmt.Sprintf(`Power: %s
-Year: %d
-
-Diplomatic Intelligence:
-%s
-
-Declare coalitions as JSON:
-{"coalitions": [{"members": ["POWER1", "POWER2"], "purpose": "specific shared objective"}]}`, power, 1900+year, intel.String())
-
-	resp, err := llmCall(ctx, apiKey, system, prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	var parsed struct {
-		Coalitions []coalitionDecl `json:"coalitions"`
-	}
-	if err := json.Unmarshal([]byte(extractJSON(resp)), &parsed); err != nil {
-		return nil, fmt.Errorf("parsing coalition declarations: %w", err)
-	}
-
-	// Normalize member names
-	for i := range parsed.Coalitions {
-		for j := range parsed.Coalitions[i].Members {
-			parsed.Coalitions[i].Members[j] = strings.ToUpper(parsed.Coalitions[i].Members[j])
-		}
-		sort.Strings(parsed.Coalitions[i].Members)
-	}
-
-	return parsed.Coalitions, nil
-}
 
 // declareAllCoalitions runs coalition declarations for all powers in a single batched LLM call.
 func declareAllCoalitions(ctx context.Context, apiKey string, year int, results []scopeResult, balance powerBalance) map[string][]coalitionDecl {
@@ -3443,7 +3329,9 @@ func callTool(ctx context.Context, s *sdkmcp.ClientSession, name string, args ma
 }
 
 func callToolSoft(ctx context.Context, s *sdkmcp.ClientSession, name string, args map[string]any) string {
-	res, err := s.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: args})
+	ctx2, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	res, err := s.CallTool(ctx2, &sdkmcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "  [soft] %s failed: %v\n", name, err)
 		return ""
@@ -3457,6 +3345,53 @@ func callToolSoft(ctx context.Context, s *sdkmcp.ClientSession, name string, arg
 		return ""
 	}
 	return res.Content[0].(*sdkmcp.TextContent).Text
+}
+
+// resilientSession wraps a session with automatic reconnection on failure.
+type resilientSession struct {
+	url, secret string
+	session     *sdkmcp.ClientSession
+}
+
+func newResilientSession(url, secret string) *resilientSession {
+	return &resilientSession{url: url, secret: secret}
+}
+
+func (rs *resilientSession) ensure(ctx context.Context) error {
+	if rs.session != nil {
+		return nil
+	}
+	s, err := connect(ctx, rs.url, rs.secret)
+	if err != nil {
+		return err
+	}
+	rs.session = s
+	return nil
+}
+
+func (rs *resilientSession) callSoft(ctx context.Context, name string, args map[string]any) string {
+	if err := rs.ensure(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "  [soft] connect failed: %v\n", err)
+		return ""
+	}
+	result := callToolSoft(ctx, rs.session, name, args)
+	if result != "" {
+		return result
+	}
+	// Retry once with a fresh connection (the session may have died)
+	rs.close()
+	if err := rs.ensure(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "  [soft] reconnect failed: %v\n", err)
+		return ""
+	}
+	return callToolSoft(ctx, rs.session, name, args)
+}
+
+func (rs *resilientSession) close() {
+	if rs.session != nil {
+		rs.session.Close() //nolint:errcheck
+		rs.session = nil
+	}
 }
 
 func sha256Short(s string) string {
