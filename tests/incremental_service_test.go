@@ -562,7 +562,7 @@ func TestExpertPanelCore(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Run expert panel with default experts
+	// Run expert panel with default experts (creates deliberation + submits positions)
 	result, err := mcp.CoreRunExpertPanel(ctx, svc, "This is a test document with some claims about AI safety.", "Test panel", "", "test-group", "", "", "")
 	if err != nil {
 		t.Fatalf("expert panel failed: %v", err)
@@ -578,21 +578,18 @@ func TestExpertPanelCore(t *testing.T) {
 	if result.ExpertCount != 5 {
 		t.Errorf("expected 5 default experts, got %d", result.ExpertCount)
 	}
-	if result.Result == nil {
-		t.Fatal("expected analysis result")
-	}
 
-	// Verify the analyzer received all 5 positions
-	call := analyzer.lastCall()
-	if len(call.Positions) != 5 {
-		t.Errorf("expected 5 positions from 5 experts, got %d", len(call.Positions))
+	// Verify positions were submitted (analysis is async, so check via service)
+	positions, err := svc.GetPositions(result.DeliberationID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(call.Agents) != 5 {
-		t.Errorf("expected 5 agents, got %d", len(call.Agents))
+	if len(positions) != 5 {
+		t.Errorf("expected 5 positions from 5 experts, got %d", len(positions))
 	}
 
 	// Verify each expert's position contains the document
-	for _, p := range call.Positions {
+	for _, p := range positions {
 		if !strings.Contains(p.Content, "test document with some claims") {
 			t.Errorf("position from %s doesn't contain document text", p.AgentID)
 		}
@@ -630,9 +627,12 @@ func TestExpertPanelCustomExperts(t *testing.T) {
 		t.Errorf("expected 2 custom experts, got %d", result.ExpertCount)
 	}
 
-	call := analyzer.lastCall()
+	positions, err := svc.GetPositions(result.DeliberationID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	agentIDs := map[string]bool{}
-	for _, p := range call.Positions {
+	for _, p := range positions {
 		agentIDs[p.AgentID] = true
 	}
 	if !agentIDs["economist"] || !agentIDs["ethicist"] {
@@ -656,9 +656,12 @@ func TestExpertPanelSourceType(t *testing.T) {
 	}
 
 	// Verify code review experts (not research defaults)
-	call := analyzer.lastCall()
+	positions, err := svc.GetPositions(result.DeliberationID, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	agentIDs := map[string]bool{}
-	for _, p := range call.Positions {
+	for _, p := range positions {
 		agentIDs[p.AgentID] = true
 	}
 	if !agentIDs["security-reviewer"] {
@@ -669,7 +672,7 @@ func TestExpertPanelSourceType(t *testing.T) {
 	}
 
 	// Verify code review prompt framing
-	for _, p := range call.Positions {
+	for _, p := range positions {
 		if strings.Contains(p.Content, "FATAL FLAWS") {
 			t.Errorf("code_review should use code review prompt, not research prompt (found FATAL FLAWS in %s)", p.AgentID)
 		}

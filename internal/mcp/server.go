@@ -142,7 +142,7 @@ func newServer(s *server) *sdkmcp.Server {
 - reframe: Restate a position emphasizing common ground (deliberation_id, position_id; optional: model)
 - challenge: Challenge an analysis result (deliberation_id, agent_id, reason)
 - dispute_crux: Dispute a crux classification (deliberation_id, agent_id, crux_claim, correction)
-- expert_panel: Run an adversarial expert panel review (document; optional: topic, source_type, experts, group_id, model). Creates a deliberation, submits expert critiques, runs analysis, returns structured results synchronously. source_type selects specialized experts and prompts: "code_review" (security, API, reliability, maintainability), "architecture" (scalability, security, operations, simplicity), "experiment" (methodology, statistics, validity — default), "proposal" (feasibility, user value, tech debt, business case). Custom experts via JSON override source_type. Takes 1-3 minutes.`,
+- expert_panel: Run an adversarial expert panel review (document; optional: topic, source_type, experts, group_id, model). Creates a deliberation, submits expert critiques, triggers analysis. Returns deliberation_id immediately — poll with deliberation action:get for status, then analyze action:get_result. source_type selects specialized experts and prompts: "code_review" (security, API, reliability, maintainability), "architecture" (scalability, security, operations, simplicity), "experiment" (methodology, statistics, validity — default), "proposal" (feasibility, user value, tech debt, business case). Custom experts via JSON override source_type.`,
 	}, s.handleAnalyzeTool)
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
@@ -708,8 +708,12 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 			}
 			return errResult(err)
 		}
-		s.audit(ctx, "analyze:expert_panel:complete", result.DeliberationID, "")
-		return jsonResult(result)
+		// Trigger analysis async — panel creation and position submission are already done
+		s.audit(ctx, "analyze:expert_panel", result.DeliberationID, "")
+		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost)
+		return jsonResultWithHints(result,
+			fmt.Sprintf("Panel created with %d experts. Analysis started — poll deliberation action:get (deliberation_id: %s) for status, then analyze action:get_result for results.",
+				result.ExpertCount, result.DeliberationID))
 
 	default:
 		return errResult(fmt.Errorf("unknown action %q — use: run, get_result, cancel, propose_compromise, reframe, challenge, dispute_crux, expert_panel", args.Action))

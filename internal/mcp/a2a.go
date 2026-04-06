@@ -635,6 +635,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
+				RunAnalysisAsync(svc, nil, creditStore, result.DeliberationID, result.Model, keyID, creditCost)
 				writeA2AResult(w, req.ID, result)
 
 			default:
