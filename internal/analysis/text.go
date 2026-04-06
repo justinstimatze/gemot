@@ -234,20 +234,19 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	}
 
 	// Split positions into already-processed and new
-	var newPositions, allPositions []deliberation.Position
+	var newPositions []deliberation.Position
 	for _, p := range positions {
-		allPositions = append(allPositions, p)
 		if !priorPositionIDs[p.ID] {
 			newPositions = append(newPositions, p)
 		}
 	}
-	incremental := len(priorClaims) > 0 && len(newPositions) < len(allPositions)
+	incremental := len(priorClaims) > 0 && len(newPositions) < len(positions)
 	if incremental {
 		slog.Info("incremental analysis",
-			"total_positions", len(allPositions),
+			"total_positions", len(positions),
 			"new_positions", len(newPositions),
 			"prior_claims", len(priorClaims),
-			"skipped_positions", len(allPositions)-len(newPositions))
+			"skipped_positions", len(positions)-len(newPositions))
 	}
 
 	deliberationTopic := positions[0].DeliberationID
