@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/justinstimatze/gemot/internal/analysis"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/llm"
 	"github.com/justinstimatze/gemot/internal/payments"
@@ -391,7 +392,8 @@ type ExpertPanelResult struct {
 // sourceType selects specialized experts and prompts: "code_review",
 // "architecture", "experiment", "proposal", or "" (general/research).
 // Custom experts via expertsJSON override the source_type defaults.
-func CoreRunExpertPanel(ctx context.Context, svc *deliberation.Service, document, topic, expertsJSON, groupID, model, keyID, sourceType string) (*ExpertPanelResult, error) {
+// depth: "quick" (3 experts, tight taxonomy, ~2 min) or "thorough" (5 experts, full taxonomy, ~7 min).
+func CoreRunExpertPanel(ctx context.Context, svc *deliberation.Service, document, topic, expertsJSON, groupID, model, keyID, sourceType, depth string) (*ExpertPanelResult, error) {
 	if document == "" {
 		return nil, fmt.Errorf("document is required")
 	}
@@ -400,6 +402,18 @@ func CoreRunExpertPanel(ctx context.Context, svc *deliberation.Service, document
 	}
 	if !validSourceTypes[sourceType] {
 		return nil, fmt.Errorf("unknown source_type %q — use: code_review, architecture, experiment, proposal (or omit for general)", sourceType)
+	}
+	if depth == "" {
+		depth = "thorough"
+	}
+	if depth != "quick" && depth != "thorough" {
+		return nil, fmt.Errorf("unknown depth %q — use: quick (~2 min, 3 experts) or thorough (~7 min, 5 experts)", depth)
+	}
+
+	// Set taxonomy limits based on depth
+	if depth == "quick" {
+		ctx = context.WithValue(ctx, analysis.ContextKeyMaxTopics{}, 3)
+		ctx = context.WithValue(ctx, analysis.ContextKeyMaxSubtopics{}, 2)
 	}
 
 	// Select experts: custom JSON > source_type defaults > general defaults
@@ -420,6 +434,11 @@ func CoreRunExpertPanel(ctx context.Context, svc *deliberation.Service, document
 		if typed, ok := sourceTypeExperts[sourceType]; ok {
 			experts = typed
 		}
+	}
+
+	// Quick mode: use 3 experts (first, last, and middle) for faster analysis
+	if depth == "quick" && expertsJSON == "" && len(experts) > 3 {
+		experts = []PanelExpert{experts[0], experts[len(experts)/2], experts[len(experts)-1]}
 	}
 
 	// Select prompt template: source_type-specific or general

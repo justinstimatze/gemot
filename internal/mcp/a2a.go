@@ -627,7 +627,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				result, err := CoreRunExpertPanel(r.Context(), svc, str(s, "document"), str(s, "topic"), str(s, "experts"), str(s, "group_id"), model, keyID, str(s, "source_type"))
+				result, err := CoreRunExpertPanel(r.Context(), svc, str(s, "document"), str(s, "topic"), str(s, "experts"), str(s, "group_id"), model, keyID, str(s, "source_type"), str(s, "depth"))
 				if err != nil {
 					if creditCost > 0 && creditStore != nil {
 						_, _ = creditStore.AddCredits(keyID, creditCost)
