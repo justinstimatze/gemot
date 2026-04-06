@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-04-06 (evening)
+
+### Security Hardening
+
+- **Dev mode rate limiting**: When running without `GEMOT_API_SECRET`, requests are now rate-limited (30/min per IP) and sandboxed. Previously, dev mode had zero rate limiting, allowing unlimited Anthropic API calls.
+- **Export auth fix**: `/export` endpoint no longer accepts arbitrary Bearer tokens when `apiSecret` is unset. Auth is properly skipped in dev mode; when auth is configured, valid admin or customer key required.
+- **Docker Postgres localhost-only**: `docker-compose.yml` binds Postgres to `127.0.0.1` instead of all interfaces.
+- **Rate limit comment correction**: Fixed misleading comment claiming 10 req/min for sandbox (actual: 30 req/min).
+
+### Improvements
+
+- **Parallel topic analysis**: Topics now run in parallel (summaries + crux detection across all topics share a bounded semaphore of 5). Previously, topics ran sequentially — with 3 topics, this could add 3 sequential LLM calls for summaries alone.
+- **SSE reliability**: Expert panel script rewritten with robust reconnect (max 10 retries, 3s backoff, soft-error polling). Server IdleTimeout increased from 120s to 10 minutes.
+- **Local self-hosting**: Added `docker-compose.yml`, expanded README with `DATABASE_URL` setup and privacy section, added "Self-host it" guide to website.
+
+### Documentation
+
+- **FINDINGS.md**: Added v13 live experiment, v14 per-season results, expert panel critique, England structural bias observation, v15 2×2 factorial design.
+- **Experiment script**: Added `--seed` and `--no-incremental` flags to `run_gemot_experiment.sh` for factorial isolation.
+
 ## 2026-04-06 (afternoon)
 
 ### New Features

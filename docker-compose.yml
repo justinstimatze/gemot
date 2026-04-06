@@ -16,7 +16,7 @@ services:
       POSTGRES_PASSWORD: gemot
       POSTGRES_DB: gemot
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - gemot_data:/var/lib/postgresql/data
     healthcheck:
