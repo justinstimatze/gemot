@@ -127,6 +127,7 @@ type ContextKeyDeliberationID struct{}
 type ContextKeyDeliberationType struct{}
 type ContextKeyPriorNorms struct{}
 type ContextKeyConstitutionalRules struct{}
+type ContextKeyPriorClaims struct{}
 
 // ContextKeyProgressFunc is used to pass a progress callback via context.
 type ContextKeyProgressFunc struct{}
@@ -948,14 +949,38 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		return nil, err
 	}
 
-	// Require at least 2 distinct agents — crux analysis needs multiple perspectives
+	// With fewer than 2 distinct agents, crux detection can't find disagreements.
+	// Return a thin result with a warning instead of erroring — single-agent scopes
+	// are valid (e.g., early-round diplomacy bilaterals with only one side's messages).
 	agentCheck := map[string]bool{}
 	for _, p := range positions {
 		agentCheck[p.AgentID] = true
 	}
 	if len(agentCheck) < 2 {
 		resetStatus()
-		return nil, fmt.Errorf("analysis requires at least 2 agents, found %d", len(agentCheck))
+		agentList := make([]string, 0, len(agentCheck))
+		for a := range agentCheck {
+			agentList = append(agentList, a)
+		}
+		thinResult := &AnalysisResult{
+			DeliberationID:    deliberationID,
+			Round:             d.Round,
+			Clusters:          []OpinionCluster{},
+			Cruxes:            []Crux{},
+			ConsensusStatements: []ConsensusStatement{},
+			TopicSummaries:    []TopicSummary{},
+			AgentCount:        len(agentCheck),
+			PositionCount:     len(positions),
+			Confidence:        "low",
+			IntegrityWarnings: []string{fmt.Sprintf("INSUFFICIENT_AGENTS: %d agent(s) — crux analysis requires at least 2", len(agentCheck))},
+			AnalyzedAt:        time.Now().UTC(),
+			RecommendedAction: "await_more_participants",
+		}
+		if err := s.store.SaveAnalysisResult(ctx, deliberationID, d.Round, thinResult); err != nil {
+			return nil, fmt.Errorf("saving thin result: %w", err)
+		}
+		_ = s.store.AdvanceRound(ctx, deliberationID)
+		return thinResult, nil
 	}
 
 	votes, err := s.store.GetVotes(ctx, deliberationID)
@@ -1003,7 +1028,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	if d.Template != "" {
 		analysisCtx = context.WithValue(analysisCtx, ContextKeyTemplate{}, d.Template)
 	}
-	// Thread prior round's norms and constitutional rules into analysis
+	// Thread prior round's norms, constitutional rules, and extracted claims into analysis
 	if d.Round > 1 {
 		prevResult, _ := s.store.GetAnalysisResult(ctx, deliberationID, d.Round-1)
 		if prevResult != nil {
@@ -1012,6 +1037,9 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 			}
 			if len(prevResult.ConstitutionalRules) > 0 {
 				analysisCtx = context.WithValue(analysisCtx, ContextKeyConstitutionalRules{}, prevResult.ConstitutionalRules)
+			}
+			if len(prevResult.ExtractedClaims) > 0 {
+				analysisCtx = context.WithValue(analysisCtx, ContextKeyPriorClaims{}, prevResult.ExtractedClaims)
 			}
 		}
 	}

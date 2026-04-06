@@ -286,6 +286,142 @@ func TestQuoteGroundingMultiAgentDedup(t *testing.T) {
 	}
 }
 
+// TestIncrementalAnalysis verifies that when prior claims are provided via context,
+// only new positions trigger claim extraction LLM calls. Prior claims are carried forward
+// and merged with newly extracted claims for dedup + crux detection.
+func TestIncrementalAnalysis(t *testing.T) {
+	var extractionCalls int32
+
+	mockFn := func(_ context.Context, system, prompt string, schema map[string]any, target any) error {
+		switch {
+		case strings.Contains(prompt, "break down the information"):
+			return json.Unmarshal([]byte(`{
+				"topics": [{"topic_name": "Strategy", "topic_description": "Strategic approaches",
+					"subtopics": [{"subtopic_name": "Cooperation", "subtopic_description": "Working together vs competing"}]}]
+			}`), target)
+
+		case strings.Contains(prompt, "extract the most important concise claims"):
+			extractionCalls++
+			// Only participant 3 (dave) should be extracted in incremental mode
+			if strings.Contains(prompt, "Participant 3") {
+				return json.Unmarshal([]byte(`{"claims": [{"claim": "Alliances should be flexible", "quote": "rigid alliances fail", "topic_name": "Strategy", "subtopic_name": "Cooperation"}]}`), target)
+			}
+			// Participants 0-2 may also be called in non-incremental mode
+			if strings.Contains(prompt, "Participant 0") {
+				return json.Unmarshal([]byte(`{"claims": [{"claim": "Strong alliances are key", "quote": "we must ally", "topic_name": "Strategy", "subtopic_name": "Cooperation"}]}`), target)
+			}
+			if strings.Contains(prompt, "Participant 1") {
+				return json.Unmarshal([]byte(`{"claims": [{"claim": "Trust must be earned", "quote": "trust is earned not given", "topic_name": "Strategy", "subtopic_name": "Cooperation"}]}`), target)
+			}
+			if strings.Contains(prompt, "Participant 2") {
+				return json.Unmarshal([]byte(`{"claims": [{"claim": "Betrayal is inevitable", "quote": "someone will stab you", "topic_name": "Strategy", "subtopic_name": "Cooperation"}]}`), target)
+			}
+			return json.Unmarshal([]byte(`{"claims": []}`), target)
+
+		case strings.Contains(prompt, "grouping claims"):
+			return json.Unmarshal([]byte(`{"groups": [
+				{"claim_text": "Cooperation through alliances is essential", "original_claim_ids": [0, 1]},
+				{"claim_text": "Trust is fragile and betrayal likely", "original_claim_ids": [2, 3]}
+			]}`), target)
+
+		case strings.Contains(prompt, "maximally controversial statement"):
+			return json.Unmarshal([]byte(`{
+				"crux_claim": "Alliances should be rigid and committed rather than flexible and opportunistic",
+				"agree": ["0", "1"], "disagree": ["2", "3"], "no_clear_position": [],
+				"explanation": "Two groups disagree on alliance flexibility."
+			}`), target)
+
+		case strings.Contains(prompt, "Generate a detailed summary"):
+			return json.Unmarshal([]byte(`{"summary": "Participants debate alliance strategy."}`), target)
+
+		default:
+			return fmt.Errorf("unexpected prompt: %s", prompt[:min(100, len(prompt))])
+		}
+	}
+
+	agents := []string{"alice", "bob", "carol", "dave"}
+	round1Positions := []deliberation.Position{
+		{ID: "p1", DeliberationID: "Diplomacy", AgentID: "alice", Content: "we must ally with our neighbors", Round: 1},
+		{ID: "p2", DeliberationID: "Diplomacy", AgentID: "bob", Content: "trust is earned not given", Round: 1},
+		{ID: "p3", DeliberationID: "Diplomacy", AgentID: "carol", Content: "someone will stab you eventually", Round: 1},
+	}
+
+	// Round 1: full extraction
+	analyzer := analysis.NewTextAnalyzerWithFunc(mockFn)
+	result1, err := analyzer.Analyze(context.Background(), round1Positions, nil, agents[:3])
+	if err != nil {
+		t.Fatalf("round 1 analysis failed: %v", err)
+	}
+
+	// Round 1 should produce extracted claims
+	if len(result1.ExtractedClaims) == 0 {
+		t.Fatal("round 1 should produce extracted claims for incremental use")
+	}
+	// Should have 3 claims (one per position)
+	if len(result1.ExtractedClaims) != 3 {
+		t.Fatalf("expected 3 extracted claims from round 1, got %d", len(result1.ExtractedClaims))
+	}
+
+	round1ExtractionCalls := extractionCalls
+	t.Logf("round 1 extraction calls: %d", round1ExtractionCalls)
+
+	// Round 2: add a new position from dave, carry forward prior claims
+	extractionCalls = 0
+	round2Positions := append(round1Positions, deliberation.Position{
+		ID: "p4", DeliberationID: "Diplomacy", AgentID: "dave", Content: "rigid alliances fail, stay flexible", Round: 2,
+	})
+
+	// Pass prior claims via context
+	ctx := context.WithValue(context.Background(), deliberation.ContextKeyPriorClaims{}, result1.ExtractedClaims)
+
+	analyzer2 := analysis.NewTextAnalyzerWithFunc(mockFn)
+	result2, err := analyzer2.Analyze(ctx, round2Positions, nil, agents)
+	if err != nil {
+		t.Fatalf("round 2 analysis failed: %v", err)
+	}
+
+	// Incremental: should only extract from p4 (1 call), not p1/p2/p3
+	if extractionCalls != 1 {
+		t.Fatalf("incremental round 2 should make 1 extraction call (for new position), got %d", extractionCalls)
+	}
+
+	// Result should have all 4 claims (3 carried + 1 new)
+	if len(result2.ExtractedClaims) != 4 {
+		t.Fatalf("expected 4 total extracted claims after round 2, got %d", len(result2.ExtractedClaims))
+	}
+
+	// Verify the new claim is present
+	found := false
+	for _, c := range result2.ExtractedClaims {
+		if c.PositionID == "p4" {
+			found = true
+			if c.Claim != "Alliances should be flexible" {
+				t.Fatalf("unexpected claim for p4: %q", c.Claim)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected extracted claim from new position p4")
+	}
+
+	// Verify cruxes still work with merged claims
+	if len(result2.Cruxes) == 0 {
+		t.Fatal("expected cruxes from merged claim analysis")
+	}
+
+	// Audit log should mention incremental
+	foundIncremental := false
+	for _, entry := range result2.AuditLog {
+		if entry.Stage == "incremental" {
+			foundIncremental = true
+			break
+		}
+	}
+	if !foundIncremental {
+		t.Fatal("expected incremental audit entry in round 2")
+	}
+}
+
 func TestTextAnalyzerEmptyPositions(t *testing.T) {
 	analyzer := analysis.NewTextAnalyzerWithFunc(mockLLM())
 
