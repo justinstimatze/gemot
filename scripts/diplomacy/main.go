@@ -1456,63 +1456,63 @@ func analyzeAndPoll(ctx context.Context, url, secret string, sc scope, deliberat
 			break
 		}
 
-		result := callToolSoft(ctx, session, "participate", map[string]any{
-			"action":          "get_context",
+		// Poll by checking deliberation status first (cheap, doesn't trigger
+		// forced-acknowledgment errors). Only try get_context once analysis is done.
+		statusJSON := callToolSoft(ctx, session, "deliberation", map[string]any{
+			"action":          "get",
 			"deliberation_id": deliberationID,
-			"agent_id":        firstPower,
 		})
 
-		if result == "" {
-			// First: try to get status on a fresh connection (the current one may be dead)
+		if statusJSON == "" {
+			// Connection likely dead — reconnect
 			reconnect()
-			if session == nil {
-				continue
-			}
+			continue
+		}
 
-			statusJSON := callToolSoft(ctx, session, "deliberation", map[string]any{
-				"action":          "get",
+		var s struct {
+			Status    string `json:"status"`
+			SubStatus string `json:"sub_status"`
+		}
+		json.Unmarshal([]byte(strings.SplitN(statusJSON, "\n\n---\n", 2)[0]), &s) //nolint:errcheck
+
+		if s.Status == "analyzing" {
+			if i%10 == 0 {
+				fmt.Fprintf(os.Stderr, "%s %s/%s\n", prefix, s.Status, s.SubStatus)
+			}
+			continue
+		}
+
+		if s.Status == "open" {
+			// Analysis done — try to get context to confirm results exist
+			result := callToolSoft(ctx, session, "participate", map[string]any{
+				"action":          "get_context",
 				"deliberation_id": deliberationID,
+				"agent_id":        firstPower,
 			})
-			if statusJSON == "" {
-				// Still can't connect — keep retrying
-				continue
+			if result != "" {
+				completed = true
+				fmt.Fprintf(os.Stderr, "%s analysis complete\n", prefix)
+				break
 			}
-
-			var s struct {
-				Status    string `json:"status"`
-				SubStatus string `json:"sub_status"`
-			}
-			json.Unmarshal([]byte(strings.SplitN(statusJSON, "\n\n---\n", 2)[0]), &s) //nolint:errcheck
-			fmt.Fprintf(os.Stderr, "%s %s/%s\n", prefix, s.Status, s.SubStatus)
-
-			if s.Status == "analyzing" {
-				// Analysis still running on the server — just keep polling
-				continue
-			}
-
-			// If status reset to "open", analysis failed — retry
-			if s.Status == "open" && analyzeRetries < maxAnalyzeRetries {
+			// Status is open but no results — analysis may have failed, retry
+			if analyzeRetries < maxAnalyzeRetries {
 				analyzeRetries++
-				fmt.Fprintf(os.Stderr, "%s analysis failed, retrying (%d/%d)...\n", prefix, analyzeRetries, maxAnalyzeRetries)
+				fmt.Fprintf(os.Stderr, "%s analysis failed (no results), retrying (%d/%d)...\n", prefix, analyzeRetries, maxAnalyzeRetries)
 				time.Sleep(5 * time.Second)
 				retryResult := callToolSoft(ctx, session, "analyze", map[string]any{
 					"action":          "run",
 					"deliberation_id": deliberationID,
 				})
 				if retryResult == "" {
-					return nil, fmt.Errorf("analyze retry failed")
+					reconnect()
 				}
 				continue
 			}
-			if s.Status == "open" {
-				return nil, fmt.Errorf("analysis failed after %d retries", maxAnalyzeRetries)
-			}
-			continue
+			return nil, fmt.Errorf("analysis failed after %d retries", maxAnalyzeRetries)
 		}
 
-		completed = true
-		fmt.Fprintf(os.Stderr, "%s analysis complete\n", prefix)
-		break
+		// Unexpected status — log and continue
+		fmt.Fprintf(os.Stderr, "%s unexpected status: %s/%s\n", prefix, s.Status, s.SubStatus)
 	}
 	if !completed {
 		return nil, fmt.Errorf("analysis did not produce results after 10 minutes")
