@@ -28,6 +28,10 @@ func connect(ctx context.Context, url, secret string) (*sdkmcp.ClientSession, er
 }
 
 func callTool(ctx context.Context, s *sdkmcp.ClientSession, name string, args map[string]any) string {
+	if s == nil {
+		fmt.Fprintf(os.Stderr, "tool %s: nil session (gemot server down?)\n", name)
+		os.Exit(1)
+	}
 	res, err := s.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tool %s failed: %v\n", name, err)
@@ -41,6 +45,10 @@ func callTool(ctx context.Context, s *sdkmcp.ClientSession, name string, args ma
 }
 
 func callToolSoft(ctx context.Context, s *sdkmcp.ClientSession, name string, args map[string]any) string {
+	if s == nil {
+		fmt.Fprintf(os.Stderr, "  [soft] %s: nil session\n", name)
+		return ""
+	}
 	ctx2, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	res, err := s.CallTool(ctx2, &sdkmcp.CallToolParams{Name: name, Arguments: args})
