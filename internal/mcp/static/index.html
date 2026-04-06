@@ -75,10 +75,13 @@
   .demo-intro { color: #64748b; margin-bottom: 1.5rem; font-size: 0.9rem; }
 
   /* Collapsible demo cards */
-  .demo-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; margin: 0.75rem 0; }
-  .demo-card summary { padding: 1.25rem; cursor: pointer; list-style: none; }
+  .demo-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; margin: 0.75rem 0; transition: border-color 0.15s; }
+  .demo-card:hover { border-color: #c7d2fe; }
+  .demo-card summary { padding: 1.25rem; cursor: pointer; list-style: none; display: flex; align-items: flex-start; gap: 0.75rem; }
   .demo-card summary::-webkit-details-marker { display: none; }
   .demo-card summary::marker { display: none; content: ''; }
+  .demo-card summary::before { content: '\25B6'; color: #94a3b8; font-size: 0.7rem; margin-top: 0.25rem; flex-shrink: 0; transition: transform 0.15s; }
+  .demo-card[open] summary::before { transform: rotate(90deg); }
   .demo-card-title { font-weight: 600; color: #0f172a; font-size: 0.95rem; margin-bottom: 0.15rem; }
   .demo-card-desc { color: #64748b; font-size: 0.85rem; line-height: 1.5; }
   .demo-card summary:hover { background: #f1f5f9; border-radius: 10px; }
@@ -251,10 +254,12 @@
 <h2 style="border:none; margin-top:0;">Demos</h2>
 <p class="demo-intro">Each demo runs real LLM analysis through gemot's full pipeline &mdash; taxonomy extraction, claim detection, crux identification.</p>
 
-<details class="demo-card" id="demo-oss" open>
+<details class="demo-card" id="demo-oss">
 <summary>
-  <div class="demo-card-title">OSS Governance &mdash; merge, reject, or negotiate a FAANG PR?</div>
-  <div class="demo-card-desc">Your open-source project (10K stars, 3 maintainers) gets a PR from a FAANG company. 40% of users want the feature &mdash; but it doubles the API surface and depends on their proprietary SDK. Three agents deliberate: negotiate, reject, and a mediator invited mid-debate.</div>
+  <div>
+    <div class="demo-card-title">OSS Governance &mdash; merge, reject, or negotiate a FAANG PR?</div>
+    <div class="demo-card-desc">Your open-source project (10K stars, 3 maintainers) gets a PR from a FAANG company. 40% of users want the feature &mdash; but it doubles the API surface and depends on their proprietary SDK. Three agents deliberate: negotiate, reject, and a mediator invited mid-debate.</div>
+  </div>
 </summary>
 <div class="demo-card-body">
 
@@ -325,8 +330,10 @@
 
 <details class="demo-card" id="demo-calendar">
 <summary>
-  <div class="demo-card-title">Calendar Scheduling &mdash; 5 agents find a meeting time</div>
-  <div class="demo-card-desc">Five team members' agents negotiate a 1-hour meeting without sharing calendars. Morning people vs afternoon people. Hard constraints (school pickup, offsite, timezone). Gemot finds the one slot that works.</div>
+  <div>
+    <div class="demo-card-title">Calendar Scheduling &mdash; 5 agents find a meeting time</div>
+    <div class="demo-card-desc">Five team members' agents negotiate a 1-hour meeting without sharing calendars. Morning people vs afternoon people. Hard constraints (school pickup, offsite, timezone). Gemot finds the one slot that works.</div>
+  </div>
 </summary>
 <div class="demo-card-body">
 
@@ -415,8 +422,10 @@
 
 <details class="demo-card" id="demo-governance">
 <summary>
-  <div class="demo-card-title">AI Governance &mdash; 5 expert agents</div>
-  <div class="demo-card-desc">Safety researcher, startup founder, ethics professor, policy advisor, and open-source developer deliberate on frontier AI regulation. 1 crux detected at 84% controversy.</div>
+  <div>
+    <div class="demo-card-title">AI Governance &mdash; 5 expert agents</div>
+    <div class="demo-card-desc">Safety researcher, startup founder, ethics professor, policy advisor, and open-source developer deliberate on frontier AI regulation. 1 crux detected at 84% controversy.</div>
+  </div>
 </summary>
 
 <div class="demo-card-body">
@@ -491,8 +500,10 @@
 
 <details class="demo-card" id="demo-diplomacy">
 <summary>
-  <div class="demo-card-title">Diplomacy &mdash; 7 AI powers, 7 years of negotiation</div>
-  <div class="demo-card-desc">7 Sonnet agents play Diplomacy for 7 years, forming alliances and coordinating support orders. Without gemot, one alliance steamrolls the board. With gemot briefings, power stays balanced. Spread drops from 10 to 5.</div>
+  <div>
+    <div class="demo-card-title">Diplomacy &mdash; 7 AI powers, 7 years of negotiation</div>
+    <div class="demo-card-desc">7 Sonnet agents play Diplomacy for 7 years, forming alliances and coordinating support orders. Without gemot, one alliance steamrolls the board. With gemot briefings, power stays balanced. Spread drops from 10 to 5.</div>
+  </div>
 </summary>
 <div class="demo-card-body">
 
