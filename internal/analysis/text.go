@@ -223,6 +223,33 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		numToAgent[num] = agent
 	}
 
+	// Check for prior claims from previous round (incremental analysis)
+	var priorClaims []deliberation.ExtractedClaim
+	priorPositionIDs := map[string]bool{}
+	if pc, ok := ctx.Value(deliberation.ContextKeyPriorClaims{}).([]deliberation.ExtractedClaim); ok {
+		priorClaims = pc
+		for _, c := range pc {
+			priorPositionIDs[c.PositionID] = true
+		}
+	}
+
+	// Split positions into already-processed and new
+	var newPositions, allPositions []deliberation.Position
+	for _, p := range positions {
+		allPositions = append(allPositions, p)
+		if !priorPositionIDs[p.ID] {
+			newPositions = append(newPositions, p)
+		}
+	}
+	incremental := len(priorClaims) > 0 && len(newPositions) < len(allPositions)
+	if incremental {
+		slog.Info("incremental analysis",
+			"total_positions", len(allPositions),
+			"new_positions", len(newPositions),
+			"prior_claims", len(priorClaims),
+			"skipped_positions", len(allPositions)-len(newPositions))
+	}
+
 	deliberationTopic := positions[0].DeliberationID
 	positionText := formatPositions(positions, agentToNum)
 
@@ -281,11 +308,30 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	claimSchema := buildConstrainedClaimSchema(taxonomy)
 
 	// Step 2: Claim extraction (per position) with sanitization
+	// Incremental mode: only extract from new positions, merge with prior claims
 	// Parallelized with bounded concurrency (T3C pattern: semaphore + goroutines)
 	reportProgress(ctx, "extracting")
+
+	// Convert prior claims to internal claim type
+	var carriedClaims []claim
+	for _, pc := range priorClaims {
+		num := agentToNum[pc.AgentID]
+		carriedClaims = append(carriedClaims, claim{
+			AgentID:      pc.AgentID,
+			AgentNum:     num,
+			PositionID:   pc.PositionID,
+			Claim:        pc.Claim,
+			Quote:        pc.Quote,
+			TopicName:    pc.TopicName,
+			SubtopicName: pc.SubtopicName,
+		})
+	}
+
+	// Only extract from positions not already covered by prior claims
+	positionsToExtract := newPositions
 	var smallNPreamble string
-	if len(positions) <= 10 {
-		smallNPreamble = "IMPORTANT: With only " + strconv.Itoa(len(positions)) + " participants, each position is valuable. Extract at least one claim per position when the position contains any debatable stance. Do not apply the zero-extraction threshold as aggressively as you would with hundreds of comments.\n\n"
+	if len(positionsToExtract) <= 10 && len(positionsToExtract) > 0 {
+		smallNPreamble = "IMPORTANT: With only " + strconv.Itoa(len(positionsToExtract)) + " participants, each position is valuable. Extract at least one claim per position when the position contains any debatable stance. Do not apply the zero-extraction threshold as aggressively as you would with hundreds of comments.\n\n"
 	}
 
 	const maxConcurrentExtractions = 6
@@ -293,11 +339,11 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		claims   []claim
 		warnings []string
 	}
-	results := make([]extractionResult, len(positions))
+	results := make([]extractionResult, len(positionsToExtract))
 	sem := make(chan struct{}, maxConcurrentExtractions)
 	var wg sync.WaitGroup
 
-	for i, p := range positions {
+	for i, p := range positionsToExtract {
 		wg.Add(1)
 		go func(idx int, pos deliberation.Position) {
 			defer wg.Done()
@@ -330,11 +376,24 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	}
 	wg.Wait()
 
-	// Collect results in deterministic order
-	var allClaims []claim
+	// Collect new extraction results in deterministic order
+	var newClaims []claim
 	for _, r := range results {
-		allClaims = append(allClaims, r.claims...)
+		newClaims = append(newClaims, r.claims...)
 		warnings = append(warnings, r.warnings...)
+	}
+
+	// Merge: prior claims first (stable order), then new claims
+	var allClaims []claim
+	allClaims = append(allClaims, carriedClaims...)
+	allClaims = append(allClaims, newClaims...)
+
+	if incremental {
+		audit = append(audit, deliberation.AuditEntry{
+			Stage:  "incremental",
+			Detail: fmt.Sprintf("carried %d prior claims, extracted %d new claims from %d new positions", len(carriedClaims), len(newClaims), len(positionsToExtract)),
+			Count:  len(newClaims),
+		})
 	}
 
 	// Audit: per-position claim counts
@@ -797,6 +856,21 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		DominatedProposals:   dominatedProposals,
 		AnalyzedAt:           time.Now().UTC(),
 	}
+
+	// Persist all extracted claims (prior + new) for incremental analysis in next round
+	extractedClaims := make([]deliberation.ExtractedClaim, len(allClaims))
+	for i, c := range allClaims {
+		extractedClaims[i] = deliberation.ExtractedClaim{
+			AgentID:      c.AgentID,
+			PositionID:   c.PositionID,
+			Claim:        c.Claim,
+			Quote:        c.Quote,
+			TopicName:    c.TopicName,
+			SubtopicName: c.SubtopicName,
+		}
+	}
+	result.ExtractedClaims = extractedClaims
+
 	result.RecommendedAction = recommendAction(result)
 
 	slog.Info("analysis complete",
