@@ -538,50 +538,52 @@ export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable
 <details class="demo-card" id="demo-diplomacy">
 <summary>
   <div>
-    <div class="demo-card-title">Diplomacy &mdash; 7 AI powers, per-season intelligence briefings</div>
-    <div class="demo-card-desc">7 Sonnet agents play Diplomacy for 7 years. Without gemot: Germany eliminated, Gini 0.34. With per-season briefings: all 7 survive, Gini held at 0.09 for 8 consecutive cycles before late-game breakaway.</div>
+    <div class="demo-card-title">Diplomacy &mdash; 7 AI powers, commitment accountability</div>
+    <div class="demo-card-desc">7 Sonnet agents play Diplomacy for 7 years. Without gemot: Austria eliminated, Gini 0.36. With per-season briefings + trust tracking + commitment accountability: all 7 survive, Gini halved to 0.185. England contained at 5 SCs (normally dominates at 9-10).</div>
   </div>
 </summary>
 <div class="demo-card-body">
 
-<p style="color:#475569; margin-bottom:1.5rem;">Each season, gemot analyzes every bilateral negotiation and the global diplomatic table, detecting cruxes, shared ground, and deception. Briefings surface intelligence that was already in the negotiations but hard to see. Three conditions compared: no analysis, per-year analysis, and per-season analysis.</p>
+<p style="color:#475569; margin-bottom:1.5rem;">Each season, gemot analyzes every bilateral negotiation and the global diplomatic table. Trust tracking cross-references promises against actual orders. Commitment accountability audits follow-through. Elimination warnings flag powers at risk. Briefings surface intelligence that was already in the negotiations but hard to see.</p>
 
 <h3>Control (no gemot)</h3>
 <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin:0.75rem 0 0.5rem; font-size:0.8rem; text-align:center;">
   <div><div style="background:#e11d48;color:#fff;border-radius:6px;padding:0.3rem;">ENG</div><div style="font-weight:700;">9</div></div>
   <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">TUR</div><div>8</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">FRA</div><div>7</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">AUS</div><div>4</div></div>
-  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div>3</div></div>
-  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div>3</div></div>
-  <div><div style="background:#1e293b;color:#fff;border-radius:6px;padding:0.3rem;">GER</div><div style="font-weight:700;">0</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">FRA</div><div>6</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">GER</div><div>6</div></div>
+  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div>4</div></div>
+  <div><div style="background:#64748b;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div>1</div></div>
+  <div><div style="background:#1e293b;color:#fff;border-radius:6px;padding:0.3rem;">AUS</div><div style="font-weight:700;">0</div></div>
 </div>
-<p style="color:#94a3b8; font-size:0.8rem;">Gini: 0.34 &middot; Spread: 9 &middot; Germany eliminated Y6</p>
+<p style="color:#94a3b8; font-size:0.8rem;">Gini: 0.36 &middot; Spread: 10 &middot; Austria eliminated Y7</p>
 
-<h3>Per-season gemot briefings</h3>
+<h3>With gemot briefings + commitment accountability</h3>
 <div style="display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin:0.75rem 0 0.5rem; font-size:0.8rem; text-align:center;">
-  <div><div style="background:#4f46e5;color:#fff;border-radius:6px;padding:0.3rem;">ENG</div><div style="font-weight:700;">9</div></div>
-  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">FRA</div><div>6</div></div>
-  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">RUS</div><div>6</div></div>
-  <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">ITA</div><div>4</div></div>
-  <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">TUR</div><div>4</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">AUS</div><div>3</div></div>
-  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">GER</div><div>2</div></div>
+  <div><div style="background:#4f46e5;color:#fff;border-radius:6px;padding:0.3rem;">FRA</div><div style="font-weight:700;">7</div></div>
+  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">AUS</div><div>6</div></div>
+  <div><div style="background:#6366f1;color:#fff;border-radius:6px;padding:0.3rem;">GER</div><div>6</div></div>
+  <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">ENG</div><div>5</div></div>
+  <div><div style="background:#818cf8;color:#fff;border-radius:6px;padding:0.3rem;">TUR</div><div>5</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">RUS</div><div>3</div></div>
+  <div><div style="background:#94a3b8;border-radius:6px;padding:0.3rem;">ITA</div><div>2</div></div>
 </div>
-<p style="color:#94a3b8; font-size:0.8rem;">Gini: 0.24 &middot; Spread: 7 &middot; All 7 survive &middot; Gini held at 0.09 through Y5</p>
+<p style="color:#94a3b8; font-size:0.8rem;">Gini: 0.185 &middot; Spread: 6 &middot; All 7 survive &middot; 941 positions, 460 commitments tracked</p>
 
 <h3>How it works</h3>
-<p style="color:#475569; font-size:0.88rem; line-height:1.6;">Each season, gemot processes ~70 messages across 21+ deliberation scopes. For each scope, it:</p>
+<p style="color:#475569; font-size:0.88rem; line-height:1.6;">Each season, gemot processes ~70 messages across 16+ deliberation scopes (1 global assembly, 15 bilateral negotiations, detected alliances). For each scope, it:</p>
 <ol style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
   <li>Extracts claims and detects cruxes from negotiations</li>
   <li>Checks cross-bilateral consistency (catches agents saying contradictory things to different powers)</li>
-  <li>Scores proposal asymmetry (bait detection) and tracks trust via promise follow-through</li>
-  <li>Produces briefings leading with shared ground, flagging power balance shifts and stab risks</li>
+  <li>Tracks trust via promise follow-through and audits commitment fulfillment/breakage</li>
+  <li>Flags elimination risks and coalition threats affecting absent parties</li>
+  <li>Produces briefings with shared ground, power balance warnings, and reputation scores</li>
 </ol>
 
-<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">Incremental analysis skips re-processing prior seasons' messages &mdash; only new positions trigger LLM extraction, with prior claims carried forward. A 5-expert adversarial panel identified N=1 as the main limitation; replicated runs planned.</p>
+<h3>Key result: Austria</h3>
+<p style="color:#475569; font-size:0.88rem; line-height:1.6;">Austria was eliminated in the control (4 &rarr; 3 &rarr; 2 &rarr; 1 &rarr; 0 SCs over 7 years). With gemot, Austria <em>recovered</em> to 6 SCs &mdash; the most dramatic per-power delta. Elimination warnings and coalition risk warnings enabled other powers to coordinate Austria's defense. England, which dominates at 9-10 SCs in all prior experiments, was contained at 5.</p>
 
-<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">14-cycle per-season experiment &middot; Claude Sonnet 4.6 &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/diplomacy/">source</a></p>
+<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">v15a: 14-cycle per-season experiment &middot; seed 2027 &middot; Claude Sonnet 4.6 &middot; 941 positions, 242 analyses, 460 commitments &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/diplomacy/FINDINGS.md">full findings</a> &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/diplomacy/">source</a></p>
 
 </div>
 </details>
@@ -627,6 +629,57 @@ go run scripts/expert-panel/ --document my-plan.md</code></pre>
 </div>
 </details>
 
+
+<details class="demo-card" id="demo-climate">
+<summary>
+  <div>
+    <div class="demo-card-title">Climate Policy &mdash; 8 international negotiators</div>
+    <div class="demo-card-desc">EU commissioner, US envoy, Indian negotiator, small island states rep, OPEC delegate, IPCC scientist, World Bank director, and labor union president deliberate a $50/ton carbon tax. 9 cruxes, 5 consensus points, 9 bridging proposals.</div>
+  </div>
+</summary>
+<div class="demo-card-body">
+
+<div style="display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:1.25rem;">
+  <span style="background:#eef2ff;color:#4f46e5;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.78rem;font-weight:500;">EU Commissioner</span>
+  <span style="background:#eef2ff;color:#4f46e5;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.78rem;font-weight:500;">US Envoy</span>
+  <span style="background:#eef2ff;color:#4f46e5;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.78rem;font-weight:500;">India</span>
+  <span style="background:#eef2ff;color:#4f46e5;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.78rem;font-weight:500;">Small Islands</span>
+  <span style="background:#eef2ff;color:#4f46e5;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.78rem;font-weight:500;">OPEC</span>
+  <span style="background:#eef2ff;color:#4f46e5;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.78rem;font-weight:500;">IPCC Scientist</span>
+  <span style="background:#eef2ff;color:#4f46e5;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.78rem;font-weight:500;">World Bank</span>
+  <span style="background:#eef2ff;color:#4f46e5;padding:0.3rem 0.7rem;border-radius:6px;font-size:0.78rem;font-weight:500;">Labor Union</span>
+</div>
+
+<p style="color:#475569; font-size:0.88rem; line-height:1.6; margin-bottom:1.25rem;">Each expert has declared interests and hard reservations. The IPCC scientist reserves that $50/ton is inconsistent with the remaining carbon budget. India reserves no pricing that constrains GDP growth below 6%. The small island states rep reserves that anything below $100/ton is performative. These aren't preferences &mdash; they're red lines the analysis cannot cross.</p>
+
+<h3>Sample crux</h3>
+<div class="crux">
+  <div class="crux-meta">
+    <span class="crux-topic">Carbon Pricing</span>
+    <span class="crux-controversy">50% controversial</span>
+  </div>
+  <div class="crux-claim">&ldquo;The starting carbon price should be set at $100/ton or higher immediately, even if this risks losing participation from major emitters.&rdquo;</div>
+  <div class="crux-sides">
+    <div class="crux-side crux-agree">
+      <div class="crux-side-label">Agree</div>
+      <span class="pill pill-agree">IPCC</span>
+      <span class="pill pill-agree">EU</span>
+      <span class="pill pill-agree">Small Islands</span>
+    </div>
+    <div class="crux-side crux-disagree">
+      <div class="crux-side-label">Disagree</div>
+      <span class="pill pill-disagree">US Envoy</span>
+    </div>
+  </div>
+  <div class="crux-explanation">The science-first coalition argues the carbon budget demands immediate aggressive pricing, while the US envoy prioritizes maintaining broad participation over optimal pricing &mdash; a universal mechanism at $50/ton reduces more carbon than a perfect mechanism only the EU joins.</div>
+</div>
+
+<p style="color:#475569; font-size:0.88rem; margin-top:1rem;"><strong>9 cruxes</strong> identified across carbon pricing levels, border adjustment fairness, exemption timelines, revenue allocation, and enforcement mechanisms. <strong>9 bridging proposals</strong> found cross-coalition agreement &mdash; including a graduated entry ramp that satisfies both the IPCC's urgency and India's development constraints.</p>
+
+<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">8-expert panel &middot; source_type: proposal &middot; thorough depth &middot; real analysis from gemot.dev</p>
+
+</div>
+</details>
 
 <div class="references">
   <p style="color:#475569; font-size:0.9rem; line-height:1.7; margin-bottom:1.5rem;">The Semantic Web vision (Berners-Lee, 2001) imagined agents negotiating on behalf of humans &mdash; but assumed shared ontologies would make understanding automatic. FIPA (1996&ndash;2005) standardized agent communication protocols like the Contract Net. Argumentation theory (Dung, Bench-Capon, Walton &amp; Krabbe) formalized how agents should handle disagreement. These efforts stalled on the ontology bottleneck &mdash; the impossibility of getting everyone to agree on shared vocabularies. LLMs dramatically reduce that bottleneck. Gemot combines this with insights from deliberation platforms to provide what the Semantic Web envisioned but couldn't build. <a href="https://github.com/justinstimatze/gemot/blob/main/docs/research-lineage.md" style="white-space:nowrap;">Full lineage &rarr;</a></p>
