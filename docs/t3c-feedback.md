@@ -68,8 +68,8 @@ The `addOns.subtopicCruxes` structure is clean and easy to work with. The `contr
 ### 1. Stance confidence scores
 As described above — expose per-stance confidence alongside the binary classification.
 
-### 2. Quote-grounded stances
-Include the specific quote(s) that motivated each stance classification. Currently the quotes are in the claims structure but not linked to stance assignments.
+### 2. Quote-grounded crux stances
+T3C already links quotes → claims → speakers (via sourceId references). But the crux layer (`subtopicCruxes`, `speakerCruxMatrix`) doesn't link back to which quote(s) motivated each agree/disagree classification. The `explanation` field is LLM prose, not a pointer. Adding quote IDs per stance would close the provenance chain and enable automated verification.
 
 ### 3. Stable topic/crux IDs
 When re-running T3C on the same data, topic and crux IDs change. Stable IDs would enable cross-run comparison and incremental updates.
