@@ -478,6 +478,9 @@ func main() {
 	groupID := flag.String("group", "t3c-import", "Group ID")
 	rounds := flag.Int("rounds", 2, "Number of rounds for structural mode (1 = single-shot, 2 = phased protocol)")
 	reportPath := flag.String("report", "", "Write markdown report to file")
+	nullControl := flag.Bool("null-control", false, "Run null control (shuffled data) for validation")
+	spotCheck := flag.Bool("spot-check", false, "LLM-verify 15% of stance assignments against source quotes")
+	replicate := flag.Int("replicate", 0, "Run N replication runs to test pipeline stability")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -505,7 +508,7 @@ func main() {
 	case "speaker":
 		runSpeakerMode(&data, mcpURL, *template, *threshold, *allCruxes, *dryRun, *groupID)
 	case "structural":
-		runStructuralMode(&data, mcpURL, *template, *threshold, *allCruxes, *dryRun, *groupID, *rounds, *reportPath)
+		runStructuralMode(&data, mcpURL, *template, *threshold, *allCruxes, *dryRun, *groupID, *rounds, *reportPath, *nullControl, *spotCheck, *replicate)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode: %s (use speaker or structural)\n", *mode)
 		os.Exit(1)
@@ -613,31 +616,15 @@ func runSpeakerMode(data *ReportData, mcpURL, tmplFlag string, threshold float64
 
 // --- Structural mode v2: phased protocol with vote seeding ---
 
-func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold float64, allCruxes, dryRun bool, groupID string, numRounds int, reportPath string) {
+func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold float64, allCruxes, dryRun bool, groupID string, numRounds int, reportPath string, nullControl, spotCheckFlag bool, replicateN int) {
 	totalClaims := countClaims(data)
 
-	// Derive clusters
-	var clusters []cluster
-	if data.AddOns.SpeakerCruxMatrix != nil {
-		clusters = deriveClusters(data.AddOns.SpeakerCruxMatrix)
-	}
-
-	// Classify cruxes
-	var controversialCruxes []SubtopicCrux
-	var consensusCruxes []SubtopicCrux
-	for _, c := range data.AddOns.SubtopicCruxes {
-		if c.ControversyScore >= threshold {
-			controversialCruxes = append(controversialCruxes, c)
-		} else if c.ControversyScore == 0 && len(c.Agree) >= 3 {
-			consensusCruxes = append(consensusCruxes, c)
-		}
-	}
-
-	// Group controversial cruxes by T3C topic
-	topicCruxes := map[string][]SubtopicCrux{}
-	for _, c := range controversialCruxes {
-		topicCruxes[c.Topic] = append(topicCruxes[c.Topic], c)
-	}
+	setup := buildR1Setup(data, threshold, "t3c-")
+	clusters := setup.clusters
+	controversialCruxes := setup.controversialCruxes
+	consensusCruxes := setup.consensusCruxes
+	topicCruxes := setup.topicCruxes
+	r1Agents := setup.agents
 
 	// Pick template
 	maxControversy := 0.0
@@ -649,116 +636,6 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 	tmpl := tmplFlag
 	if tmpl == "auto" {
 		tmpl = pickTemplate(maxControversy)
-	}
-
-	// --- Build Round 1 agents ---
-	var r1Agents []agentPlan
-
-	// 1. Cluster steelmen (2+ members) and speaker agents (singletons)
-	for i := range clusters {
-		cl := &clusters[i]
-		if len(cl.Members) == 1 {
-			// Singleton → speaker agent
-			name := parseSpeakerID(cl.Members[0])
-			displayName := parseSpeakerName(cl.Members[0])
-			claims := distinctiveClaims(data, []string{name}, clusters, 7)
-
-			var pos strings.Builder
-			fmt.Fprintf(&pos, "SPEAKER: %s\n\n", displayName)
-			if len(claims) > 0 {
-				for _, claim := range claims {
-					fmt.Fprintf(&pos, "- %s\n", claim)
-				}
-			}
-			// Add crux stances
-			if data.AddOns.SpeakerCruxMatrix != nil && len(cl.Pattern) > 0 {
-				pos.WriteString("\nStances:\n")
-				for j, stance := range cl.Pattern {
-					if stance == "no_position" {
-						continue
-					}
-					if j < len(data.AddOns.SpeakerCruxMatrix.CruxLabels) {
-						label := data.AddOns.SpeakerCruxMatrix.CruxLabels[j]
-						for _, c := range data.AddOns.SubtopicCruxes {
-							if cruxLabel(c.Topic, c.Subtopic) == normLabel(label) {
-								fmt.Fprintf(&pos, "- %s: %s\n", strings.ToUpper(stance), c.CruxClaim[:min(80, len(c.CruxClaim))])
-								break
-							}
-						}
-					}
-				}
-			}
-
-			r1Agents = append(r1Agents, agentPlan{
-				ID: fmt.Sprintf("t3c-speaker-%s", slugify(name)), Role: fmt.Sprintf("Speaker: %s", displayName),
-				Position: pos.String(), Kind: "speaker", Round: 1, Cluster: cl,
-			})
-		} else {
-			// Multi-member cluster → steelman agent
-			names := make([]string, len(cl.Members))
-			speakerNames := make([]string, len(cl.Members))
-			for j, m := range cl.Members {
-				names[j] = parseSpeakerName(m)
-				speakerNames[j] = parseSpeakerID(m)
-			}
-			claims := distinctiveClaims(data, speakerNames, clusters, 7)
-
-			var pos strings.Builder
-			fmt.Fprintf(&pos, "STEELMAN for %s\n\n", strings.Join(names, ", "))
-			if len(claims) > 0 {
-				for _, claim := range claims {
-					fmt.Fprintf(&pos, "- %s\n", claim)
-				}
-			}
-			if data.AddOns.SpeakerCruxMatrix != nil && len(cl.Pattern) > 0 {
-				pos.WriteString("\nStances:\n")
-				for j, stance := range cl.Pattern {
-					if stance == "no_position" {
-						continue
-					}
-					if j < len(data.AddOns.SpeakerCruxMatrix.CruxLabels) {
-						label := data.AddOns.SpeakerCruxMatrix.CruxLabels[j]
-						for _, c := range data.AddOns.SubtopicCruxes {
-							if cruxLabel(c.Topic, c.Subtopic) == normLabel(label) {
-								fmt.Fprintf(&pos, "- %s: %s\n", strings.ToUpper(stance), c.CruxClaim[:min(80, len(c.CruxClaim))])
-								break
-							}
-						}
-					}
-				}
-			}
-			pos.WriteString("\nPresent the strongest, most defensible version of this group's collective position.")
-
-			r1Agents = append(r1Agents, agentPlan{
-				ID: fmt.Sprintf("t3c-steelman-%s", slugify(names[0])), Role: fmt.Sprintf("Steelman: %s", strings.Join(names, ", ")),
-				Position: pos.String(), Kind: "steelman", Round: 1, Cluster: cl,
-			})
-		}
-	}
-
-	// 2. Topic adversary agents (one per T3C topic, not one per crux)
-	for topicName, cruxes := range topicCruxes {
-		var pos strings.Builder
-		fmt.Fprintf(&pos, "ADVERSARY for topic: %s\n\n", topicName)
-		fmt.Fprintf(&pos, "Cruxes in this topic (%d):\n", len(cruxes))
-		for _, c := range cruxes {
-			agreeNames := make([]string, len(c.Agree))
-			for j, a := range c.Agree {
-				agreeNames[j] = parseSpeakerName(a)
-			}
-			disagreeNames := make([]string, len(c.Disagree))
-			for j, d := range c.Disagree {
-				disagreeNames[j] = parseSpeakerName(d)
-			}
-			fmt.Fprintf(&pos, "\n[%.0f%%] %s\n", c.ControversyScore*100, c.CruxClaim)
-			fmt.Fprintf(&pos, "  Agree: %s | Disagree: %s\n", strings.Join(agreeNames, ", "), strings.Join(disagreeNames, ", "))
-		}
-		pos.WriteString("\nProbe deeper. What's the underlying disagreement beneath all of these?")
-
-		r1Agents = append(r1Agents, agentPlan{
-			ID: fmt.Sprintf("t3c-adversary-%s", slugify(topicName)), Role: fmt.Sprintf("Adversary: %s", topicName),
-			Position: pos.String(), Kind: "adversary", Round: 1, Topic: topicName,
-		})
 	}
 
 	// Ensure template fits agent count
@@ -1029,9 +906,30 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 		fmt.Fprintf(os.Stderr, "  Join: %s\n", joinCode)
 	}
 
+	// Run null control if requested
+	var ncResult *nullControlResult
+	if nullControl && r1Result != "" {
+		_, secret := getMCPConfig()
+		ncResult = runNullControl(data, r1Result, len(clusters), mcpURL, secret, tmpl, groupID, threshold)
+	}
+
+	// Run replication if requested
+	var repResult *replicationResult
+	if replicateN >= 2 && r1Result != "" {
+		_, secret := getMCPConfig()
+		repResult = runReplication(data, mcpURL, secret, tmpl, groupID, threshold, replicateN)
+	}
+
+	// Run spot-check if requested
+	var scResult *spotCheckResult
+	if spotCheckFlag {
+		fmt.Fprintf(os.Stderr, "\n=== Spot Check ===\n")
+		scResult = runSpotCheck(data, 0.15)
+	}
+
 	// Write markdown report if requested
 	if reportPath != "" && r1Result != "" {
-		md := generateReport(data, r1Result, r2Result, r1Compromise, r2Compromise, r1Agents, r2Agents, tmpl, delibID, joinCode)
+		md := generateReport(data, r1Result, r2Result, r1Compromise, r2Compromise, r1Agents, r2Agents, tmpl, delibID, joinCode, ncResult, scResult, repResult)
 		if err := os.WriteFile(reportPath, []byte(md), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "writing report: %v\n", err)
 		} else {
@@ -1114,7 +1012,7 @@ func deriveVote(data *ReportData, voter, target *agentPlan, clusters []cluster, 
 	}
 
 	// Speaker/steelman → adversary: does this speaker agree with the adversary's topic cruxes?
-	if (voter.Kind == "speaker" || voter.Kind == "steelman") && target.Kind == "adversary" {
+	if (voter.Kind == "speaker" || voter.Kind == "steelman") && target.Kind == "probe" {
 		cruxes := topicCruxes[target.Topic]
 		if len(cruxes) == 0 || voter.Cluster == nil || data.AddOns.SpeakerCruxMatrix == nil {
 			return 0
@@ -1146,7 +1044,7 @@ func deriveVote(data *ReportData, voter, target *agentPlan, clusters []cluster, 
 	}
 
 	// Adversary → speaker/steelman: does the speaker engage with this adversary's topic?
-	if voter.Kind == "adversary" && (target.Kind == "speaker" || target.Kind == "steelman") {
+	if voter.Kind == "probe" && (target.Kind == "speaker" || target.Kind == "steelman") {
 		if target.Cluster == nil {
 			return 0
 		}
@@ -1161,7 +1059,7 @@ func deriveVote(data *ReportData, voter, target *agentPlan, clusters []cluster, 
 	}
 
 	// Adversary → adversary: independent probes
-	if voter.Kind == "adversary" && target.Kind == "adversary" {
+	if voter.Kind == "probe" && target.Kind == "probe" {
 		return 0
 	}
 
@@ -1354,6 +1252,7 @@ type analysisResult struct {
 		Score   float64 `json:"bridging_score"`
 	} `json:"bridging_statements"`
 	TopicSummaries []struct {
+		TopicID string `json:"topic_id"`
 		Topic   string `json:"topic"`
 		Summary string `json:"summary"`
 	} `json:"topic_summaries"`

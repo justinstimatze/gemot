@@ -404,6 +404,9 @@ type ContextKeyTemplate struct{}
 // ContextKeyPriorTaxonomy passes prior round topic names for taxonomy stability.
 type ContextKeyPriorTaxonomy struct{}
 
+// ContextKeyPriorTopicIDs passes prior round topic ID→name mapping for stable IDs across rounds.
+type ContextKeyPriorTopicIDs struct{}
+
 // RuleInt reads an integer rule from a deliberation, returning the default if not set.
 func RuleInt(d *Deliberation, key string, defaultVal int) int {
 	if d.Rules == nil {
@@ -1044,10 +1047,19 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 			// Pass prior taxonomy for topic stability across rounds
 			if len(prevResult.TopicSummaries) > 0 {
 				var priorTopics []string
+				priorTopicIDs := map[string]string{} // name → ID
 				for _, ts := range prevResult.TopicSummaries {
-					priorTopics = append(priorTopics, "- "+ts.Topic)
+					label := ts.Topic
+					if ts.TopicID != "" {
+						label = ts.TopicID + ": " + ts.Topic
+						priorTopicIDs[ts.Topic] = ts.TopicID
+					}
+					priorTopics = append(priorTopics, "- "+label)
 				}
 				analysisCtx = context.WithValue(analysisCtx, ContextKeyPriorTaxonomy{}, strings.Join(priorTopics, "\n"))
+				if len(priorTopicIDs) > 0 {
+					analysisCtx = context.WithValue(analysisCtx, ContextKeyPriorTopicIDs{}, priorTopicIDs)
+				}
 			}
 		}
 	}

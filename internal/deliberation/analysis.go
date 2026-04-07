@@ -59,6 +59,7 @@ type Coalition struct {
 }
 
 type TopicSummary struct {
+	TopicID string `json:"topic_id"` // stable ID (T1, T2, ...) persists across rounds
 	Topic   string `json:"topic"`
 	Summary string `json:"summary"`
 }

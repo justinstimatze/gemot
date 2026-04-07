@@ -27,13 +27,14 @@ func controversyLabel(score float64, nAgree, nDisagree int) string {
 }
 
 func isStructuralAgent(id string) bool {
-	return strings.Contains(id, "adversary") ||
+	return strings.Contains(id, "probe") ||
+		strings.Contains(id, "adversary") ||
 		strings.Contains(id, "bridge") ||
 		strings.Contains(id, "dissent") ||
 		strings.Contains(id, "empty-chair")
 }
 
-func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Compromise string, agents []agentPlan, r2Agents []agentPlan, tmpl, delibID, joinCode string) string {
+func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Compromise string, agents []agentPlan, r2Agents []agentPlan, tmpl, delibID, joinCode string, ncResult *nullControlResult, scResult *spotCheckResult, repResult *replicationResult) string {
 	var r1 analysisResult
 	json.Unmarshal([]byte(r1JSON), &r1)
 
@@ -55,7 +56,16 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 	if joinCode != "" {
 		fmt.Fprintf(&b, " · Join: `%s`", joinCode)
 	}
-	fmt.Fprintf(&b, " · Template: %s · Replication: **Tier 0 (single run — unreplicated)**\n\n", tmpl)
+	repTier := "Tier 0 (single run — unreplicated)"
+	if repResult != nil && len(repResult.Runs) >= 2 {
+		s := repResult.Stability
+		if s.Tier == 2 {
+			repTier = fmt.Sprintf("Tier 2 (%d runs, all CV < 0.2)", len(repResult.Runs))
+		} else {
+			repTier = fmt.Sprintf("Tier 1 (%d runs)", len(repResult.Runs))
+		}
+	}
+	fmt.Fprintf(&b, " · Template: %s · Replication: **%s**\n\n", tmpl, repTier)
 
 	// Source report
 	totalClaims := countClaims(data)
@@ -70,20 +80,20 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 	b.WriteString("## Participants\n\n")
 	b.WriteString("Agents fall into two categories: **speaker-derived** (grounded in named speakers' extracted claims) and **structural** (pipeline-generated to probe the discourse topology). Crux scores are reported separately for each category.\n\n")
 
-	var steelmen, speakers, adversaries []agentPlan
+	var steelmen, speakers, probes []agentPlan
 	for _, a := range agents {
 		switch a.Kind {
 		case "steelman":
 			steelmen = append(steelmen, a)
 		case "speaker":
 			speakers = append(speakers, a)
-		case "adversary":
-			adversaries = append(adversaries, a)
+		case "probe":
+			probes = append(probes, a)
 		}
 	}
 
 	nSpeakerDerived := len(steelmen) + len(speakers)
-	nStructural := len(adversaries) + len(r2Agents)
+	nStructural := len(probes) + len(r2Agents)
 
 	if len(steelmen) > 0 {
 		b.WriteString("**Clusters** (speakers grouped by ≥70% agreement across crux stances):\n")
@@ -99,9 +109,9 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 		}
 		b.WriteString("\n")
 	}
-	if len(adversaries) > 0 {
-		b.WriteString("**Topic Adversaries** *(structural)*:\n")
-		for _, a := range adversaries {
+	if len(probes) > 0 {
+		b.WriteString("**Topic Probes** *(structural)*:\n")
+		for _, a := range probes {
 			fmt.Fprintf(&b, "- %s\n", a.Role)
 		}
 		b.WriteString("\n")
@@ -136,33 +146,70 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 			b.WriteString("\n*R2 cruxes may be reworded versions of R1 cruxes. Exact string matching identifies new cruxes — some may be refinements.*\n\n")
 		}
 
-		// Topic stability
-		r1Topics := map[string]bool{}
+		// Topic stability (using stable topic IDs where available)
+		r1TopicsByID := map[string]string{}  // ID → name
+		r1TopicsByName := map[string]bool{}
 		for _, ts := range r1.TopicSummaries {
-			r1Topics[ts.Topic] = true
+			r1TopicsByName[ts.Topic] = true
+			if ts.TopicID != "" {
+				r1TopicsByID[ts.TopicID] = ts.Topic
+			}
 		}
-		var newTopics, droppedTopics []string
-		r2Topics := map[string]bool{}
+		var newTopics, droppedTopics, renamedTopics []string
+		r2TopicsByID := map[string]string{}
+		r2TopicsByName := map[string]bool{}
 		for _, ts := range r2.TopicSummaries {
-			r2Topics[ts.Topic] = true
-			if !r1Topics[ts.Topic] {
-				newTopics = append(newTopics, ts.Topic)
+			r2TopicsByName[ts.Topic] = true
+			if ts.TopicID != "" {
+				r2TopicsByID[ts.TopicID] = ts.Topic
+			}
+			// Check if this is a new topic or a renamed one
+			if ts.TopicID != "" {
+				if r1Name, ok := r1TopicsByID[ts.TopicID]; ok && r1Name != ts.Topic {
+					renamedTopics = append(renamedTopics, fmt.Sprintf("%s: %s → %s", ts.TopicID, r1Name, ts.Topic))
+				}
+			}
+			if !r1TopicsByName[ts.Topic] {
+				isRenamed := false
+				if ts.TopicID != "" {
+					_, isRenamed = r1TopicsByID[ts.TopicID]
+				}
+				if !isRenamed {
+					label := ts.Topic
+					if ts.TopicID != "" {
+						label = ts.TopicID + ": " + ts.Topic
+					}
+					newTopics = append(newTopics, label)
+				}
 			}
 		}
 		for _, ts := range r1.TopicSummaries {
-			if !r2Topics[ts.Topic] {
-				droppedTopics = append(droppedTopics, ts.Topic)
+			if !r2TopicsByName[ts.Topic] {
+				isRenamed := false
+				if ts.TopicID != "" {
+					_, isRenamed = r2TopicsByID[ts.TopicID]
+				}
+				if !isRenamed {
+					label := ts.Topic
+					if ts.TopicID != "" {
+						label = ts.TopicID + ": " + ts.Topic
+					}
+					droppedTopics = append(droppedTopics, label)
+				}
 			}
 		}
-		if len(newTopics) > 0 || len(droppedTopics) > 0 {
+		if len(newTopics) > 0 || len(droppedTopics) > 0 || len(renamedTopics) > 0 {
 			b.WriteString("**Topic taxonomy changes:**\n")
+			if len(renamedTopics) > 0 {
+				fmt.Fprintf(&b, "- Renamed: %s\n", strings.Join(renamedTopics, "; "))
+			}
 			if len(newTopics) > 0 {
 				fmt.Fprintf(&b, "- New in R2: %s\n", strings.Join(newTopics, ", "))
 			}
 			if len(droppedTopics) > 0 {
 				fmt.Fprintf(&b, "- Dropped from R1: %s\n", strings.Join(droppedTopics, ", "))
 			}
-			b.WriteString("*Topic labels are LLM-generated per round. R2 receives R1 topic names as guidance but may still rename. Stable topic IDs across rounds are not yet implemented.*\n\n")
+			b.WriteString("*Topic IDs (T1, T2, ...) persist across rounds. R2 receives R1 topic names as guidance; renamed topics share the same ID.*\n\n")
 		}
 	}
 
@@ -212,6 +259,90 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 		b.WriteString("\n")
 	}
 
+	// Null control comparison
+	if ncResult != nil {
+		b.WriteString("## Null Control\n\n")
+		b.WriteString("A null control was run by shuffling speaker-crux assignments (destroying real agreement patterns) while keeping the same claims. ")
+		b.WriteString("If the pipeline finds similar structure in shuffled data, the real findings may be indistinguishable from noise.\n\n")
+		b.WriteString("| Metric | Real Run | Null Control | Delta |\n")
+		b.WriteString("|---|---|---|---|\n")
+		realM := ncResult.RealMetrics
+		nullM := ncResult.NullMetrics
+		fmt.Fprintf(&b, "| Cruxes found | %d | %d | %s |\n", realM.CruxCount, nullM.CruxCount, metricDelta(realM.CruxCount, nullM.CruxCount))
+		fmt.Fprintf(&b, "| Avg controversy | %.2f | %.2f | %s |\n", realM.AvgControversy, nullM.AvgControversy, metricDeltaFloat(realM.AvgControversy, nullM.AvgControversy))
+		fmt.Fprintf(&b, "| Consensus statements | %d | %d | %s |\n", realM.ConsensusCount, nullM.ConsensusCount, metricDelta(realM.ConsensusCount, nullM.ConsensusCount))
+		fmt.Fprintf(&b, "| Bridging proposals | %d | %d | %s |\n", realM.BridgingCount, nullM.BridgingCount, metricDelta(realM.BridgingCount, nullM.BridgingCount))
+		fmt.Fprintf(&b, "| Clusters | %d | %d | %s |\n", realM.ClusterCount, nullM.ClusterCount, metricDelta(realM.ClusterCount, nullM.ClusterCount))
+		fmt.Fprintf(&b, "| Confidence | %s | %s | — |\n\n", realM.Confidence, nullM.Confidence)
+		if ncResult.Pass {
+			b.WriteString("**Verdict:** Real run shows substantially different structure from null control. Findings are distinguishable from baseline noise.\n\n")
+		} else {
+			fmt.Fprintf(&b, "**Verdict:** Real run patterns are within 15%% of null control on %d metrics. Findings may be indistinguishable from noise.\n\n", len(ncResult.FailedMetrics))
+			for _, f := range ncResult.FailedMetrics {
+				fmt.Fprintf(&b, "- %s\n", f)
+			}
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "*Null control deliberation: `%s`*\n\n", ncResult.NullDelibID)
+	}
+
+	// Replication results
+	if repResult != nil && len(repResult.Runs) >= 2 {
+		b.WriteString("## Replication\n\n")
+		fmt.Fprintf(&b, "%d replication runs with identical input (same agents, same votes — only LLM analysis varies).\n\n", len(repResult.Runs))
+		b.WriteString("| Run | Cruxes | Avg Controversy | Consensus | Bridging | Confidence |\n")
+		b.WriteString("|---|---|---|---|---|---|\n")
+		for i, r := range repResult.Runs {
+			fmt.Fprintf(&b, "| %d | %d | %.2f | %d | %d | %s |\n",
+				i+1, r.CruxCount, r.AvgControversy, r.ConsensusCount, r.BridgingCount, r.Confidence)
+		}
+		s := repResult.Stability
+		fmt.Fprintf(&b, "\n**Stability (CV):** crux count %.2f, controversy %.2f, consensus %.2f\n", s.CruxCV, s.ControvCV, s.ConsensusCV)
+		if s.AllStable {
+			b.WriteString("\nAll metrics stable (CV < 0.2). Findings are reproducible.\n\n")
+		} else {
+			b.WriteString("\nSome metrics show high variance (CV >= 0.2). Findings should be interpreted with caution.\n\n")
+		}
+	}
+
+	// Spot-check details
+	if scResult != nil && len(scResult.Failed) > 0 {
+		b.WriteString("## Spot-Check Failures\n\n")
+		b.WriteString("*These stance assignments failed LLM verification against the speaker's source quotes.*\n\n")
+		for _, f := range scResult.Failed {
+			fmt.Fprintf(&b, "- **%s** classified as *%s*: %s\n", f.Speaker, f.Stance, f.Crux)
+			if f.Verdict != "" {
+				verdict := f.Verdict
+				if len(verdict) > 200 {
+					verdict = verdict[:197] + "..."
+				}
+				fmt.Fprintf(&b, "  - Reason: %s\n", verdict)
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// Multi-threshold cluster stability
+	if data.AddOns != nil && data.AddOns.SpeakerCruxMatrix != nil {
+		mtc := multiThresholdClusters(data.AddOns.SpeakerCruxMatrix)
+		if len(mtc) == 3 {
+			b.WriteString("## Cluster Stability\n\n")
+			b.WriteString("Cluster membership at multiple similarity thresholds. Clusters that dissolve above 80% are threshold-sensitive.\n\n")
+			b.WriteString("| Threshold | Total Clusters | Multi-member |\n")
+			b.WriteString("|---|---|---|\n")
+			for _, t := range mtc {
+				fmt.Fprintf(&b, "| %.0f%% | %d | %d |\n", t.Threshold*100, t.NumClusters, t.NumMulti)
+			}
+			if mtc[0].NumMulti > 0 && mtc[1].NumMulti == 0 {
+				b.WriteString("\n*All multi-member clusters dissolve above 80% — groupings are threshold-sensitive.*\n")
+			} else if mtc[0].NumMulti > mtc[1].NumMulti {
+				dissolved := mtc[0].NumMulti - mtc[1].NumMulti
+				fmt.Fprintf(&b, "\n*%d cluster(s) dissolve between 70%% and 80%% — these groupings are threshold-sensitive.*\n", dissolved)
+			}
+			b.WriteString("\n")
+		}
+	}
+
 	// Reliability panel — replaces "Confidence: high"
 	b.WriteString("## Reliability\n\n")
 	degenerateRate := 0
@@ -230,19 +361,82 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 		coherenceLabel = "partial"
 	}
 
+	// Count hallucination corrections for tiered severity
+	hallucinationCount := 0
+	for _, w := range r1.IntegrityWarnings {
+		if strings.HasPrefix(w, "HALLUCINATION:") {
+			hallucinationCount++
+		}
+	}
+	if r2JSON != "" {
+		for _, w := range r2.IntegrityWarnings {
+			if strings.HasPrefix(w, "HALLUCINATION:") {
+				hallucinationCount++
+			}
+		}
+	}
+
+	correctionLabel := "none"
+	correctionDetail := "No phantom agents removed"
+	switch {
+	case hallucinationCount >= 10:
+		correctionLabel = "high"
+		correctionDetail = fmt.Sprintf("%d phantom agents removed — manual audit recommended", hallucinationCount)
+	case hallucinationCount >= 4:
+		correctionLabel = "moderate"
+		correctionDetail = fmt.Sprintf("%d phantom agents removed — affected cruxes flagged above", hallucinationCount)
+	case hallucinationCount >= 1:
+		correctionLabel = "minor"
+		correctionDetail = fmt.Sprintf("%d phantom agent(s) removed", hallucinationCount)
+	}
+
 	fmt.Fprintf(&b, "| Dimension | Status | Detail |\n")
 	fmt.Fprintf(&b, "|---|---|---|\n")
 	fmt.Fprintf(&b, "| Internal coherence | %s | %d/%d cruxes survived validation (%d%% degenerate discard rate) |\n",
 		coherenceLabel, totalCruxGenerated-len(allDiscarded), totalCruxGenerated, degenerateRate)
-	fmt.Fprintf(&b, "| Replication stability | untested | Single run — re-run the import to test cross-run stability |\n")
-	fmt.Fprintf(&b, "| Grounding fidelity | unchecked | Agent stances not yet spot-checked against primary source documents |\n")
+	fmt.Fprintf(&b, "| Agent hallucinations | %s | %s |\n", correctionLabel, correctionDetail)
+	if ncResult != nil {
+		ncLabel := "pass"
+		ncDetail := "Real run distinguishable from shuffled null control"
+		if !ncResult.Pass {
+			ncLabel = "fail"
+			ncDetail = fmt.Sprintf("%d metrics indistinguishable from noise", len(ncResult.FailedMetrics))
+		}
+		fmt.Fprintf(&b, "| Null control | %s | %s |\n", ncLabel, ncDetail)
+	} else {
+		fmt.Fprintf(&b, "| Null control | untested | Run with --null-control to validate signal vs. noise |\n")
+	}
+	if repResult != nil && len(repResult.Runs) >= 2 {
+		repLabel := "partial"
+		repDetail := fmt.Sprintf("%d runs, some metrics unstable", len(repResult.Runs))
+		if repResult.Stability.AllStable {
+			repLabel = "pass"
+			repDetail = fmt.Sprintf("%d runs, all CV < 0.2", len(repResult.Runs))
+		}
+		fmt.Fprintf(&b, "| Replication stability | %s | %s |\n", repLabel, repDetail)
+	} else {
+		fmt.Fprintf(&b, "| Replication stability | untested | Run with --replicate N to test cross-run stability |\n")
+	}
+	if scResult != nil {
+		passRate := scResult.PassRate() * 100
+		scLabel := "pass"
+		if passRate < 70 {
+			scLabel = "fail"
+		} else if passRate < 85 {
+			scLabel = "partial"
+		}
+		fmt.Fprintf(&b, "| Grounding fidelity | %s | %d/%d stance spot-checks passed (%.0f%%) |\n",
+			scLabel, scResult.Passed, scResult.Sampled, passRate)
+	} else {
+		fmt.Fprintf(&b, "| Grounding fidelity | unchecked | Run with --spot-check to verify stances against source quotes |\n")
+	}
 	b.WriteString("\n")
 
 	// Methodology notes
 	b.WriteString("## Methodology Notes\n\n")
 	b.WriteString("**Agent construction**: Speaker-derived agents are grounded in T3C's extracted claims and speaker-crux matrix stances. ")
 	b.WriteString("Steelman clusters group speakers with ≥70% voting pattern similarity. ")
-	b.WriteString("Topic adversaries group cruxes by T3C topic and probe for deeper disagreements. ")
+	b.WriteString("Topic probes group cruxes by T3C topic and investigate deeper disagreements. ")
 	b.WriteString("Round 2 agents (bridge, dissent, empty chair) are informed by Round 1 analysis results.\n\n")
 	b.WriteString("**Score interpretation**: Crux scores reflect the proportion of *participating synthetic agents* that agree vs. disagree. ")
 	fmt.Fprintf(&b, "With %d speaker-derived and %d structural agents, these scores indicate the *topology of the discourse*, not the strength of evidence or real-world expert consensus. ", nSpeakerDerived, nStructural)
@@ -337,7 +531,11 @@ func writeAnalysis(b *strings.Builder, r *analysisResult, compromise string, nSp
 			if len(summary) > 500 {
 				summary = summary[:497] + "..."
 			}
-			fmt.Fprintf(b, "**%s**: %s\n\n", ts.Topic, summary)
+			if ts.TopicID != "" {
+				fmt.Fprintf(b, "**%s: %s**: %s\n\n", ts.TopicID, ts.Topic, summary)
+			} else {
+				fmt.Fprintf(b, "**%s**: %s\n\n", ts.Topic, summary)
+			}
 		}
 	}
 
@@ -445,6 +643,7 @@ func prettyAgentList(agents []string) string {
 		}
 		a = strings.TrimPrefix(a, "speaker-")
 		a = strings.TrimPrefix(a, "steelman-")
+		a = strings.TrimPrefix(a, "probe-")
 		a = strings.TrimPrefix(a, "adversary-")
 		a = strings.ReplaceAll(a, "-", " ")
 		words := strings.Fields(a)
@@ -458,6 +657,28 @@ func prettyAgentList(agents []string) string {
 		names[i] = strings.Join(words, " ")
 	}
 	return strings.Join(names, ", ")
+}
+
+func metricDelta(real, null int) string {
+	if real == 0 {
+		if null == 0 {
+			return "—"
+		}
+		return fmt.Sprintf("%+d", null-real)
+	}
+	pct := float64(real-null) / float64(real) * 100
+	return fmt.Sprintf("%+.0f%%", pct)
+}
+
+func metricDeltaFloat(real, null float64) string {
+	if real == 0 {
+		if null == 0 {
+			return "—"
+		}
+		return fmt.Sprintf("%+.2f", real-null)
+	}
+	pct := (real - null) / real * 100
+	return fmt.Sprintf("%+.0f%%", pct)
 }
 
 type cruxInfo struct {
