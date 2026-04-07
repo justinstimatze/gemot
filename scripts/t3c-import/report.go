@@ -34,18 +34,35 @@ func isStructuralAgent(id string) bool {
 		strings.Contains(id, "empty-chair")
 }
 
-func generateReport(data *ReportData, r1JSON, r2JSON, r3JSON string, r1Compromise, r2Compromise, r3Compromise string, agents []agentPlan, r2Agents, r3Agents []agentPlan, tmpl, delibID, joinCode string, ncResult *nullControlResult, scResult *spotCheckResult, repResult *replicationResult, covResult *coverageResult) string {
+func generateReport(ri *reportInput) string {
+	data := ri.Data
+	agents := ri.R1Agents
+	r2Agents := ri.R2Agents
+	r3Agents := ri.R3Agents
+	r2JSON := ri.R2JSON
+	r3JSON := ri.R3JSON
+	r1Compromise := ri.R1Compromise
+	r2Compromise := ri.R2Compromise
+	r3Compromise := ri.R3Compromise
+	tmpl := ri.Template
+	delibID := ri.DelibID
+	joinCode := ri.JoinCode
+	ncResult := ri.NullControl
+	scResult := ri.SpotCheck
+	repResult := ri.Replication
+	covResult := ri.Coverage
+
 	var r1 analysisResult
-	json.Unmarshal([]byte(r1JSON), &r1)
+	json.Unmarshal([]byte(ri.R1JSON), &r1)
 
 	var r2 analysisResult
-	if r2JSON != "" {
-		json.Unmarshal([]byte(r2JSON), &r2)
+	if ri.R2JSON != "" {
+		json.Unmarshal([]byte(ri.R2JSON), &r2)
 	}
 
 	var r3 analysisResult
-	if r3JSON != "" {
-		json.Unmarshal([]byte(r3JSON), &r3)
+	if ri.R3JSON != "" {
+		json.Unmarshal([]byte(ri.R3JSON), &r3)
 	}
 
 	var b strings.Builder
