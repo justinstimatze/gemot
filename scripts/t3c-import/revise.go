@@ -14,9 +14,9 @@ import (
 // Only speaker-derived agents (speaker, steelman) get revised — structural agents don't.
 // Returns forked agents with "-r3" suffix.
 func buildR3Agents(r1Agents []agentPlan, r2Analysis *analysisResult, data *ReportData) []agentPlan {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	apiKey := getAnthropicKey()
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  R3: ANTHROPIC_API_KEY required for position revision\n")
+		fmt.Fprintf(os.Stderr, "  R3: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required for position revision\n")
 		os.Exit(1)
 	}
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
