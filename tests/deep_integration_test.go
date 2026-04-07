@@ -36,17 +36,17 @@ func TestDelegatedVotesInAnalysis(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Delegation analysis test", "")
-	p1, _ := svc.SubmitPosition(d.ID, "alice", "A")
-	p2, _ := svc.SubmitPosition(d.ID, "bob", "B")
-	svc.SubmitPosition(d.ID, "carol", "C")
+	d, _ := svc.CreateDeliberation(context.Background(), "Delegation analysis test", "")
+	p1, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	p2, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
+	svc.SubmitPosition(context.Background(), d.ID, "carol", "C")
 
 	// carol delegates to alice
-	svc.Delegate(d.ID, "carol", "alice", "")
+	svc.Delegate(context.Background(), d.ID, "carol", "alice", "")
 
 	// alice votes, bob votes — carol should get alice's votes via delegation
-	svc.Vote(d.ID, "alice", p2.ID, 1)
-	svc.Vote(d.ID, "bob", p1.ID, -1)
+	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1)
+	svc.Vote(context.Background(), d.ID, "bob", p1.ID, -1)
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -69,18 +69,18 @@ func TestDelegationDirectVoteOverride(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Override test", "")
-	_, _ = svc.SubmitPosition(d.ID, "alice", "A")
-	p2, _ := svc.SubmitPosition(d.ID, "bob", "B")
-	_, _ = svc.SubmitPosition(d.ID, "carol", "C")
+	d, _ := svc.CreateDeliberation(context.Background(), "Override test", "")
+	_, _ = svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	p2, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
+	_, _ = svc.SubmitPosition(context.Background(), d.ID, "carol", "C")
 
 	// carol delegates to alice
-	svc.Delegate(d.ID, "carol", "alice", "")
+	svc.Delegate(context.Background(), d.ID, "carol", "alice", "")
 
 	// alice votes agree on bob's position
-	svc.Vote(d.ID, "alice", p2.ID, 1)
+	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1)
 	// carol votes disagree directly — should override delegation
-	svc.Vote(d.ID, "carol", p2.ID, -1)
+	svc.Vote(context.Background(), d.ID, "carol", p2.ID, -1)
 
 	result, _ := svc.Analyze(context.Background(), d.ID)
 
@@ -94,18 +94,18 @@ func TestTransitiveDelegation(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Transitive test", "")
-	_, _ = svc.SubmitPosition(d.ID, "alice", "A")
-	p2, _ := svc.SubmitPosition(d.ID, "bob", "B")
-	_, _ = svc.SubmitPosition(d.ID, "carol", "C")
-	_, _ = svc.SubmitPosition(d.ID, "dave", "D")
+	d, _ := svc.CreateDeliberation(context.Background(), "Transitive test", "")
+	_, _ = svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	p2, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
+	_, _ = svc.SubmitPosition(context.Background(), d.ID, "carol", "C")
+	_, _ = svc.SubmitPosition(context.Background(), d.ID, "dave", "D")
 
 	// dave -> carol -> alice (transitive chain)
-	svc.Delegate(d.ID, "dave", "carol", "")
-	svc.Delegate(d.ID, "carol", "alice", "")
+	svc.Delegate(context.Background(), d.ID, "dave", "carol", "")
+	svc.Delegate(context.Background(), d.ID, "carol", "alice", "")
 
 	// Only alice votes
-	svc.Vote(d.ID, "alice", p2.ID, 1)
+	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1)
 
 	result, _ := svc.Analyze(context.Background(), d.ID)
 

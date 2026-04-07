@@ -9,7 +9,7 @@ func TestMultiRoundConvergence(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Step 1: Create a deliberation
-	d, err := svc.CreateDeliberation("Multi-round convergence", "Testing that multi-round deliberation works end to end")
+	d, err := svc.CreateDeliberation(context.Background(), "Multi-round convergence", "Testing that multi-round deliberation works end to end")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestMultiRoundConvergence(t *testing.T) {
 		"Open development is the strongest safety mechanism we have.",
 	}
 	for i, agent := range agents {
-		_, err := svc.SubmitPosition(d.ID, agent, round1Positions[i])
+		_, err := svc.SubmitPosition(context.Background(), d.ID, agent, round1Positions[i])
 		if err != nil {
 			t.Fatalf("round 1: submitting position for %s: %v", agent, err)
 		}
@@ -43,7 +43,7 @@ func TestMultiRoundConvergence(t *testing.T) {
 
 	// Step 4: Get context for each agent and verify
 	for _, agent := range agents {
-		actx, err := svc.GetContext(d.ID, agent)
+		actx, err := svc.GetContext(context.Background(), d.ID, agent)
 		if err != nil {
 			t.Fatalf("get_context for %s: %v", agent, err)
 		}
@@ -66,7 +66,7 @@ func TestMultiRoundConvergence(t *testing.T) {
 	}
 
 	// Step 5: Verify round advanced to 2
-	d2, err := svc.GetDeliberation(d.ID)
+	d2, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestMultiRoundConvergence(t *testing.T) {
 		"Open development with safety guidelines is the path forward.",
 	}
 	for i, agent := range agents {
-		_, err := svc.SubmitPosition(d.ID, agent, round2Positions[i])
+		_, err := svc.SubmitPosition(context.Background(), d.ID, agent, round2Positions[i])
 		if err != nil {
 			t.Fatalf("round 2: submitting position for %s: %v", agent, err)
 		}
@@ -98,7 +98,7 @@ func TestMultiRoundConvergence(t *testing.T) {
 	}
 
 	// Step 8: Verify round advanced to 3
-	d3, err := svc.GetDeliberation(d.ID)
+	d3, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestMultiRoundConvergence(t *testing.T) {
 	}
 
 	// Step 9: Verify both rounds' analysis results are stored and retrievable
-	stored1, err := svc.GetAnalysisResult(d.ID, 1)
+	stored1, err := svc.GetAnalysisResult(context.Background(), d.ID, 1)
 	if err != nil {
 		t.Fatalf("retrieving round 1 result: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestMultiRoundConvergence(t *testing.T) {
 		t.Fatalf("round 1 should have 4 positions, got %d", stored1.PositionCount)
 	}
 
-	stored2, err := svc.GetAnalysisResult(d.ID, 2)
+	stored2, err := svc.GetAnalysisResult(context.Background(), d.ID, 2)
 	if err != nil {
 		t.Fatalf("retrieving round 2 result: %v", err)
 	}

@@ -142,7 +142,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 			return
 		}
 
-		jc, d, err := svc.LookupJoinCode(code)
+		jc, d, err := svc.LookupJoinCode(r.Context(), code)
 		if err != nil {
 			http.Error(w, "invalid join code", http.StatusNotFound)
 			return
@@ -450,7 +450,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			return
 		}
 
-		d, err := svc.GetDeliberation(deliberationID)
+		d, err := svc.GetDeliberation(r.Context(), deliberationID)
 		if err != nil {
 			http.Error(w, `{"error":"deliberation not found"}`, http.StatusNotFound)
 			return
@@ -460,12 +460,12 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		if strings.HasPrefix(token, "gmt_") {
 			exportKeyID = payments.KeyID(token)
 		}
-		if err := svc.CheckAccess(deliberationID, exportKeyID); err != nil {
+		if err := svc.CheckAccess(r.Context(), deliberationID, exportKeyID); err != nil {
 			http.Error(w, `{"error":"access denied"}`, http.StatusForbidden)
 			return
 		}
 
-		positions, err := svc.GetPositions(deliberationID, nil, nil)
+		positions, err := svc.GetPositions(r.Context(), deliberationID, nil, nil)
 		if err != nil {
 			http.Error(w, `{"error":"failed to get positions"}`, http.StatusInternalServerError)
 			return
@@ -482,7 +482,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		_, _ = fmt.Fprintf(w, "comment-id,comment-body,author-id,agrees,disagrees,timestamp\n")
 
 		// Build vote counts per position
-		votes, _ := svc.GetVotes(deliberationID)
+		votes, _ := svc.GetVotes(r.Context(), deliberationID)
 		agreeCounts := map[string]int{}
 		disagreeCounts := map[string]int{}
 		for _, v := range votes {
@@ -553,7 +553,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		}
 
 		// Create sandbox deliberation — no auth needed, uses admin internally
-		d, err := svc.CreateDeliberation(topic, "Sandbox deliberation — auto-expires after 48 hours. Free to join, one free analysis included.",
+		d, err := svc.CreateDeliberation(r.Context(), topic, "Sandbox deliberation — auto-expires after 48 hours. Free to join, one free analysis included.",
 			deliberation.WithTemplate("assembly"),
 			deliberation.WithVisibility("link"),
 			deliberation.WithMaxParticipants(10),
@@ -566,7 +566,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		}
 
 		// Generate multi-use join code (48h TTL, up to 10 agents)
-		jc, err := svc.GenerateJoinCode(d.ID, "participant", 48*time.Hour, 10)
+		jc, err := svc.GenerateJoinCode(r.Context(), d.ID, "participant", 48*time.Hour, 10)
 		if err != nil {
 			slog.Error("join code generation failed", "error", err)
 			http.Error(w, "Failed to generate join code — please try again", http.StatusInternalServerError)
@@ -629,7 +629,7 @@ button:hover{background:#4338ca;}
 		}
 
 		// Look up the join code and show the sandbox page
-		jc, d, err := svc.LookupJoinCode(code)
+		jc, d, err := svc.LookupJoinCode(r.Context(), code)
 		if err != nil {
 			http.Error(w, "Invalid or expired sandbox code", http.StatusNotFound)
 			return

@@ -13,7 +13,7 @@ func TestAlignmentThreeAgents(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Create deliberation and submit 3 positions
-	d, err := svc.CreateDeliberation("Alignment test", "Testing pairwise alignment computation")
+	d, err := svc.CreateDeliberation(context.Background(), "Alignment test", "Testing pairwise alignment computation")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestAlignmentThreeAgents(t *testing.T) {
 		if agent == "carol" {
 			content = "Capability advancement is more important than safety constraints"
 		}
-		if _, err := svc.SubmitPosition(d.ID, agent, content); err != nil {
+		if _, err := svc.SubmitPosition(context.Background(), d.ID, agent, content); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -37,12 +37,12 @@ func TestAlignmentThreeAgents(t *testing.T) {
 	}
 	svc2 := deliberation.NewService(db, analyzer)
 
-	d2, err := svc2.CreateDeliberation("Alignment test 2", "desc")
+	d2, err := svc2.CreateDeliberation(context.Background(), "Alignment test 2", "desc")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, agent := range []string{"alice", "bob", "carol"} {
-		if _, err := svc2.SubmitPosition(d2.ID, agent, "position from "+agent); err != nil {
+		if _, err := svc2.SubmitPosition(context.Background(), d2.ID, agent, "position from "+agent); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -53,7 +53,7 @@ func TestAlignmentThreeAgents(t *testing.T) {
 	}
 
 	// Check alice's context: alignment with bob should be 1.0, with carol should be 0.0
-	ctx, err := svc2.GetContext(d2.ID, "alice")
+	ctx, err := svc2.GetContext(context.Background(), d2.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,12 +100,12 @@ func TestAlignmentZeroCruxes(t *testing.T) {
 	}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, err := svc.CreateDeliberation("No cruxes", "desc")
+	d, err := svc.CreateDeliberation(context.Background(), "No cruxes", "desc")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, agent := range []string{"alice", "bob"} {
-		if _, err := svc.SubmitPosition(d.ID, agent, "position from "+agent); err != nil {
+		if _, err := svc.SubmitPosition(context.Background(), d.ID, agent, "position from "+agent); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -114,7 +114,7 @@ func TestAlignmentZeroCruxes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, err := svc.GetContext(d.ID, "alice")
+	ctx, err := svc.GetContext(context.Background(), d.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,12 +131,12 @@ func TestAlignmentSwingAgent(t *testing.T) {
 	analyzer := &swingAnalyzer{}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, err := svc.CreateDeliberation("Swing test", "desc")
+	d, err := svc.CreateDeliberation(context.Background(), "Swing test", "desc")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, agent := range []string{"alice", "bob", "swinger"} {
-		if _, err := svc.SubmitPosition(d.ID, agent, "position from "+agent); err != nil {
+		if _, err := svc.SubmitPosition(context.Background(), d.ID, agent, "position from "+agent); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -145,7 +145,7 @@ func TestAlignmentSwingAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, err := svc.GetContext(d.ID, "alice")
+	ctx, err := svc.GetContext(context.Background(), d.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,12 +162,12 @@ func TestAlignmentDeterministicSort(t *testing.T) {
 	analyzer := &tiedAnalyzer{}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, err := svc.CreateDeliberation("Sort test", "desc")
+	d, err := svc.CreateDeliberation(context.Background(), "Sort test", "desc")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, agent := range []string{"alice", "bob", "carol"} {
-		if _, err := svc.SubmitPosition(d.ID, agent, "position from "+agent); err != nil {
+		if _, err := svc.SubmitPosition(context.Background(), d.ID, agent, "position from "+agent); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -176,7 +176,7 @@ func TestAlignmentDeterministicSort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, err := svc.GetContext(d.ID, "alice")
+	ctx, err := svc.GetContext(context.Background(), d.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}

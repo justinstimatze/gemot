@@ -36,22 +36,22 @@ func TestRestorativeOstracism(t *testing.T) {
 func TestAnalysisRefusal(t *testing.T) {
 	// Simulate analysis with sybil-compromised data
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Refusal Test", "Testing analysis refusal")
+	d, err := svc.CreateDeliberation(context.Background(), "Refusal Test", "Testing analysis refusal")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Submit identical positions from two agents (sybil pattern)
-	svc.SubmitPosition(d.ID, "sybil1", "We must regulate AI immediately")
-	svc.SubmitPosition(d.ID, "sybil2", "We must regulate AI immediately")
-	svc.SubmitPosition(d.ID, "honest", "We need balanced approaches")
+	svc.SubmitPosition(context.Background(), d.ID, "sybil1", "We must regulate AI immediately")
+	svc.SubmitPosition(context.Background(), d.ID, "sybil2", "We must regulate AI immediately")
+	svc.SubmitPosition(context.Background(), d.ID, "honest", "We need balanced approaches")
 
 	// Make sybils vote identically on all positions
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	for _, p := range positions {
-		svc.Vote(d.ID, "sybil1", p.ID, 1)
-		svc.Vote(d.ID, "sybil2", p.ID, 1)
-		svc.Vote(d.ID, "honest", p.ID, 0)
+		svc.Vote(context.Background(), d.ID, "sybil1", p.ID, 1)
+		svc.Vote(context.Background(), d.ID, "sybil2", p.ID, 1)
+		svc.Vote(context.Background(), d.ID, "honest", p.ID, 0)
 	}
 
 	// Analysis will proceed (LLM calls will fail without API key, but the
@@ -64,22 +64,22 @@ func TestAnalysisRefusal(t *testing.T) {
 func TestEpistemicHealthMetrics(t *testing.T) {
 	// Create a deliberation with known participation
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Metrics Test", "Testing epistemic health")
+	d, err := svc.CreateDeliberation(context.Background(), "Metrics Test", "Testing epistemic health")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// 3 agents, 3 positions
 	for _, agent := range []string{"a1", "a2", "a3"} {
-		svc.SubmitPosition(d.ID, agent, "Position from "+agent)
+		svc.SubmitPosition(context.Background(), d.ID, agent, "Position from "+agent)
 	}
 
 	// 6 of 6 possible cross-votes (full participation)
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	for _, voter := range []string{"a1", "a2", "a3"} {
 		for _, p := range positions {
 			if p.AgentID != voter {
-				svc.Vote(d.ID, voter, p.ID, 1)
+				svc.Vote(context.Background(), d.ID, voter, p.ID, 1)
 			}
 		}
 	}
@@ -105,12 +105,12 @@ func TestCruxTypeFields(t *testing.T) {
 
 func TestPositionInterests(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Interests Test", "Testing transparent objectives")
+	d, err := svc.CreateDeliberation(context.Background(), "Interests Test", "Testing transparent objectives")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p, err := svc.SubmitPosition(d.ID, "agent1", "My position",
+	p, err := svc.SubmitPosition(context.Background(), d.ID, "agent1", "My position",
 		deliberation.WithInterests("minimize cost, maximize reliability"),
 	)
 	if err != nil {
@@ -121,7 +121,7 @@ func TestPositionInterests(t *testing.T) {
 	}
 
 	// Verify it round-trips through get_positions
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if len(positions) != 1 {
 		t.Fatalf("expected 1 position, got %d", len(positions))
 	}
@@ -132,7 +132,7 @@ func TestPositionInterests(t *testing.T) {
 
 func TestRulesPersistence(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Rules Test", "Testing rules",
+	d, err := svc.CreateDeliberation(context.Background(), "Rules Test", "Testing rules",
 		deliberation.WithRules(map[string]any{
 			"min_participants":       5,
 			"cooling_period_minutes": 30,
@@ -144,7 +144,7 @@ func TestRulesPersistence(t *testing.T) {
 	}
 
 	// Verify rules round-trip
-	d2, err := svc.GetDeliberation(d.ID)
+	d2, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestEnrichedAgentContext(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Create a 4-agent deliberation with clear factions
-	d, err := svc.CreateDeliberation("Policy Debate", "Testing enriched context")
+	d, err := svc.CreateDeliberation(context.Background(), "Policy Debate", "Testing enriched context")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestEnrichedAgentContext(t *testing.T) {
 		case "dave":
 			content = "Let the market decide. Innovation requires freedom from regulation."
 		}
-		p, err := svc.SubmitPosition(d.ID, a, content)
+		p, err := svc.SubmitPosition(context.Background(), d.ID, a, content)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -272,18 +272,18 @@ func TestEnrichedAgentContext(t *testing.T) {
 	}
 
 	// Vote to create clear factions: alice+bob agree with each other, carol+dave agree with each other
-	svc.Vote(d.ID, "alice", positions["bob"], 1)
-	svc.Vote(d.ID, "alice", positions["carol"], -1)
-	svc.Vote(d.ID, "alice", positions["dave"], -1)
-	svc.Vote(d.ID, "bob", positions["alice"], 1)
-	svc.Vote(d.ID, "bob", positions["carol"], -1)
-	svc.Vote(d.ID, "bob", positions["dave"], -1)
-	svc.Vote(d.ID, "carol", positions["alice"], -1)
-	svc.Vote(d.ID, "carol", positions["bob"], -1)
-	svc.Vote(d.ID, "carol", positions["dave"], 1)
-	svc.Vote(d.ID, "dave", positions["alice"], -1)
-	svc.Vote(d.ID, "dave", positions["bob"], -1)
-	svc.Vote(d.ID, "dave", positions["carol"], 1)
+	svc.Vote(context.Background(), d.ID, "alice", positions["bob"], 1)
+	svc.Vote(context.Background(), d.ID, "alice", positions["carol"], -1)
+	svc.Vote(context.Background(), d.ID, "alice", positions["dave"], -1)
+	svc.Vote(context.Background(), d.ID, "bob", positions["alice"], 1)
+	svc.Vote(context.Background(), d.ID, "bob", positions["carol"], -1)
+	svc.Vote(context.Background(), d.ID, "bob", positions["dave"], -1)
+	svc.Vote(context.Background(), d.ID, "carol", positions["alice"], -1)
+	svc.Vote(context.Background(), d.ID, "carol", positions["bob"], -1)
+	svc.Vote(context.Background(), d.ID, "carol", positions["dave"], 1)
+	svc.Vote(context.Background(), d.ID, "dave", positions["alice"], -1)
+	svc.Vote(context.Background(), d.ID, "dave", positions["bob"], -1)
+	svc.Vote(context.Background(), d.ID, "dave", positions["carol"], 1)
 
 	// Run analysis
 	_, err = svc.Analyze(t.Context(), d.ID)
@@ -292,7 +292,7 @@ func TestEnrichedAgentContext(t *testing.T) {
 	}
 
 	// Get context for alice
-	ctx, err := svc.GetContext(d.ID, "alice")
+	ctx, err := svc.GetContext(context.Background(), d.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}

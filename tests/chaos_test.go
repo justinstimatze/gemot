@@ -18,16 +18,16 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	svc, db := newTestService(t)
 
 	// 1. Create a deliberation
-	d, err := svc.CreateDeliberation("Stuck Test", "Testing stuck state recovery")
+	d, err := svc.CreateDeliberation(context.Background(), "Stuck Test", "Testing stuck state recovery")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// 2. Submit 2 positions
-	if _, err := svc.SubmitPosition(d.ID, "alice", "Position A"); err != nil {
+	if _, err := svc.SubmitPosition(context.Background(), d.ID, "alice", "Position A"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.SubmitPosition(d.ID, "bob", "Position B"); err != nil {
+	if _, err := svc.SubmitPosition(context.Background(), d.ID, "bob", "Position B"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -52,7 +52,7 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// RecoverStuck should recover 0 (status_changed_at is clearly within 10 min)
-	n, err := svc.RecoverStuck()
+	n, err := svc.RecoverStuck(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// 7. RecoverStuck should recover 1
-	n, err = svc.RecoverStuck()
+	n, err = svc.RecoverStuck(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestStuckAnalyzingRecovery(t *testing.T) {
 	}
 
 	// 8. Verify status is back to "open"
-	d2, err := svc.GetDeliberation(d.ID)
+	d2, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,25 +101,25 @@ func TestDataPersistsAfterReconnect(t *testing.T) {
 	// Create data
 	svc1 := deliberation.NewService(db1, &mockAnalyzer{})
 
-	d, err := svc1.CreateDeliberation("Persist Test", "Testing data persistence")
+	d, err := svc1.CreateDeliberation(context.Background(), "Persist Test", "Testing data persistence")
 	if err != nil {
 		t.Fatal(err)
 	}
 	delibID := d.ID
 
-	p1, err := svc1.SubmitPosition(delibID, "alice", "Position from alice")
+	p1, err := svc1.SubmitPosition(context.Background(), delibID, "alice", "Position from alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, err := svc1.SubmitPosition(delibID, "bob", "Position from bob")
+	p2, err := svc1.SubmitPosition(context.Background(), delibID, "bob", "Position from bob")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := svc1.Vote(delibID, "alice", p2.ID, 1); err != nil {
+	if err := svc1.Vote(context.Background(), delibID, "alice", p2.ID, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc1.Vote(delibID, "bob", p1.ID, -1); err != nil {
+	if err := svc1.Vote(context.Background(), delibID, "bob", p1.ID, -1); err != nil {
 		t.Fatal(err)
 	}
 

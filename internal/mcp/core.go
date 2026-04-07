@@ -18,23 +18,23 @@ import (
 )
 
 // CoreGetCommitments returns all commitments for a deliberation after access check.
-func CoreGetCommitments(svc *deliberation.Service, deliberationID, keyID string) ([]deliberation.Commitment, error) {
+func CoreGetCommitments(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string) ([]deliberation.Commitment, error) {
 	if deliberationID == "" {
 		return nil, fmt.Errorf("deliberation_id is required")
 	}
-	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return nil, err
 	}
-	return svc.GetCommitments(deliberationID)
+	return svc.GetCommitments(ctx, deliberationID)
 }
 
 // CorePublishPosition publishes a draft position after verifying ownership.
-func CorePublishPosition(svc *deliberation.Service, positionID, keyID string) error {
+func CorePublishPosition(ctx context.Context, svc *deliberation.Service, positionID, keyID string) error {
 	if positionID == "" {
 		return fmt.Errorf("position_id is required")
 	}
 	if keyID != "" {
-		pos, err := svc.GetPositionByID(positionID)
+		pos, err := svc.GetPositionByID(ctx, positionID)
 		if err != nil {
 			return fmt.Errorf("position not found")
 		}
@@ -42,18 +42,18 @@ func CorePublishPosition(svc *deliberation.Service, positionID, keyID string) er
 			return fmt.Errorf("access denied: you can only publish your own positions")
 		}
 	}
-	return svc.PublishPosition(positionID)
+	return svc.PublishPosition(ctx, positionID)
 }
 
 // CoreChallengeAnalysis files a full analysis challenge as a dispute.
-func CoreChallengeAnalysis(svc *deliberation.Service, deliberationID, agentID, reason, keyID string) (map[string]string, error) {
+func CoreChallengeAnalysis(ctx context.Context, svc *deliberation.Service, deliberationID, agentID, reason, keyID string) (map[string]string, error) {
 	if deliberationID == "" || agentID == "" || reason == "" {
 		return nil, fmt.Errorf("deliberation_id, agent_id, and reason are required")
 	}
-	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return nil, err
 	}
-	if _, err := svc.DisputeCrux(deliberationID, agentID, "[FULL ANALYSIS CHALLENGE]", reason); err != nil {
+	if _, err := svc.DisputeCrux(ctx, deliberationID, agentID, "[FULL ANALYSIS CHALLENGE]", reason); err != nil {
 		return nil, err
 	}
 	return map[string]string{
@@ -63,11 +63,11 @@ func CoreChallengeAnalysis(svc *deliberation.Service, deliberationID, agentID, r
 }
 
 // CoreReframe reframes a position with credit handling.
-func CoreReframe(svc *deliberation.Service, credits *payments.CreditStore, deliberationID, positionID, model, keyID string, isAdmin bool, apiKey string) (map[string]string, error) {
+func CoreReframe(ctx context.Context, svc *deliberation.Service, credits *payments.CreditStore, deliberationID, positionID, model, keyID string, isAdmin bool, apiKey string) (map[string]string, error) {
 	if deliberationID == "" || positionID == "" {
 		return nil, fmt.Errorf("deliberation_id and position_id are required")
 	}
-	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return nil, err
 	}
 	if model != "" && !llm.AllowedModels[model] {
@@ -84,7 +84,6 @@ func CoreReframe(svc *deliberation.Service, credits *payments.CreditStore, delib
 		}
 	}
 
-	ctx := context.Background()
 	if model != "" {
 		ctx = context.WithValue(ctx, llm.ContextKeyModel{}, model)
 	}
@@ -103,35 +102,35 @@ func CoreReframe(svc *deliberation.Service, credits *payments.CreditStore, delib
 
 // CoreGetAnalysisResult returns an analysis result for a deliberation.
 // If round is non-nil, returns that specific round; otherwise returns the latest.
-func CoreGetAnalysisResult(svc *deliberation.Service, deliberationID, keyID string, round *int) (*deliberation.AnalysisResult, error) {
+func CoreGetAnalysisResult(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string, round *int) (*deliberation.AnalysisResult, error) {
 	if deliberationID == "" {
 		return nil, fmt.Errorf("deliberation_id is required")
 	}
-	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return nil, err
 	}
 	if round != nil {
-		return svc.GetAnalysisResult(deliberationID, *round)
+		return svc.GetAnalysisResult(ctx, deliberationID, *round)
 	}
-	return svc.GetLatestAnalysisResult(deliberationID)
+	return svc.GetLatestAnalysisResult(ctx, deliberationID)
 }
 
 // CoreExportDeliberation returns the complete multi-round history of a deliberation.
-func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID string, auditLog ...AuditStore) (map[string]any, error) {
+func CoreExportDeliberation(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string, auditLog ...AuditStore) (map[string]any, error) {
 	if deliberationID == "" {
 		return nil, fmt.Errorf("deliberation_id is required")
 	}
-	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return nil, err
 	}
 
-	d, err := svc.GetDeliberation(deliberationID)
+	d, err := svc.GetDeliberation(ctx, deliberationID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get all positions (no round filter)
-	positions, err := svc.GetPositions(deliberationID, nil, nil)
+	positions, err := svc.GetPositions(ctx, deliberationID, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getting positions: %w", err)
 	}
@@ -150,7 +149,7 @@ func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID str
 			"positions": positionsByRound[r],
 		}
 		// Get analysis for this round (may not exist)
-		analysis, err := svc.GetAnalysisResult(deliberationID, r)
+		analysis, err := svc.GetAnalysisResult(ctx, deliberationID, r)
 		if err == nil && analysis != nil {
 			roundData["analysis"] = analysis
 		} else {
@@ -160,7 +159,7 @@ func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID str
 	}
 
 	// Votes are not per-round — attach to first round for backwards compat
-	votes, err := svc.GetVotes(deliberationID)
+	votes, err := svc.GetVotes(ctx, deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("getting votes: %w", err)
 	}
@@ -169,7 +168,7 @@ func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID str
 	}
 
 	// Commitments
-	commitments, err := svc.GetCommitments(deliberationID)
+	commitments, err := svc.GetCommitments(ctx, deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("getting commitments: %w", err)
 	}
@@ -192,18 +191,18 @@ func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID str
 }
 
 // CoreGetVotes returns all votes for a deliberation.
-func CoreGetVotes(svc *deliberation.Service, deliberationID, keyID string) ([]deliberation.Vote, error) {
+func CoreGetVotes(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string) ([]deliberation.Vote, error) {
 	if deliberationID == "" {
 		return nil, fmt.Errorf("deliberation_id is required")
 	}
-	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return nil, err
 	}
-	return svc.GetVotes(deliberationID)
+	return svc.GetVotes(ctx, deliberationID)
 }
 
 // CoreListByGroup lists deliberations in a group.
-func CoreListByGroup(svc *deliberation.Service, groupID, keyID string, isAdmin bool, limit, offset int) ([]deliberation.Deliberation, error) {
+func CoreListByGroup(ctx context.Context, svc *deliberation.Service, groupID, keyID string, isAdmin bool, limit, offset int) ([]deliberation.Deliberation, error) {
 	if groupID == "" {
 		return nil, fmt.Errorf("group_id is required")
 	}
@@ -211,11 +210,11 @@ func CoreListByGroup(svc *deliberation.Service, groupID, keyID string, isAdmin b
 	if isAdmin {
 		effectiveKeyID = "" // admins see all, empty keyID matches the OR condition
 	}
-	return svc.ListByGroup(groupID, limit, offset, effectiveKeyID)
+	return svc.ListByGroup(ctx, groupID, limit, offset, effectiveKeyID)
 }
 
 // CoreListByAgent lists deliberations an agent has participated in.
-func CoreListByAgent(svc *deliberation.Service, agentID, keyID string, isAdmin bool, limit, offset int) ([]deliberation.Deliberation, error) {
+func CoreListByAgent(ctx context.Context, svc *deliberation.Service, agentID, keyID string, isAdmin bool, limit, offset int) ([]deliberation.Deliberation, error) {
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_id is required")
 	}
@@ -223,53 +222,53 @@ func CoreListByAgent(svc *deliberation.Service, agentID, keyID string, isAdmin b
 	if isAdmin {
 		effectiveKeyID = ""
 	}
-	return svc.ListByAgent(agentID, limit, offset, effectiveKeyID)
+	return svc.ListByAgent(ctx, agentID, limit, offset, effectiveKeyID)
 }
 
 // CoreFulfillCommitment marks a commitment as fulfilled.
-func CoreFulfillCommitment(svc *deliberation.Service, commitmentID, verifiedBy string) error {
+func CoreFulfillCommitment(ctx context.Context, svc *deliberation.Service, commitmentID, verifiedBy string) error {
 	if commitmentID == "" {
 		return fmt.Errorf("commitment_id is required")
 	}
-	return svc.FulfillCommitment(commitmentID, verifiedBy)
+	return svc.FulfillCommitment(ctx, commitmentID, verifiedBy)
 }
 
 // CoreBreakCommitment marks a commitment as broken with a reason.
-func CoreBreakCommitment(svc *deliberation.Service, commitmentID, reason, verifiedBy string) error {
+func CoreBreakCommitment(ctx context.Context, svc *deliberation.Service, commitmentID, reason, verifiedBy string) error {
 	if commitmentID == "" || reason == "" {
 		return fmt.Errorf("commitment_id and reason are required")
 	}
-	return svc.BreakCommitment(commitmentID, reason, verifiedBy)
+	return svc.BreakCommitment(ctx, commitmentID, reason, verifiedBy)
 }
 
 // CoreAgentReputation returns an agent's commitment track record.
-func CoreAgentReputation(svc *deliberation.Service, agentID, groupID string) (deliberation.ReputationSummary, error) {
+func CoreAgentReputation(ctx context.Context, svc *deliberation.Service, agentID, groupID string) (deliberation.ReputationSummary, error) {
 	if agentID == "" {
 		return deliberation.ReputationSummary{}, fmt.Errorf("agent_id is required")
 	}
-	return svc.AgentReputation(agentID, groupID)
+	return svc.AgentReputation(ctx, agentID, groupID)
 }
 
 // CoreCancelAnalysis cancels an in-progress analysis after access check.
-func CoreCancelAnalysis(svc *deliberation.Service, deliberationID, keyID string) error {
+func CoreCancelAnalysis(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string) error {
 	if deliberationID == "" {
 		return fmt.Errorf("deliberation_id is required")
 	}
-	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return err
 	}
-	return svc.CancelAnalysis(deliberationID)
+	return svc.CancelAnalysis(ctx, deliberationID)
 }
 
 // CoreWithdraw removes an agent from a deliberation after access check and agent scoping.
-func CoreWithdraw(svc *deliberation.Service, deliberationID, agentID, keyID string) error {
+func CoreWithdraw(ctx context.Context, svc *deliberation.Service, deliberationID, agentID, keyID string) error {
 	if deliberationID == "" || agentID == "" {
 		return fmt.Errorf("deliberation_id and agent_id are required")
 	}
-	if err := svc.CheckAccess(deliberationID, keyID); err != nil {
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return err
 	}
-	return svc.WithdrawAgent(deliberationID, agentID)
+	return svc.WithdrawAgent(ctx, deliberationID, agentID)
 }
 
 // PanelExpert defines a single expert for the adversarial panel.
@@ -488,7 +487,7 @@ Provide your critique with:
 	if keyID != "" {
 		opts = append(opts, deliberation.WithCreatorKey(keyID))
 	}
-	d, err := svc.CreateDeliberation(topic, fmt.Sprintf("Adversarial expert panel (%s): %s", sourceType, topic), opts...)
+	d, err := svc.CreateDeliberation(ctx, topic, fmt.Sprintf("Adversarial expert panel (%s): %s", sourceType, topic), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating deliberation: %w", err)
 	}
@@ -498,7 +497,7 @@ Provide your critique with:
 	for _, e := range experts {
 		content := fmt.Sprintf(promptTemplate, e.Role, e.Interests, e.Reservation, document)
 
-		_, err := svc.SubmitPosition(d.ID, e.ID, content,
+		_, err := svc.SubmitPosition(ctx, d.ID, e.ID, content,
 			deliberation.WithInterests(e.Interests),
 			deliberation.WithReservation(e.Reservation),
 		)
@@ -523,7 +522,7 @@ func CoreFollowUpExpertPanel(ctx context.Context, svc *deliberation.Service, del
 		return nil, fmt.Errorf("deliberation_id is required")
 	}
 
-	d, err := svc.GetDeliberation(deliberationID)
+	d, err := svc.GetDeliberation(ctx, deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
 	}
@@ -536,14 +535,14 @@ func CoreFollowUpExpertPanel(ctx context.Context, svc *deliberation.Service, del
 
 	// Get round 1 results
 	prevRound := d.Round - 1
-	result, err := svc.GetAnalysisResult(deliberationID, prevRound)
+	result, err := svc.GetAnalysisResult(ctx, deliberationID, prevRound)
 	if err != nil || result == nil {
 		return nil, fmt.Errorf("no round %d results found", prevRound)
 	}
 
 	// Get round 1 positions to identify expert agents and their roles
 	round1 := 1
-	positions, err := svc.GetPositions(deliberationID, nil, &round1)
+	positions, err := svc.GetPositions(ctx, deliberationID, nil, &round1)
 	if err != nil {
 		return nil, fmt.Errorf("getting round 1 positions: %w", err)
 	}
@@ -581,7 +580,7 @@ Your previous position was attributed to the following sides of these cruxes. Re
 
 Be specific and constructive. Focus on what changed or what was missed.`, cruxSummary.String(), consensusSummary.String())
 
-		_, err := svc.SubmitPosition(deliberationID, p.AgentID, content,
+		_, err := svc.SubmitPosition(ctx, deliberationID, p.AgentID, content,
 			deliberation.WithInterests(p.Interests),
 			deliberation.WithReservation(p.Reservation),
 		)

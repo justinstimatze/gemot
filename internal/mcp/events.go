@@ -37,8 +37,9 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		var groupDelibIDs map[string]bool // for share token auth: set of deliberation IDs in the group
 
 		// Auth path 1: join_code query param (anonymous, scoped to one deliberation)
+		ctx := r.Context()
 		if jc := r.URL.Query().Get("join_code"); jc != "" {
-			_, d, err := svc.LookupJoinCode(jc)
+			_, d, err := svc.LookupJoinCode(ctx, jc)
 			if err != nil || d == nil {
 				http.Error(w, "invalid or expired join code", http.StatusNotFound)
 				return
@@ -47,12 +48,12 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			preScopedAuth = true
 		} else if st := r.URL.Query().Get("share_token"); st != "" {
 			// Auth path 2: share_token query param (anonymous, scoped to a group of deliberations)
-			groupID, err := svc.LookupShareToken(st)
+			groupID, err := svc.LookupShareToken(ctx, st)
 			if err != nil || groupID == "" {
 				http.Error(w, "invalid or expired share token", http.StatusNotFound)
 				return
 			}
-			delibs, err := svc.ListByGroup(groupID, 500, 0, "")
+			delibs, err := svc.ListByGroup(ctx, groupID, 500, 0, "")
 			if err != nil || len(delibs) == 0 {
 				http.Error(w, "group not found", http.StatusNotFound)
 				return
@@ -108,7 +109,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 
 		// If filtering to a specific deliberation, verify access upfront (skip for join_code — already scoped)
 		if filterDelibID != "" && !isAdmin && !preScopedAuth {
-			if err := svc.CheckAccess(filterDelibID, keyID); err != nil {
+			if err := svc.CheckAccess(ctx, filterDelibID, keyID); err != nil {
 				http.Error(w, "access denied", http.StatusForbidden)
 				return
 			}
@@ -129,7 +130,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			if allowed, cached := accessCache[delibID]; cached {
 				return allowed
 			}
-			allowed := svc.CheckAccess(delibID, keyID) == nil
+			allowed := svc.CheckAccess(ctx, delibID, keyID) == nil
 			accessCache[delibID] = allowed
 			return allowed
 		}
