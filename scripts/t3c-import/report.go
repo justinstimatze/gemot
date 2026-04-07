@@ -104,7 +104,7 @@ func generateReport(ri *reportInput) string {
 	if vfResult != nil && vfResult.Checked > 0 {
 		b.WriteString("## Stance Verification\n\n")
 		kept := vfResult.Checked - vfResult.Downgraded
-		fmt.Fprintf(&b, "*%d stances checked against source quotes (1-5 grounding scale). %d kept (score 4-5), %d downgraded to no_position (score 1-3).*\n\n", vfResult.Checked, kept, vfResult.Downgraded)
+		fmt.Fprintf(&b, "*%d stances checked against source quotes (1-5 grounding scale, threshold ≤%d). %d kept, %d downgraded to no_position.*\n\n", vfResult.Checked, vfResult.Threshold, kept, vfResult.Downgraded)
 
 		// Score distribution
 		b.WriteString("| Score | Meaning | Count |\n")
@@ -112,7 +112,7 @@ func generateReport(ri *reportInput) string {
 		labels := [6]string{"", "No relevant quotes", "Tangentially related", "Interpretation", "Clearly aligned", "Explicitly supported"}
 		for s := 5; s >= 1; s-- {
 			marker := ""
-			if s <= 3 {
+			if s <= vfResult.Threshold {
 				marker = " *(downgraded)*"
 			}
 			fmt.Fprintf(&b, "| %d | %s | %d%s |\n", s, labels[s], vfResult.ScoreDist[s], marker)
@@ -669,11 +669,21 @@ func writeAnalysis(b *strings.Builder, r *analysisResult, compromise string, nSp
 		b.WriteString("\n")
 	}
 
-	// Compromise proposal
-	if compromise != "" {
+	// Compromise proposal (suppressed if analysis was refused due to integrity issues)
+	analysisRefused := false
+	for _, w := range r.IntegrityWarnings {
+		if strings.HasPrefix(w, "ANALYSIS_REFUSED:") {
+			analysisRefused = true
+			break
+		}
+	}
+	if compromise != "" && !analysisRefused {
 		b.WriteString("### Compromise Proposal\n\n")
 		b.WriteString("*LLM-generated synthesis — not grounded in specific agent positions. Treat as a starting point, not a conclusion.*\n\n")
 		fmt.Fprintf(b, "> %s\n\n", strings.ReplaceAll(compromise, "\n", "\n> "))
+	} else if analysisRefused {
+		b.WriteString("### Compromise Proposal\n\n")
+		b.WriteString("*Suppressed — analysis engine flagged integrity issues (see Integrity section). Compromise proposals from compromised analysis are unreliable.*\n\n")
 	}
 
 	// Topics
@@ -821,15 +831,25 @@ func prettyAgentList(agents []string) string {
 }
 
 func firstLine(s string) string {
-	// Skip header lines (SPEAKER:, STEELMAN, REVISED POSITION, etc.)
+	// Skip header lines, markdown headers, and structural prefixes
 	for _, line := range strings.Split(s, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
 		}
+		// Skip markdown headers
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		// Skip structural prefixes
 		upper := strings.ToUpper(trimmed)
 		if strings.HasPrefix(upper, "SPEAKER:") || strings.HasPrefix(upper, "STEELMAN") ||
-			strings.HasPrefix(upper, "REVISED POSITION") || strings.HasPrefix(upper, "PROBE") {
+			strings.HasPrefix(upper, "REVISED POSITION") || strings.HasPrefix(upper, "PROBE") ||
+			strings.HasPrefix(upper, "RESOLUTION:") {
+			continue
+		}
+		// Skip "Stances:" and similar labels
+		if strings.HasPrefix(trimmed, "Stances:") || strings.HasPrefix(trimmed, "REQUIRES:") {
 			continue
 		}
 		if len(trimmed) > 120 {
