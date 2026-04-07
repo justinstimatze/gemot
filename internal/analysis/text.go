@@ -134,6 +134,7 @@ type taxonomyResult struct {
 }
 
 type topicResult struct {
+	TopicID          string           `json:"-"` // stable ID assigned in Go, not by LLM
 	TopicName        string           `json:"topic_name"`
 	TopicDescription string           `json:"topic_description"`
 	Subtopics        []subtopicResult `json:"subtopics"`
@@ -288,6 +289,9 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	if err != nil {
 		return nil, fmt.Errorf("taxonomy extraction: %w", err)
 	}
+
+	// Assign stable topic IDs. Reuse prior round's IDs where topic names match.
+	assignTopicIDs(ctx, taxonomy)
 
 	taxonomyText := formatTaxonomy(taxonomy)
 
@@ -518,6 +522,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 				tr.warnings = append(tr.warnings, fmt.Sprintf("SOFT_FAIL: summary generation failed for topic %q", topic.TopicName))
 			} else {
 				tr.summaries = append(tr.summaries, deliberation.TopicSummary{
+					TopicID: topic.TopicID,
 					Topic:   topic.TopicName,
 					Summary: summary,
 				})
@@ -1334,6 +1339,48 @@ func formatPositions(positions []deliberation.Position, agentToNum map[string]st
 		fmt.Fprintf(&sb, "<position participant=\"%s\">%s</position>\n\n", num, content)
 	}
 	return sb.String()
+}
+
+// assignTopicIDs assigns stable T1, T2, ... IDs to taxonomy topics.
+// If prior round IDs are available in context, matching topics reuse them.
+func assignTopicIDs(ctx context.Context, taxonomy *taxonomyResult) {
+	// Get prior ID mapping if available
+	priorIDs, _ := ctx.Value(deliberation.ContextKeyPriorTopicIDs{}).(map[string]string)
+
+	// Track which IDs are already taken
+	usedIDs := map[string]bool{}
+	maxID := 0
+
+	// First pass: match to prior round by name
+	for i := range taxonomy.Topics {
+		name := taxonomy.Topics[i].TopicName
+		if id, ok := priorIDs[name]; ok {
+			taxonomy.Topics[i].TopicID = id
+			usedIDs[id] = true
+			// Parse the numeric part to track max
+			var n int
+			if _, err := fmt.Sscanf(id, "T%d", &n); err == nil && n > maxID {
+				maxID = n
+			}
+		}
+	}
+
+	// Also scan prior IDs to find the max ID used in prior round
+	for _, id := range priorIDs {
+		var n int
+		if _, err := fmt.Sscanf(id, "T%d", &n); err == nil && n > maxID {
+			maxID = n
+		}
+	}
+
+	// Second pass: assign new IDs to unmatched topics
+	nextID := maxID + 1
+	for i := range taxonomy.Topics {
+		if taxonomy.Topics[i].TopicID == "" {
+			taxonomy.Topics[i].TopicID = fmt.Sprintf("T%d", nextID)
+			nextID++
+		}
+	}
 }
 
 func formatTaxonomy(t *taxonomyResult) string {
