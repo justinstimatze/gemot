@@ -476,7 +476,7 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Print plan without connecting")
 	url := flag.String("url", "", "Gemot MCP URL (default: GEMOT_URL env or http://localhost:8080/mcp)")
 	groupID := flag.String("group", "t3c-import", "Group ID")
-	rounds := flag.Int("rounds", 2, "Number of rounds for structural mode (1 = single-shot, 2 = phased protocol)")
+	rounds := flag.Int("rounds", 2, "Rounds: 1=single-shot, 2=phased protocol, 3=position revision")
 	reportPath := flag.String("report", "", "Write markdown report to file")
 	nullControl := flag.Bool("null-control", false, "Run null control (shuffled data) for validation")
 	spotCheck := flag.Bool("spot-check", false, "LLM-verify 15% of stance assignments against source quotes")
@@ -662,6 +662,9 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 	}
 	if numRounds >= 2 {
 		fmt.Fprintf(os.Stderr, "\nRound 2 agents: bridge + dissent + empty chairs (determined after R1 analysis)\n")
+	}
+	if numRounds >= 3 {
+		fmt.Fprintf(os.Stderr, "Round 3 agents: revised speaker positions (LLM-generated, informed by R2 findings)\n")
 	}
 
 	if dryRun {
@@ -881,6 +884,71 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 		}
 	}
 
+	var r3Result string
+	var r3Agents []agentPlan
+	r3Compromise := ""
+
+	if numRounds >= 3 && r2Result != "" {
+		// Reconnect for R3
+		session.Close()
+		session, err = connect(mcpURL, secret)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "reconnect for R3 failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Fprintf(os.Stderr, "\n=== Round 3: Position Revision ===\n")
+
+		var r2Analysis analysisResult
+		json.Unmarshal([]byte(r2Result), &r2Analysis)
+
+		r3Agents = buildR3Agents(r1Agents, &r2Analysis, data)
+
+		if len(r3Agents) > 0 {
+			// Get context for each R3 agent
+			for _, a := range r3Agents {
+				callSoft(session, "participate", map[string]any{
+					"action": "get_context", "deliberation_id": delibID, "agent_id": a.ID,
+				})
+			}
+
+			for _, a := range r3Agents {
+				fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
+				call(session, "participate", map[string]any{
+					"action": "submit_position", "deliberation_id": delibID,
+					"agent_id": a.ID, "content": a.Position,
+				})
+			}
+
+			// Seed R3 votes
+			r3Votes := seedR3Votes(session, r1Agents, r2Agents, r3Agents, delibID)
+			fmt.Fprintf(os.Stderr, "  %d R3 votes seeded\n", r3Votes)
+
+			// Trigger R3 analysis
+			fmt.Fprintf(os.Stderr, "  analyzing...\n")
+			call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
+			r3Result = pollAndGetResult(session, mcpURL, secret, delibID, 3)
+			if r3Result != "" {
+				fmt.Fprintf(os.Stderr, "  round 3 complete\n")
+				if reportPath != "" {
+					session.Close()
+					session, err = connect(mcpURL, secret)
+					if err == nil {
+						fmt.Fprintf(os.Stderr, "  generating R3 compromise proposal...\n")
+						compJSON := callSoft(session, "analyze", map[string]any{
+							"action": "propose_compromise", "deliberation_id": delibID,
+						})
+						var comp struct {
+							Proposal string `json:"compromise_proposal"`
+						}
+						json.Unmarshal([]byte(compJSON), &comp)
+						r3Compromise = comp.Proposal
+					}
+				}
+			}
+		}
+	}
+
 	// --- Output ---
 	joinCode := generateJoinCode(session, delibID)
 
@@ -929,7 +997,7 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 
 	// Write markdown report if requested
 	if reportPath != "" && r1Result != "" {
-		md := generateReport(data, r1Result, r2Result, r1Compromise, r2Compromise, r1Agents, r2Agents, tmpl, delibID, joinCode, ncResult, scResult, repResult)
+		md := generateReport(data, r1Result, r2Result, r3Result, r1Compromise, r2Compromise, r3Compromise, r1Agents, r2Agents, r3Agents, tmpl, delibID, joinCode, ncResult, scResult, repResult)
 		if err := os.WriteFile(reportPath, []byte(md), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "writing report: %v\n", err)
 		} else {
