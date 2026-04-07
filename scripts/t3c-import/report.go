@@ -796,6 +796,11 @@ func prettyAgentList(agents []string) string {
 			names[i] = fmt.Sprintf("Empty Chair %d", n+1)
 			continue
 		}
+		if strings.HasPrefix(a, "resolution-") {
+			num := strings.TrimPrefix(a, "resolution-")
+			names[i] = fmt.Sprintf("Resolution %s", num)
+			continue
+		}
 		a = strings.TrimPrefix(a, "speaker-")
 		a = strings.TrimPrefix(a, "steelman-")
 		a = strings.TrimPrefix(a, "probe-")
