@@ -102,10 +102,10 @@ func generateReport(ri *reportInput) string {
 	// Stance verification
 	if vfResult != nil && vfResult.Downgraded > 0 {
 		b.WriteString("## Stance Verification\n\n")
-		fmt.Fprintf(&b, "*%d/%d disagree stances downgraded to no_position after failing source quote verification. ", vfResult.Downgraded, vfResult.Checked)
-		b.WriteString("Absence of agreement is not disagreement — stances without explicit opposition in source quotes are treated as unknown.*\n\n")
+		fmt.Fprintf(&b, "*%d/%d stances downgraded to no_position after failing source quote verification. ", vfResult.Downgraded, vfResult.Checked)
+		b.WriteString("Stances without clear supporting evidence in source quotes are treated as unknown.*\n\n")
 		for _, d := range vfResult.Details {
-			fmt.Fprintf(&b, "- **%s** on: %s\n", d.Speaker, d.Crux)
+			fmt.Fprintf(&b, "- **%s** (%s) on: %s\n", d.Speaker, d.OrigStance, d.Crux)
 			if d.Reason != "" {
 				fmt.Fprintf(&b, "  - %s\n", d.Reason)
 			}
@@ -506,10 +506,10 @@ func generateReport(ri *reportInput) string {
 	fmt.Fprintf(&b, "| Agent hallucinations | %s | %s |\n", correctionLabel, correctionDetail)
 	if vfResult != nil {
 		vfLabel := "pass"
-		vfDetail := fmt.Sprintf("All %d disagree stances verified", vfResult.Checked)
+		vfDetail := fmt.Sprintf("All %d stances verified against source quotes", vfResult.Checked)
 		if vfResult.Downgraded > 0 {
 			vfLabel = "cleaned"
-			vfDetail = fmt.Sprintf("%d/%d disagree stances downgraded to no_position", vfResult.Downgraded, vfResult.Checked)
+			vfDetail = fmt.Sprintf("%d/%d stances downgraded to no_position", vfResult.Downgraded, vfResult.Checked)
 		}
 		fmt.Fprintf(&b, "| Stance grounding | %s | %s |\n", vfLabel, vfDetail)
 	}
