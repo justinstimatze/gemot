@@ -18,8 +18,8 @@ import (
 func buildR3Agents(r1Agents []agentPlan, r2Analysis *analysisResult, data *ReportData) []agentPlan {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  R3: ANTHROPIC_API_KEY not set, skipping position revision\n")
-		return nil
+		fmt.Fprintf(os.Stderr, "  R3: ANTHROPIC_API_KEY required for position revision\n")
+		os.Exit(1)
 	}
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 
