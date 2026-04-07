@@ -1,34 +1,41 @@
 # Feature Request: Audit Log API Endpoint
 
-**Status: Endpoint already exists. Gemotvis needs to call it.**
+**Status: Done. Shipped 2026-04-06.**
 
-## Current State
+## What shipped
 
-Gemot has a working audit log API:
-- **MCP**: `admin action:get_audit_log deliberation_id:...` (server.go:894)
-- **A2A**: `gemot/admin` with `action: "get_audit_log"` (a2a.go:823)
-- **Store**: `GetAuditLog(deliberationID, limit)` returns `[]map[string]string` with id, timestamp, key_id, method, agent_id (repository.go:932)
-- **Limit**: 50 entries per call (hardcoded)
+The `deliberation action:export` response now includes the full `audit_log` — all operations with timestamps, agent IDs, and method names. No limit, no extra API call needed.
 
-The audit_log table tracks: submit_position, vote, analyze:run, deliberation:create, deliberation:delete, decide:commit, decide:fulfill, decide:break, expert_panel, follow_up, and more.
+```json
+{
+  "deliberation": { ... },
+  "rounds": [ ... ],
+  "commitments": [ ... ],
+  "resolution": { ... },
+  "audit_log": [
+    {"id": "1", "timestamp": "2026-04-06T10:30:00Z", "method": "participate:submit_position", "agent_id": "safety-researcher", "key_id": ""},
+    {"id": "2", "timestamp": "2026-04-06T10:30:05Z", "method": "analyze:run", "agent_id": "", "key_id": ""},
+    ...
+  ]
+}
+```
+
+Available on both MCP (`deliberation action:export`) and A2A (`gemot/deliberation` with `action: "export"`).
+
+The standalone `admin action:get_audit_log` endpoint also still works (capped at 50 entries by default, pass higher limit to get more).
 
 ## What gemotvis needs to do
 
-1. Call `gemot/admin action:get_audit_log` for each deliberation during polling
-2. Use the returned operations to populate the scrubber timeline
-3. Map method names to display events:
+1. In the poller/exporter, read `audit_log` from the export response (it's already there)
+2. Map method names to scrubber timeline events:
    - `participate:submit_position` → "X submits position"
-   - `participate:vote` → "X votes"  
+   - `participate:vote` → "X votes"
    - `analyze:run` → "Analysis started"
-   - `decide:commit` → "X commits to..."
+   - `analyze:expert_panel` → "Expert panel created"
+   - `decide:commit` → "X commits"
+   - `decide:fulfill` → "X fulfills commitment"
+   - `decide:break` → "X breaks commitment"
    - `deliberation:create` → "Deliberation created"
-
-## Optional gemot enhancement
-
-Include `audit_log` in the `deliberation action:export` response (Option B from original request). This would let gemotvis get everything in one call instead of N+1 calls (export + audit per deliberation).
-
-The export function is at `internal/mcp/core.go:120` (CoreExportDeliberation). Would need the store.DB passed through or a Service method wrapping GetAuditLog.
-
-## Impact
-
-The scrubber currently only shows position/vote events synthesized from timestamps. Adding audit log events would show the complete deliberation lifecycle: when analysis ran, when commitments were made, when rounds changed.
+   - `deliberation:delete` → "Deliberation deleted"
+   - `coordinate:join` → "X joins via code"
+3. Use timestamps for scrubber positioning instead of synthesizing from position/vote created_at
