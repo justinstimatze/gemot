@@ -1054,9 +1054,11 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 
 	// Persist validation results on R1 analysis via update_result
 	if r1Result != "" && (vfResult != nil || ncResult != nil || repResult != nil || covResult != nil) {
-		// Reconnect — session may have been closed during R3 or validation steps
+		fmt.Fprintf(os.Stderr, "\n=== Store Validation ===\n")
 		storeSession, err := connect(cfg.MCPURL, secret)
-		if err == nil {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  store-validation: connect failed: %v\n", err)
+		} else {
 			storeValidation(storeSession, delibID, r1Result, vfResult, ncResult, repResult, covResult)
 			storeSession.Close()
 		}
@@ -1091,14 +1093,12 @@ func storeValidation(session *sdkmcp.ClientSession, delibID, r1JSON string, vf *
 		return
 	}
 
-	round := 1
-	resp := callSoft(session, "analyze", map[string]any{
+	fmt.Fprintf(os.Stderr, "  store-validation: sending update_result (%d bytes)...\n", len(updated))
+	resp := call(session, "analyze", map[string]any{
 		"action": "update_result", "deliberation_id": delibID,
-		"round": round, "result_json": string(updated),
+		"round": 1, "result_json": string(updated),
 	})
-	if resp != "" {
-		fmt.Fprintf(os.Stderr, "  validation results stored on R1 analysis\n")
-	}
+	fmt.Fprintf(os.Stderr, "  store-validation: %s\n", resp)
 }
 
 // --- Vote seeding for structural mode ---

@@ -564,12 +564,54 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						round = &r
 					}
 				}
+				// round:-1 returns all rounds
+				if round != nil && *round == -1 {
+					results, err := CoreGetAllAnalysisResults(ctx, svc, str(s, "deliberation_id"), keyID)
+					if err != nil {
+						writeA2AError(w, req.ID, -32000, sanitizeError(err))
+						return
+					}
+					writeA2AResult(w, req.ID, results)
+					return
+				}
 				result, err := CoreGetAnalysisResult(ctx, svc, str(s, "deliberation_id"), keyID, round)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
 				}
 				writeA2AResult(w, req.ID, result)
+
+			case "update_result":
+				deliberationID := str(s, "deliberation_id")
+				if err := checkAccess(deliberationID); err != nil {
+					writeA2AError(w, req.ID, -32000, err.Error())
+					return
+				}
+				resultJSON := str(s, "result_json")
+				if resultJSON == "" {
+					writeA2AError(w, req.ID, -32602, "result_json is required")
+					return
+				}
+				roundVal := 0
+				if v, ok := s["round"]; ok {
+					if f, ok := v.(float64); ok {
+						roundVal = int(f)
+					}
+				}
+				if roundVal == 0 {
+					writeA2AError(w, req.ID, -32602, "round is required")
+					return
+				}
+				var updated deliberation.AnalysisResult
+				if err := json.Unmarshal([]byte(resultJSON), &updated); err != nil {
+					writeA2AError(w, req.ID, -32602, fmt.Sprintf("invalid result_json: %v", err))
+					return
+				}
+				if err := svc.SaveAnalysisResult(ctx, deliberationID, roundVal, &updated); err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, map[string]string{"status": fmt.Sprintf("analysis result updated for round %d", roundVal)})
 
 			case "cancel":
 				deliberationID := str(s, "deliberation_id")

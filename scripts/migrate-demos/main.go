@@ -174,9 +174,14 @@ func copyRows(ctx context.Context, src, dst *sql.DB, table, filterCol, filterVal
 	}
 
 	selectSQL := fmt.Sprintf("SELECT %s FROM %s WHERE %s = $1", colList, table, filterCol)
+	conflict := "ON CONFLICT DO NOTHING"
+	// analysis_results: upsert so validation data updates propagate
+	if table == "analysis_results" {
+		conflict = "ON CONFLICT (deliberation_id, round_number) DO UPDATE SET result_json = EXCLUDED.result_json, analyzed_at = EXCLUDED.analyzed_at"
+	}
 	insertSQL := fmt.Sprintf(
-		"INSERT INTO %s (%s) VALUES (%s) ON CONFLICT DO NOTHING",
-		table, colList, strings.Join(placeholders, ", "))
+		"INSERT INTO %s (%s) VALUES (%s) %s",
+		table, colList, strings.Join(placeholders, ", "), conflict)
 
 	rows, err := src.QueryContext(ctx, selectSQL, filterVal)
 	if err != nil {
