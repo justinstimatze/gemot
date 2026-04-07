@@ -234,20 +234,20 @@ func shuffleReport(data *ReportData) *ReportData {
 
 // nullControlResult holds comparison metrics between real and null control runs.
 type nullControlResult struct {
-	NullDelibID   string
-	RealMetrics   pipelineMetrics
-	NullMetrics   pipelineMetrics
-	FailedMetrics []string // metrics where real ≈ null (within 15%)
-	Pass          bool     // true if real run is distinguishable from null
+	NullDelibID   string          `json:"null_delib_id"`
+	RealMetrics   pipelineMetrics `json:"real_metrics"`
+	NullMetrics   pipelineMetrics `json:"null_metrics"`
+	FailedMetrics []string        `json:"failed_metrics,omitempty"`
+	Pass          bool            `json:"pass"`
 }
 
 type pipelineMetrics struct {
-	CruxCount      int
-	AvgControversy float64
-	ConsensusCount int
-	BridgingCount  int
-	Confidence     string
-	ClusterCount   int
+	CruxCount      int     `json:"crux_count"`
+	AvgControversy float64 `json:"avg_controversy"`
+	ConsensusCount int     `json:"consensus_count"`
+	BridgingCount  int     `json:"bridging_count"`
+	Confidence     string  `json:"confidence"`
+	ClusterCount   int     `json:"cluster_count"`
 }
 
 func extractMetrics(resultJSON string, clusterCount int) pipelineMetrics {

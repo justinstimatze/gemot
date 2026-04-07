@@ -1093,6 +1093,10 @@ func storeValidation(session *sdkmcp.ClientSession, delibID, r1JSON string, vf *
 		return
 	}
 
+	// Debug: show score_dist before sending
+	if vf != nil {
+		fmt.Fprintf(os.Stderr, "  store-validation: score_dist=%v\n", vf.ScoreDist)
+	}
 	fmt.Fprintf(os.Stderr, "  store-validation: sending update_result (%d bytes)...\n", len(updated))
 	resp := call(session, "analyze", map[string]any{
 		"action": "update_result", "deliberation_id": delibID,

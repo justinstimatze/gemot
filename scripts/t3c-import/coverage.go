@@ -10,13 +10,13 @@ import (
 )
 
 type coverageGap struct {
-	Position        string // the unchallenged position
-	MissingPerspective string // what perspective would challenge it
-	SuggestedSource    string // real-world source that would likely contest it
+	Position           string `json:"position"`
+	MissingPerspective string `json:"missing_perspective"`
+	SuggestedSource    string `json:"suggested_source,omitempty"`
 }
 
 type coverageResult struct {
-	Gaps []coverageGap
+	Gaps []coverageGap `json:"gaps"`
 }
 
 // runCoverageAudit identifies missing perspectives for unchallenged positions.

@@ -8,18 +8,18 @@ import (
 )
 
 type replicationResult struct {
-	NumRuns    int
-	DelibIDs   []string
-	Runs       []pipelineMetrics
-	Stability  stabilityReport
+	NumRuns   int               `json:"num_runs"`
+	DelibIDs  []string          `json:"delib_ids,omitempty"`
+	Runs      []pipelineMetrics `json:"runs,omitempty"`
+	Stability stabilityReport   `json:"stability"`
 }
 
 type stabilityReport struct {
-	Tier         int     // 0=unreplicated, 1=3+ runs, 2=5+ runs + stable
-	CruxCV       float64 // coefficient of variation for crux count
-	ControvCV    float64 // CV for avg controversy
-	ConsensusCV  float64 // CV for consensus count
-	AllStable    bool    // all CVs < 0.2
+	Tier        int     `json:"tier"`
+	CruxCV      float64 `json:"crux_cv"`
+	ControvCV   float64 `json:"controv_cv"`
+	ConsensusCV float64 `json:"consensus_cv"`
+	AllStable   bool    `json:"all_stable"`
 }
 
 func computeStability(runs []pipelineMetrics) stabilityReport {

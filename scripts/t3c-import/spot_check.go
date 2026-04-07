@@ -61,16 +61,16 @@ func extractText(resp *anthropic.Message) string {
 }
 
 type spotCheckResult struct {
-	Sampled int
-	Passed  int
-	Failed  []spotCheckFailure
+	Sampled int                `json:"sampled"`
+	Passed  int                `json:"passed"`
+	Failed  []spotCheckFailure `json:"failed,omitempty"`
 }
 
 type spotCheckFailure struct {
-	Speaker string
-	Crux    string
-	Stance  string
-	Verdict string
+	Speaker string `json:"speaker"`
+	Crux    string `json:"crux"`
+	Stance  string `json:"stance"`
+	Verdict string `json:"verdict"`
 }
 
 func (r *spotCheckResult) PassRate() float64 {
