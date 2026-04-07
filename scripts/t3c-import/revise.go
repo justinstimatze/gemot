@@ -285,25 +285,12 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 					}
 				}
 			} else {
-				switch {
-				case pos.AgentID == originalID:
-					vote = 1 // continuity with R1 original
-				case r3IDs[pos.AgentID]:
-					vote = 0 // neutral on other R3 agents
-				default:
-					if voter.Cluster != nil {
-						for _, other := range r1Agents {
-							if other.ID == pos.AgentID && other.Cluster != nil {
-								sim := patternSimilarity(voter.Cluster.Pattern, other.Cluster.Pattern)
-								if sim >= 0.6 {
-									vote = 1
-								} else if sim <= 0.4 {
-									vote = -1
-								}
-								break
-							}
-						}
-					}
+				// Revised agents: only vote +1 on own R1 original, 0 on everything else.
+				// DO NOT use cluster patterns — they're identical to the original's,
+				// which triggers SYBIL_SIGNAL. The analysis discovers R3 alignment
+				// from the revised position text, not from vote patterns.
+				if pos.AgentID == originalID {
+					vote = 1
 				}
 			}
 
