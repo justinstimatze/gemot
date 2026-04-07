@@ -19,119 +19,113 @@ type r1Setup struct {
 	topicCruxes         map[string][]SubtopicCrux
 }
 
-// buildR1Setup derives clusters, classifies cruxes, and constructs R1 agents.
+// buildR1Setup constructs R1 agents from claims and quotes (not from speakerCruxMatrix).
+// Clustering is by subtopic overlap (Jaccard >= 0.5), not by matrix similarity.
 // prefix controls agent ID prefix (e.g., "t3c-" for real, "t3c-null-" for null control).
 func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 	var s r1Setup
 
-	if data.AddOns.SpeakerCruxMatrix != nil {
-		s.clusters = deriveClusters(data.AddOns.SpeakerCruxMatrix)
-	}
-
-	for _, c := range data.AddOns.SubtopicCruxes {
-		if c.ControversyScore >= threshold {
-			s.controversialCruxes = append(s.controversialCruxes, c)
-		} else if c.ControversyScore == 0 && len(c.Agree) >= 3 {
-			s.consensusCruxes = append(s.consensusCruxes, c)
+	// Classify cruxes (for probe agents — crux claims are well-grounded even if stances aren't)
+	if data.AddOns != nil {
+		for _, c := range data.AddOns.SubtopicCruxes {
+			if c.ControversyScore >= threshold {
+				s.controversialCruxes = append(s.controversialCruxes, c)
+			} else if c.ControversyScore == 0 && len(c.Agree) >= 3 {
+				s.consensusCruxes = append(s.consensusCruxes, c)
+			}
 		}
 	}
-
 	s.topicCruxes = map[string][]SubtopicCrux{}
 	for _, c := range s.controversialCruxes {
 		s.topicCruxes[c.Topic] = append(s.topicCruxes[c.Topic], c)
 	}
 
-	// Cluster steelmen (2+ members) and speaker agents (singletons)
+	// Collect unique speakers from sources
+	speakerNames := []string{}
+	seen := map[string]bool{}
+	for _, src := range data.Sources {
+		name := parseSpeakerID(src.Interview)
+		if !seen[name] {
+			seen[name] = true
+			speakerNames = append(speakerNames, name)
+		}
+	}
+
+	// Compute subtopic sets for each speaker
+	subtopicSets := map[string]map[string]bool{}
+	for _, name := range speakerNames {
+		subtopicSets[name] = speakerSubtopicSet(data, name)
+	}
+
+	// Cluster by subtopic overlap (Jaccard >= 0.5)
+	assigned := make([]int, len(speakerNames))
+	for i := range assigned {
+		assigned[i] = -1
+	}
+	clusterID := 0
+	for i := range speakerNames {
+		if assigned[i] >= 0 {
+			continue
+		}
+		assigned[i] = clusterID
+		for j := i + 1; j < len(speakerNames); j++ {
+			if assigned[j] >= 0 {
+				continue
+			}
+			if jaccardSubtopics(subtopicSets[speakerNames[i]], subtopicSets[speakerNames[j]]) >= 0.5 {
+				assigned[j] = clusterID
+			}
+		}
+		clusterID++
+	}
+
+	// Build clusters
+	clusterMap := map[int]*cluster{}
+	for i, cid := range assigned {
+		if _, ok := clusterMap[cid]; !ok {
+			clusterMap[cid] = &cluster{ID: cid}
+		}
+		clusterMap[cid].Members = append(clusterMap[cid].Members, speakerNames[i])
+	}
+	for _, c := range clusterMap {
+		s.clusters = append(s.clusters, *c)
+	}
+	sort.Slice(s.clusters, func(i, j int) bool {
+		return len(s.clusters[i].Members) > len(s.clusters[j].Members)
+	})
+
+	// Build speaker/steelman agents from claims + quotes
 	for i := range s.clusters {
 		cl := &s.clusters[i]
 		if len(cl.Members) == 1 {
-			name := parseSpeakerID(cl.Members[0])
-			displayName := parseSpeakerName(cl.Members[0])
-			claims := distinctiveClaims(data, []string{name}, s.clusters, 7)
-
-			var pos strings.Builder
-			fmt.Fprintf(&pos, "SPEAKER: %s\n\n", displayName)
-			for _, claim := range claims {
-				fmt.Fprintf(&pos, "- %s\n", claim)
-			}
-			if data.AddOns.SpeakerCruxMatrix != nil && len(cl.Pattern) > 0 {
-				pos.WriteString("\nStances:\n")
-				for j, stance := range cl.Pattern {
-					if stance == "no_position" {
-						continue
-					}
-					if j < len(data.AddOns.SpeakerCruxMatrix.CruxLabels) {
-						label := data.AddOns.SpeakerCruxMatrix.CruxLabels[j]
-						for _, c := range data.AddOns.SubtopicCruxes {
-							if cruxLabel(c.Topic, c.Subtopic) == normLabel(label) {
-								fmt.Fprintf(&pos, "- %s: %s\n", strings.ToUpper(stance), c.CruxClaim[:min(80, len(c.CruxClaim))])
-								break
-							}
-						}
-					}
-				}
-			}
-
+			name := cl.Members[0]
+			displayName := parseSpeakerName(name)
 			s.agents = append(s.agents, agentPlan{
 				ID: fmt.Sprintf("%sspeaker-%s", prefix, slugify(name)), Role: fmt.Sprintf("Speaker: %s", displayName),
-				Position: pos.String(), Kind: "speaker", Round: 1, Cluster: cl,
+				Position: buildClaimsPosition(data, []string{name}, displayName, false),
+				Kind: "speaker", Round: 1, Cluster: cl,
 			})
 		} else {
-			names := make([]string, len(cl.Members))
-			speakerNames := make([]string, len(cl.Members))
+			displayNames := make([]string, len(cl.Members))
 			for j, m := range cl.Members {
-				names[j] = parseSpeakerName(m)
-				speakerNames[j] = parseSpeakerID(m)
+				displayNames[j] = parseSpeakerName(m)
 			}
-			claims := distinctiveClaims(data, speakerNames, s.clusters, 7)
-
-			var pos strings.Builder
-			fmt.Fprintf(&pos, "STEELMAN for %s\n\n", strings.Join(names, ", "))
-			for _, claim := range claims {
-				fmt.Fprintf(&pos, "- %s\n", claim)
-			}
-			if data.AddOns.SpeakerCruxMatrix != nil && len(cl.Pattern) > 0 {
-				pos.WriteString("\nStances:\n")
-				for j, stance := range cl.Pattern {
-					if stance == "no_position" {
-						continue
-					}
-					if j < len(data.AddOns.SpeakerCruxMatrix.CruxLabels) {
-						label := data.AddOns.SpeakerCruxMatrix.CruxLabels[j]
-						for _, c := range data.AddOns.SubtopicCruxes {
-							if cruxLabel(c.Topic, c.Subtopic) == normLabel(label) {
-								fmt.Fprintf(&pos, "- %s: %s\n", strings.ToUpper(stance), c.CruxClaim[:min(80, len(c.CruxClaim))])
-								break
-							}
-						}
-					}
-				}
-			}
-			pos.WriteString("\nPresent the strongest, most defensible version of this group's collective position.")
-
+			label := strings.Join(displayNames, ", ")
 			s.agents = append(s.agents, agentPlan{
-				ID: fmt.Sprintf("%ssteelman-%s", prefix, slugify(names[0])), Role: fmt.Sprintf("Steelman: %s", strings.Join(names, ", ")),
-				Position: pos.String(), Kind: "steelman", Round: 1, Cluster: cl,
+				ID: fmt.Sprintf("%ssteelman-%s", prefix, slugify(cl.Members[0])), Role: fmt.Sprintf("Steelman: %s", label),
+				Position: buildClaimsPosition(data, cl.Members, label, true),
+				Kind: "steelman", Round: 1, Cluster: cl,
 			})
 		}
 	}
 
-	// Topic adversary agents (one per T3C topic, not one per crux)
+	// Probe agents (unchanged — built from T3C crux structure, not from matrix)
 	for topicName, cruxes := range s.topicCruxes {
 		var pos strings.Builder
 		fmt.Fprintf(&pos, "PROBE for topic: %s\n\n", topicName)
 		fmt.Fprintf(&pos, "Cruxes in this topic (%d):\n", len(cruxes))
 		for _, c := range cruxes {
-			agreeNames := make([]string, len(c.Agree))
-			for j, a := range c.Agree {
-				agreeNames[j] = parseSpeakerName(a)
-			}
-			disagreeNames := make([]string, len(c.Disagree))
-			for j, d := range c.Disagree {
-				disagreeNames[j] = parseSpeakerName(d)
-			}
 			fmt.Fprintf(&pos, "\n[%.0f%%] %s\n", c.ControversyScore*100, c.CruxClaim)
-			fmt.Fprintf(&pos, "  Agree: %s | Disagree: %s\n", strings.Join(agreeNames, ", "), strings.Join(disagreeNames, ", "))
 		}
 		pos.WriteString("\nWhat's the underlying disagreement beneath all of these?")
 
@@ -142,6 +136,60 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 	}
 
 	return s
+}
+
+// buildClaimsPosition constructs a position from a speaker's claims and quotes.
+// No matrix stances — just what the person actually said.
+func buildClaimsPosition(data *ReportData, speakers []string, label string, isSteelman bool) string {
+	var pos strings.Builder
+	if isSteelman {
+		fmt.Fprintf(&pos, "STEELMAN for %s\n\n", label)
+	} else {
+		fmt.Fprintf(&pos, "SPEAKER: %s\n\n", label)
+	}
+
+	// Collect claims (use distinctiveClaims for steelmen, all for singletons)
+	var claims []string
+	if isSteelman {
+		// For steelmen, prefer distinctive claims (not shared with all clusters)
+		claims = distinctiveClaims(data, speakers, nil, 10)
+	} else {
+		claims = findAllClaimsForSpeaker(data, speakers[0])
+		if len(claims) > 10 {
+			claims = claims[:10]
+		}
+	}
+
+	if len(claims) > 0 {
+		pos.WriteString("Key claims:\n")
+		for _, claim := range claims {
+			fmt.Fprintf(&pos, "- %s\n", claim)
+		}
+	}
+
+	// Add source quotes for grounding
+	var allQuotes []string
+	for _, name := range speakers {
+		allQuotes = append(allQuotes, findAllQuotesForSpeaker(data, name)...)
+	}
+	if len(allQuotes) > 8 {
+		allQuotes = allQuotes[:8]
+	}
+	if len(allQuotes) > 0 {
+		pos.WriteString("\nSource quotes:\n")
+		for _, q := range allQuotes {
+			if len(q) > 150 {
+				q = q[:147] + "..."
+			}
+			fmt.Fprintf(&pos, "- \"%s\"\n", q)
+		}
+	}
+
+	if isSteelman {
+		pos.WriteString("\nPresent the strongest, most defensible version of this group's collective position.")
+	}
+
+	return pos.String()
 }
 
 // shuffleReport creates a copy of the report data with randomized speaker-crux assignments.
@@ -365,7 +413,7 @@ func runNullControl(data *ReportData, realR1JSON string, realClusterCount int, m
 		})
 	}
 
-	voteCount := seedStructuralVotes(session, shuffled, setup.agents, setup.clusters, setup.topicCruxes, delibID)
+	voteCount := seedClaimVotes(session, shuffled, setup.agents, delibID)
 	fmt.Fprintf(os.Stderr, "  %d votes seeded\n", voteCount)
 
 	fmt.Fprintf(os.Stderr, "  analyzing...\n")
@@ -410,75 +458,61 @@ type thresholdInfo struct {
 	NumMulti    int // clusters with 2+ members
 }
 
-// deriveClustersAt runs cluster derivation at a specific similarity threshold.
-func deriveClustersAt(matrix *SpeakerCruxMatrix, threshold float64) []cluster {
-	n := len(matrix.Speakers)
-	if n == 0 {
+// multiThresholdClusters returns cluster counts at different Jaccard thresholds.
+func multiThresholdClusters(data *ReportData) []thresholdInfo {
+	// Collect speakers
+	var speakers []string
+	seen := map[string]bool{}
+	for _, src := range data.Sources {
+		name := parseSpeakerID(src.Interview)
+		if !seen[name] {
+			seen[name] = true
+			speakers = append(speakers, name)
+		}
+	}
+	if len(speakers) == 0 {
 		return nil
 	}
 
-	patterns := make([][]string, n)
-	for i := range n {
-		if i < len(matrix.Matrix) {
-			patterns[i] = matrix.Matrix[i]
-		}
+	// Compute subtopic sets once
+	sets := map[string]map[string]bool{}
+	for _, name := range speakers {
+		sets[name] = speakerSubtopicSet(data, name)
 	}
 
-	assigned := make([]int, n)
-	for i := range assigned {
-		assigned[i] = -1
-	}
-
-	clusterID := 0
-	for i := range n {
-		if assigned[i] >= 0 {
-			continue
+	var info []thresholdInfo
+	for _, t := range []float64{0.3, 0.5, 0.7} {
+		assigned := make([]int, len(speakers))
+		for i := range assigned {
+			assigned[i] = -1
 		}
-		assigned[i] = clusterID
-		for j := i + 1; j < n; j++ {
-			if assigned[j] >= 0 {
+		cid := 0
+		for i := range speakers {
+			if assigned[i] >= 0 {
 				continue
 			}
-			if patternSimilarity(patterns[i], patterns[j]) >= threshold {
-				assigned[j] = clusterID
+			assigned[i] = cid
+			for j := i + 1; j < len(speakers); j++ {
+				if assigned[j] >= 0 {
+					continue
+				}
+				if jaccardSubtopics(sets[speakers[i]], sets[speakers[j]]) >= t {
+					assigned[j] = cid
+				}
 			}
+			cid++
 		}
-		clusterID++
-	}
-
-	clusterMap := map[int]*cluster{}
-	for i, cid := range assigned {
-		if _, ok := clusterMap[cid]; !ok {
-			clusterMap[cid] = &cluster{ID: cid}
-		}
-		clusterMap[cid].Members = append(clusterMap[cid].Members, matrix.Speakers[i])
-	}
-
-	var clusters []cluster
-	for _, c := range clusterMap {
-		clusters = append(clusters, *c)
-	}
-	sort.Slice(clusters, func(i, j int) bool {
-		return len(clusters[i].Members) > len(clusters[j].Members)
-	})
-	return clusters
-}
-
-// multiThresholdClusters returns cluster counts at 70%, 80%, 90% thresholds.
-func multiThresholdClusters(matrix *SpeakerCruxMatrix) []thresholdInfo {
-	if matrix == nil {
-		return nil
-	}
-	var info []thresholdInfo
-	for _, t := range []float64{0.7, 0.8, 0.9} {
-		clusters := deriveClustersAt(matrix, t)
 		multi := 0
-		for _, c := range clusters {
-			if len(c.Members) > 1 {
+		clusterSizes := map[int]int{}
+		for _, c := range assigned {
+			clusterSizes[c]++
+		}
+		for _, size := range clusterSizes {
+			if size > 1 {
 				multi++
 			}
 		}
-		info = append(info, thresholdInfo{Threshold: t, NumClusters: len(clusters), NumMulti: multi})
+		info = append(info, thresholdInfo{Threshold: t, NumClusters: len(clusterSizes), NumMulti: multi})
 	}
 	return info
 }

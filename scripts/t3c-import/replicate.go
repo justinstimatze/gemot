@@ -132,7 +132,7 @@ func runReplication(data *ReportData, mcpURL, secret, tmpl, groupID string, thre
 			})
 		}
 
-		voteCount := seedStructuralVotes(session, data, setup.agents, setup.clusters, setup.topicCruxes, delibID)
+		voteCount := seedClaimVotes(session, data, setup.agents, delibID)
 		fmt.Fprintf(os.Stderr, "  %d agents, %d votes → %s\n", len(setup.agents), voteCount, delibID)
 
 		fmt.Fprintf(os.Stderr, "  analyzing...\n")

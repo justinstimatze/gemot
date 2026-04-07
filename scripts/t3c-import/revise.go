@@ -327,20 +327,8 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 			case voter.Kind == "empty-chair":
 				vote = 0
 			default:
-				// Other speakers vote based on cluster similarity to the R3's original
-				if voter.Cluster != nil {
-					for _, r1a := range r1Agents {
-						if r1a.ID == r3Original && r1a.Cluster != nil {
-							sim := patternSimilarity(voter.Cluster.Pattern, r1a.Cluster.Pattern)
-							if sim >= 0.6 {
-								vote = 1
-							} else if sim <= 0.4 {
-								vote = -1
-							}
-							break
-						}
-					}
-				}
+				// Other speakers vote neutrally on R3 agents
+				vote = 0
 			}
 
 			call(session, "participate", map[string]any{

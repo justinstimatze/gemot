@@ -13,9 +13,7 @@ type pipelineConfig struct {
 	NullControl   bool
 	SpotCheck     bool
 	ReplicateN    int
-	CoverageAudit  bool
-	VerifyStances    bool
-	VerifyThreshold  int // 1-5, stances at or below this score are downgraded (default 2)
+	CoverageAudit bool
 }
 
 // reportInput bundles all data needed to generate a markdown report.
@@ -37,5 +35,4 @@ type reportInput struct {
 	SpotCheck    *spotCheckResult
 	Replication  *replicationResult
 	Coverage     *coverageResult
-	Verify       *verifyResult
 }
