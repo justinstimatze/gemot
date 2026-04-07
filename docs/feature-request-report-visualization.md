@@ -95,8 +95,18 @@ Already in `integrity_warnings` array. No API changes needed.
 
 ## Implementation Guide for gemotvis
 
+### Phase 0: Import shared types
+Replace gemotvis's mirrored `internal/gemot/types.go` with the canonical types package:
+
+```go
+import "github.com/justinstimatze/gemot/types"
+// types.AnalysisResult, types.Crux, types.Position, etc.
+```
+
+Delete `internal/gemot/types.go` entirely. All Go types are now single-source-of-truth from gemot's `types/` package (`types/types.go` + `types/analysis.go`). The package imports only `"time"` — zero transitive dependencies. TypeScript types still need separate maintenance but track one canonical definition.
+
 ### Phase 1: Quick wins (frontend-only, no API changes)
-1. Add `discarded_cruxes` and `topic_id` to mirrored types
+1. `discarded_cruxes` and `topic_id` are already on `types.AnalysisResult` / `types.TopicSummary` — just consume them
 2. Parse `ANALYSIS_REFUSED` / `HALLUCINATION` from integrity warnings
 3. Read `metadata.kind` from positions for agent categorization
 4. Suppress compromise when ANALYSIS_REFUSED
