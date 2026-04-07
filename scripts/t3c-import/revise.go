@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -90,8 +88,7 @@ func buildR3Agents(r1Agents []agentPlan, r2Analysis *analysisResult, data *Repor
 			agent.Position, findingsText, quotesText,
 		)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+		resp, err := callAnthropic(client, anthropic.MessageNewParams{
 			Model:     "claude-sonnet-4-6",
 			MaxTokens: 800,
 			System: []anthropic.TextBlockParam{
@@ -101,20 +98,12 @@ func buildR3Agents(r1Agents []agentPlan, r2Analysis *analysisResult, data *Repor
 				anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 			},
 		})
-		cancel()
-
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "    revision failed for %s: %v\n", agent.ID, err)
 			continue
 		}
 
-		revised := ""
-		for _, block := range resp.Content {
-			if block.Type == "text" {
-				revised = block.AsText().Text
-				break
-			}
-		}
+		revised := extractText(resp)
 		if revised == "" {
 			continue
 		}
@@ -152,7 +141,12 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 
 	voteCount := 0
 
-	// R3 agents vote on all positions
+	// R3 agents vote on all positions.
+	// IMPORTANT: Votes should NOT systematically favor convergence — that would
+	// make R3 always appear to "converge" regardless of revision content. Use
+	// cluster patterns for R1 agents (same as R1 voting) and neutral/skeptical
+	// stances for structural agents. The LLM analysis should discover convergence
+	// from the position TEXT, not from a biased vote matrix.
 	for _, voter := range r3Agents {
 		originalID := r3ToR1[voter.ID]
 		for _, pos := range positions {
@@ -163,26 +157,20 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 			vote := 0
 			switch {
 			case pos.AgentID == originalID:
-				// R3 partially agrees with its own R1 version
+				// R3 partially agrees with its own R1 version (continuity)
 				vote = 1
-			case strings.HasPrefix(pos.AgentID, "t3c-bridge"):
-				// Revised agents are generally open to bridging
-				vote = 1
-			case strings.HasPrefix(pos.AgentID, "t3c-dissent"):
-				// Mixed on dissent — some revisions address dissent concerns
-				vote = 0
 			case r3IDs[pos.AgentID]:
-				// R3 agents are generally sympathetic to other revised agents
-				vote = 1
+				// R3 agents are neutral on each other — let analysis discover alignment
+				vote = 0
 			default:
-				// Vote on other R1 agents based on cluster similarity
+				// Use cluster patterns (same logic as R1 voting)
 				if voter.Cluster != nil {
 					for _, other := range r1Agents {
 						if other.ID == pos.AgentID && other.Cluster != nil {
 							sim := patternSimilarity(voter.Cluster.Pattern, other.Cluster.Pattern)
-							if sim >= 0.5 {
+							if sim >= 0.6 {
 								vote = 1
-							} else if sim <= 0.3 {
+							} else if sim <= 0.4 {
 								vote = -1
 							}
 							break
@@ -199,8 +187,11 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 		}
 	}
 
-	// R1 + R2 agents vote on R3 positions
-	allPrior := append(r1Agents, r2Agents...)
+	// R1 + R2 agents vote on R3 positions.
+	// Avoid append(r1, r2...) which may mutate r1's backing array.
+	allPrior := make([]agentPlan, 0, len(r1Agents)+len(r2Agents))
+	allPrior = append(allPrior, r1Agents...)
+	allPrior = append(allPrior, r2Agents...)
 	for _, voter := range allPrior {
 		for _, pos := range positions {
 			if pos.AgentID == voter.ID || !r3IDs[pos.AgentID] {
@@ -214,23 +205,18 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 			case voter.ID == r3Original:
 				// Original speaker partially agrees with their revised version
 				vote = 1
-			case voter.Kind == "bridge":
-				// Bridge likes revised positions (they represent convergence)
-				vote = 1
-			case voter.Kind == "dissent":
-				// Dissent is skeptical of revisions (might be false consensus)
-				vote = -1
-			case voter.Kind == "empty-chair":
+			case voter.Kind == "bridge" || voter.Kind == "dissent" || voter.Kind == "empty-chair":
+				// Structural agents are neutral on revisions — let analysis decide
 				vote = 0
 			default:
-				// Other speakers vote based on cluster similarity to the original
+				// Other speakers vote based on cluster similarity to the R3's original
 				if voter.Cluster != nil {
 					for _, r1a := range r1Agents {
 						if r1a.ID == r3Original && r1a.Cluster != nil {
 							sim := patternSimilarity(voter.Cluster.Pattern, r1a.Cluster.Pattern)
-							if sim >= 0.5 {
+							if sim >= 0.6 {
 								vote = 1
-							} else if sim <= 0.3 {
+							} else if sim <= 0.4 {
 								vote = -1
 							}
 							break

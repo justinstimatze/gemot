@@ -1008,7 +1008,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 		fmt.Fprintf(os.Stderr, "\n=== Coverage Audit ===\n")
 		var r1Analysis analysisResult
 		json.Unmarshal([]byte(r1Result), &r1Analysis)
-		covResult = runCoverageAudit(&r1Analysis)
+		covResult = runCoverageAudit(&r1Analysis, data.Title)
 	}
 
 	// Run spot-check if requested

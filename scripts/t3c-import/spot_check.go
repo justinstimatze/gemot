@@ -12,6 +12,32 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
+// callAnthropic wraps an Anthropic API call with one retry on transient errors.
+func callAnthropic(client anthropic.Client, params anthropic.MessageNewParams) (*anthropic.Message, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	resp, err := client.Messages.New(ctx, params)
+	if err != nil {
+		// One retry after a short delay (rate limit, transient 500)
+		time.Sleep(3 * time.Second)
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel2()
+		resp, err = client.Messages.New(ctx2, params)
+	}
+	return resp, err
+}
+
+// extractText gets the first text block from an Anthropic response.
+func extractText(resp *anthropic.Message) string {
+	for _, block := range resp.Content {
+		if block.Type == "text" {
+			return block.AsText().Text
+		}
+	}
+	return ""
+}
+
 type spotCheckResult struct {
 	Sampled int
 	Passed  int
@@ -151,8 +177,7 @@ func runSpotCheck(data *ReportData, sampleRate float64) *spotCheckResult {
 			t.speaker, t.stance, t.crux, quotesStr, t.stance,
 		)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+		resp, err := callAnthropic(client, anthropic.MessageNewParams{
 			Model:     "claude-haiku-4-5",
 			MaxTokens: 150,
 			System: []anthropic.TextBlockParam{
@@ -162,20 +187,13 @@ func runSpotCheck(data *ReportData, sampleRate float64) *spotCheckResult {
 				anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 			},
 		})
-		cancel()
-
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "    skip %s: %v\n", t.speaker, err)
+			result.Sampled-- // don't count failed API calls in denominator
 			continue
 		}
 
-		answer := ""
-		for _, block := range resp.Content {
-			if block.Type == "text" {
-				answer = block.AsText().Text
-				break
-			}
-		}
+		answer := extractText(resp)
 
 		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(answer)), "YES") {
 			result.Passed++
