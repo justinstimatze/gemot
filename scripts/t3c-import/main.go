@@ -1051,6 +1051,54 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 			fmt.Fprintf(os.Stderr, "  Report: %s\n", cfg.ReportPath)
 		}
 	}
+
+	// Persist validation results on R1 analysis via update_result
+	if r1Result != "" && (vfResult != nil || ncResult != nil || repResult != nil || covResult != nil) {
+		// Reconnect — session may have been closed during R3 or validation steps
+		storeSession, err := connect(cfg.MCPURL, secret)
+		if err == nil {
+			storeValidation(storeSession, delibID, r1Result, vfResult, ncResult, repResult, covResult)
+			storeSession.Close()
+		}
+	}
+}
+
+// storeValidation persists validation results on the R1 analysis via update_result.
+func storeValidation(session *sdkmcp.ClientSession, delibID, r1JSON string, vf *verifyResult, nc *nullControlResult, rep *replicationResult, cov *coverageResult) {
+	// Unmarshal raw result into a map so we can add fields without importing internal types
+	var result map[string]any
+	if err := json.Unmarshal([]byte(r1JSON), &result); err != nil {
+		fmt.Fprintf(os.Stderr, "  store-validation: failed to parse R1 result: %v\n", err)
+		return
+	}
+
+	if vf != nil {
+		result["verification"] = vf
+	}
+	if nc != nil {
+		result["null_control"] = nc
+	}
+	if rep != nil {
+		result["replication"] = rep
+	}
+	if cov != nil {
+		result["coverage_gaps"] = cov.Gaps
+	}
+
+	updated, err := json.Marshal(result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  store-validation: failed to marshal: %v\n", err)
+		return
+	}
+
+	round := 1
+	resp := callSoft(session, "analyze", map[string]any{
+		"action": "update_result", "deliberation_id": delibID,
+		"round": round, "result_json": string(updated),
+	})
+	if resp != "" {
+		fmt.Fprintf(os.Stderr, "  validation results stored on R1 analysis\n")
+	}
 }
 
 // --- Vote seeding for structural mode ---
