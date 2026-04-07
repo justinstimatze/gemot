@@ -34,7 +34,7 @@ func isStructuralAgent(id string) bool {
 		strings.Contains(id, "empty-chair")
 }
 
-func generateReport(data *ReportData, r1JSON, r2JSON, r3JSON string, r1Compromise, r2Compromise, r3Compromise string, agents []agentPlan, r2Agents, r3Agents []agentPlan, tmpl, delibID, joinCode string, ncResult *nullControlResult, scResult *spotCheckResult, repResult *replicationResult) string {
+func generateReport(data *ReportData, r1JSON, r2JSON, r3JSON string, r1Compromise, r2Compromise, r3Compromise string, agents []agentPlan, r2Agents, r3Agents []agentPlan, tmpl, delibID, joinCode string, ncResult *nullControlResult, scResult *spotCheckResult, repResult *replicationResult, covResult *coverageResult) string {
 	var r1 analysisResult
 	json.Unmarshal([]byte(r1JSON), &r1)
 
@@ -335,6 +335,22 @@ func generateReport(data *ReportData, r1JSON, r2JSON, r3JSON string, r1Compromis
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "*Null control deliberation: `%s`*\n\n", ncResult.NullDelibID)
+	}
+
+	// Coverage audit
+	if covResult != nil && len(covResult.Gaps) > 0 {
+		b.WriteString("## Missing Perspectives\n\n")
+		b.WriteString("*Automatically detected absent viewpoints that would likely challenge unchallenged or lopsided positions.*\n\n")
+		for _, gap := range covResult.Gaps {
+			fmt.Fprintf(&b, "- **%s**\n", gap.Position)
+			if gap.MissingPerspective != "" {
+				fmt.Fprintf(&b, "  - Missing: %s\n", gap.MissingPerspective)
+			}
+			if gap.SuggestedSource != "" {
+				fmt.Fprintf(&b, "  - Would contest: %s\n", gap.SuggestedSource)
+			}
+		}
+		b.WriteString("\n")
 	}
 
 	// Replication results
