@@ -13,7 +13,8 @@ type pipelineConfig struct {
 	NullControl   bool
 	SpotCheck     bool
 	ReplicateN    int
-	CoverageAudit bool
+	CoverageAudit  bool
+	VerifyStances  bool
 }
 
 // reportInput bundles all data needed to generate a markdown report.
@@ -35,4 +36,5 @@ type reportInput struct {
 	SpotCheck    *spotCheckResult
 	Replication  *replicationResult
 	Coverage     *coverageResult
+	Verify       *verifyResult
 }

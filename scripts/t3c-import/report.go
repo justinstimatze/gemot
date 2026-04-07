@@ -51,6 +51,7 @@ func generateReport(ri *reportInput) string {
 	scResult := ri.SpotCheck
 	repResult := ri.Replication
 	covResult := ri.Coverage
+	vfResult := ri.Verify
 
 	var r1 analysisResult
 	json.Unmarshal([]byte(ri.R1JSON), &r1)
@@ -97,6 +98,20 @@ func generateReport(ri *reportInput) string {
 		fmt.Fprintf(&b, "- %d cruxes in T3C report\n", len(data.AddOns.SubtopicCruxes))
 	}
 	b.WriteString("\n")
+
+	// Stance verification
+	if vfResult != nil && vfResult.Downgraded > 0 {
+		b.WriteString("## Stance Verification\n\n")
+		fmt.Fprintf(&b, "*%d/%d disagree stances downgraded to no_position after failing source quote verification. ", vfResult.Downgraded, vfResult.Checked)
+		b.WriteString("Absence of agreement is not disagreement — stances without explicit opposition in source quotes are treated as unknown.*\n\n")
+		for _, d := range vfResult.Details {
+			fmt.Fprintf(&b, "- **%s** on: %s\n", d.Speaker, d.Crux)
+			if d.Reason != "" {
+				fmt.Fprintf(&b, "  - %s\n", d.Reason)
+			}
+		}
+		b.WriteString("\n")
+	}
 
 	// Participants
 	b.WriteString("## Participants\n\n")
@@ -489,6 +504,15 @@ func generateReport(ri *reportInput) string {
 	fmt.Fprintf(&b, "| Internal coherence | %s | %d/%d cruxes survived validation (%d%% degenerate discard rate) |\n",
 		coherenceLabel, totalCruxGenerated-len(allDiscarded), totalCruxGenerated, degenerateRate)
 	fmt.Fprintf(&b, "| Agent hallucinations | %s | %s |\n", correctionLabel, correctionDetail)
+	if vfResult != nil {
+		vfLabel := "pass"
+		vfDetail := fmt.Sprintf("All %d disagree stances verified", vfResult.Checked)
+		if vfResult.Downgraded > 0 {
+			vfLabel = "cleaned"
+			vfDetail = fmt.Sprintf("%d/%d disagree stances downgraded to no_position", vfResult.Downgraded, vfResult.Checked)
+		}
+		fmt.Fprintf(&b, "| Stance grounding | %s | %s |\n", vfLabel, vfDetail)
+	}
 	if ncResult != nil {
 		ncLabel := "pass"
 		ncDetail := "Real run distinguishable from shuffled null control"
