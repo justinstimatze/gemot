@@ -153,4 +153,71 @@ type AnalysisResult struct {
 	RecommendedAction string    `json:"recommended_action,omitempty"` // machine-readable next step for agents
 	// Incremental analysis: claims extracted this round, persisted so next round skips them
 	ExtractedClaims []ExtractedClaim `json:"extracted_claims,omitempty"`
+	// Validation results (populated by pipelines that run validation checks)
+	NullControl  *NullControlResult  `json:"null_control,omitempty"`
+	Verification *VerificationResult `json:"verification,omitempty"`
+	Replication  *ReplicationResult  `json:"replication,omitempty"`
+	CoverageGaps []CoverageGap       `json:"coverage_gaps,omitempty"`
+}
+
+// NullControlResult compares real pipeline metrics against shuffled-data control.
+type NullControlResult struct {
+	NullDelibID   string          `json:"null_delib_id"`
+	RealMetrics   PipelineMetrics `json:"real_metrics"`
+	NullMetrics   PipelineMetrics `json:"null_metrics"`
+	FailedMetrics []string        `json:"failed_metrics,omitempty"`
+	Pass          bool            `json:"pass"`
+}
+
+// PipelineMetrics holds key output metrics for comparison across runs.
+type PipelineMetrics struct {
+	CruxCount      int     `json:"crux_count"`
+	AvgControversy float64 `json:"avg_controversy"`
+	ConsensusCount int     `json:"consensus_count"`
+	BridgingCount  int     `json:"bridging_count"`
+	ClusterCount   int     `json:"cluster_count"`
+	Confidence     string  `json:"confidence"`
+}
+
+// VerificationResult summarizes stance verification against source quotes (1-5 scale).
+type VerificationResult struct {
+	Total      int            `json:"total"`
+	Checked    int            `json:"checked"`
+	Downgraded int            `json:"downgraded"`
+	Threshold  int            `json:"threshold"`
+	ScoreDist  [6]int         `json:"score_dist"`
+	Details    []VerifyDetail `json:"details,omitempty"`
+}
+
+// VerifyDetail records a single stance verification outcome.
+type VerifyDetail struct {
+	Speaker    string `json:"speaker"`
+	Crux       string `json:"crux"`
+	OrigStance string `json:"orig_stance"`
+	Score      int    `json:"score"`
+	Reason     string `json:"reason"`
+}
+
+// ReplicationResult summarizes pipeline stability across multiple runs.
+type ReplicationResult struct {
+	NumRuns   int               `json:"num_runs"`
+	DelibIDs  []string          `json:"delib_ids,omitempty"`
+	Runs      []PipelineMetrics `json:"runs,omitempty"`
+	Stability StabilityReport   `json:"stability"`
+}
+
+// StabilityReport holds cross-run coefficient of variation metrics.
+type StabilityReport struct {
+	Tier        int     `json:"tier"` // 0=unreplicated, 1=replicated, 2=stable
+	CruxCV      float64 `json:"crux_cv"`
+	ControvCV   float64 `json:"controv_cv"`
+	ConsensusCV float64 `json:"consensus_cv"`
+	AllStable   bool    `json:"all_stable"`
+}
+
+// CoverageGap identifies a missing perspective in an unchallenged position.
+type CoverageGap struct {
+	Position           string `json:"position"`
+	MissingPerspective string `json:"missing_perspective"`
+	SuggestedSource    string `json:"suggested_source,omitempty"`
 }

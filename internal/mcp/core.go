@@ -115,6 +115,17 @@ func CoreGetAnalysisResult(ctx context.Context, svc *deliberation.Service, delib
 	return svc.GetLatestAnalysisResult(ctx, deliberationID)
 }
 
+// CoreGetAllAnalysisResults returns all rounds of analysis for a deliberation.
+func CoreGetAllAnalysisResults(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string) ([]deliberation.AnalysisResult, error) {
+	if deliberationID == "" {
+		return nil, fmt.Errorf("deliberation_id is required")
+	}
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
+		return nil, err
+	}
+	return svc.GetAllAnalysisResults(ctx, deliberationID)
+}
+
 // CoreExportDeliberation returns the complete multi-round history of a deliberation.
 func CoreExportDeliberation(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string, auditLog ...AuditStore) (map[string]any, error) {
 	if deliberationID == "" {
