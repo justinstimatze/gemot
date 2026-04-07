@@ -36,7 +36,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 	svc := deliberation.NewService(db, analyzer)
 
 	// Create deliberation
-	delib, err := svc.CreateDeliberation(
+	delib, err := svc.CreateDeliberation(context.Background(), 
 		"AI Development Governance",
 		"How should frontier AI development be governed? Consider international coordination, industry self-regulation, compute governance, open-source policy, and safety requirements.",
 	)
@@ -61,7 +61,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 	// Submit positions
 	positionIDs := map[string]string{} // agent -> position ID
 	for agentID, content := range agents {
-		p, err := svc.SubmitPosition(delib.ID, agentID, content)
+		p, err := svc.SubmitPosition(context.Background(), delib.ID, agentID, content)
 		if err != nil {
 			t.Fatalf("submitting position for %s: %v", agentID, err)
 		}
@@ -110,7 +110,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 	}
 
 	for _, v := range voteMatrix {
-		if err := svc.Vote(delib.ID, v.voter, positionIDs[v.target], v.value); err != nil {
+		if err := svc.Vote(context.Background(), delib.ID, v.voter, positionIDs[v.target], v.value); err != nil {
 			t.Fatalf("vote %s->%s: %v", v.voter, v.target, err)
 		}
 	}
@@ -172,7 +172,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 
 	// 5. Agent context should be meaningful
 	for _, agentID := range []string{"safety-hawk", "open-source-advocate"} {
-		actx, err := svc.GetContext(delib.ID, agentID)
+		actx, err := svc.GetContext(context.Background(), delib.ID, agentID)
 		if err != nil {
 			t.Errorf("get context for %s: %v", agentID, err)
 			continue
@@ -185,7 +185,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 	}
 
 	// 6. Safety-hawk and open-source-advocate should NOT be allies
-	safetyCtx, _ := svc.GetContext(delib.ID, "safety-hawk")
+	safetyCtx, _ := svc.GetContext(context.Background(), delib.ID, "safety-hawk")
 	if safetyCtx != nil {
 		for _, ally := range safetyCtx.NearestAllies {
 			if ally == "open-source-advocate" {
@@ -199,7 +199,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 	}
 
 	// 7. Verify round advanced
-	d2, _ := svc.GetDeliberation(delib.ID)
+	d2, _ := svc.GetDeliberation(context.Background(), delib.ID)
 	if d2.Round != 2 {
 		t.Errorf("expected round 2 after analysis, got %d", d2.Round)
 	}

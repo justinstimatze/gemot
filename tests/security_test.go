@@ -29,13 +29,13 @@ func TestSanitizePipelineWired(t *testing.T) {
 
 func TestSanitizeRejectionBlocksSubmission(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Screening Test", "Verify screening pipeline")
+	d, err := svc.CreateDeliberation(context.Background(), "Screening Test", "Verify screening pipeline")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Clean content should succeed
-	_, err = svc.SubmitPosition(d.ID, "agent1", "I think we should increase the budget for safety research")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent1", "I think we should increase the budget for safety research")
 	if err != nil {
 		t.Fatalf("clean content should be accepted: %v", err)
 	}
@@ -132,12 +132,12 @@ func TestLLMScreeningIntegration(t *testing.T) {
 		return "BLOCK", nil
 	})
 
-	d, err := svc.CreateDeliberation("Screen Test", "Testing LLM screening")
+	d, err := svc.CreateDeliberation(context.Background(), "Screen Test", "Testing LLM screening")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = svc.SubmitPosition(d.ID, "agent1", "This should be blocked by the mock")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent1", "This should be blocked by the mock")
 	if err == nil {
 		t.Fatal("expected rejection from mock classifier")
 	}
@@ -150,7 +150,7 @@ func TestLLMScreeningIntegration(t *testing.T) {
 		return "PASS", nil
 	})
 
-	_, err = svc.SubmitPosition(d.ID, "agent1", "This should be accepted")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent1", "This should be accepted")
 	if err != nil {
 		t.Fatalf("passing classifier should allow submission: %v", err)
 	}
@@ -158,17 +158,17 @@ func TestLLMScreeningIntegration(t *testing.T) {
 
 func TestSoftDelete(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Delete Test", "Testing soft delete")
+	d, err := svc.CreateDeliberation(context.Background(), "Delete Test", "Testing soft delete")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := svc.DeleteDeliberation(d.ID, "", true); err != nil {
+	if err := svc.DeleteDeliberation(context.Background(), d.ID, "", true); err != nil {
 		t.Fatal(err)
 	}
 
 	// Should still be gettable (soft delete preserves data)
-	d2, err := svc.GetDeliberation(d.ID)
+	d2, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestSoftDelete(t *testing.T) {
 	}
 
 	// Should NOT appear in list
-	deliberations, err := svc.ListDeliberations(0, 0, "")
+	deliberations, err := svc.ListDeliberations(context.Background(), 0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestSoftDelete(t *testing.T) {
 	}
 
 	// Should reject new positions
-	_, err = svc.SubmitPosition(d.ID, "agent1", "this should fail")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent1", "this should fail")
 	if err == nil {
 		t.Fatal("expected error submitting to deleted deliberation")
 	}
@@ -196,7 +196,7 @@ func TestSoftDelete(t *testing.T) {
 
 func TestDeleteRequiresCreatorOrAdmin(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Auth Test", "Test delete auth",
+	d, err := svc.CreateDeliberation(context.Background(), "Auth Test", "Test delete auth",
 		deliberation.WithCreatorKey("creator123"),
 	)
 	if err != nil {
@@ -204,13 +204,13 @@ func TestDeleteRequiresCreatorOrAdmin(t *testing.T) {
 	}
 
 	// Non-creator, non-admin should fail
-	err = svc.DeleteDeliberation(d.ID, "other456", false)
+	err = svc.DeleteDeliberation(context.Background(), d.ID, "other456", false)
 	if err == nil {
 		t.Fatal("expected error for non-creator delete")
 	}
 
 	// Creator should succeed
-	err = svc.DeleteDeliberation(d.ID, "creator123", false)
+	err = svc.DeleteDeliberation(context.Background(), d.ID, "creator123", false)
 	if err != nil {
 		t.Fatalf("creator should be able to delete: %v", err)
 	}
@@ -218,16 +218,16 @@ func TestDeleteRequiresCreatorOrAdmin(t *testing.T) {
 
 func TestDoubleDeleteFails(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Double Delete", "Test double delete")
+	d, err := svc.CreateDeliberation(context.Background(), "Double Delete", "Test double delete")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := svc.DeleteDeliberation(d.ID, "", true); err != nil {
+	if err := svc.DeleteDeliberation(context.Background(), d.ID, "", true); err != nil {
 		t.Fatal(err)
 	}
 	// Second delete should fail (already deleted)
-	err = svc.DeleteDeliberation(d.ID, "", true)
+	err = svc.DeleteDeliberation(context.Background(), d.ID, "", true)
 	if err == nil {
 		t.Fatal("expected error on double delete")
 	}
@@ -235,18 +235,18 @@ func TestDoubleDeleteFails(t *testing.T) {
 
 func TestAbuseReport(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Report Test", "Testing abuse reports")
+	d, err := svc.CreateDeliberation(context.Background(), "Report Test", "Testing abuse reports")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = svc.ReportAbuse(d.ID, "reporter_key", "Harmful content in positions")
+	err = svc.ReportAbuse(context.Background(), d.ID, "reporter_key", "Harmful content in positions")
 	if err != nil {
 		t.Fatalf("filing abuse report should succeed: %v", err)
 	}
 
 	// Report against nonexistent deliberation should fail
-	err = svc.ReportAbuse("nonexistent-id", "reporter_key", "test")
+	err = svc.ReportAbuse(context.Background(), "nonexistent-id", "reporter_key", "test")
 	if err == nil {
 		t.Fatal("expected error for nonexistent deliberation")
 	}
@@ -254,7 +254,7 @@ func TestAbuseReport(t *testing.T) {
 
 func TestQuorumEnforcement(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Quorum Test", "Testing quorum",
+	d, err := svc.CreateDeliberation(context.Background(), "Quorum Test", "Testing quorum",
 		deliberation.WithRules(map[string]any{"min_participants": 3}),
 	)
 	if err != nil {
@@ -262,8 +262,8 @@ func TestQuorumEnforcement(t *testing.T) {
 	}
 
 	// Submit only 2 positions
-	svc.SubmitPosition(d.ID, "agent1", "Position A")
-	svc.SubmitPosition(d.ID, "agent2", "Position B")
+	svc.SubmitPosition(context.Background(), d.ID, "agent1", "Position A")
+	svc.SubmitPosition(context.Background(), d.ID, "agent2", "Position B")
 
 	// Analysis should fail — quorum not met
 	_, err = svc.Analyze(context.Background(), d.ID)
@@ -275,14 +275,14 @@ func TestQuorumEnforcement(t *testing.T) {
 	}
 
 	// Add third participant
-	svc.SubmitPosition(d.ID, "agent3", "Position C")
+	svc.SubmitPosition(context.Background(), d.ID, "agent3", "Position C")
 
 	// Add votes
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	for _, voter := range []string{"agent1", "agent2", "agent3"} {
 		for _, p := range positions {
 			if p.AgentID != voter {
-				svc.Vote(d.ID, voter, p.ID, 1)
+				svc.Vote(context.Background(), d.ID, voter, p.ID, 1)
 			}
 		}
 	}
@@ -297,13 +297,13 @@ func TestQuorumEnforcement(t *testing.T) {
 func TestForcedAcknowledgment(t *testing.T) {
 	svc, db := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Ack Test", "Testing forced acknowledgment")
+	d, err := svc.CreateDeliberation(context.Background(), "Ack Test", "Testing forced acknowledgment")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Round 1: submit freely
-	_, err = svc.SubmitPosition(d.ID, "agent1", "Position A")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent1", "Position A")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestForcedAcknowledgment(t *testing.T) {
 	db.TestExec("UPDATE deliberations SET round_number = 2 WHERE id = $1", d.ID)
 
 	// Round 2: submit without calling get_context should fail
-	_, err = svc.SubmitPosition(d.ID, "agent1", "Updated position")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent1", "Updated position")
 	if err == nil {
 		t.Fatal("expected forced acknowledgment error")
 	}
@@ -324,7 +324,7 @@ func TestForcedAcknowledgment(t *testing.T) {
 	db.RecordContextAccess(context.Background(), d.ID, "agent1", 2)
 
 	// Now submit should succeed
-	_, err = svc.SubmitPosition(d.ID, "agent1", "Updated position after reading cruxes")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent1", "Updated position after reading cruxes")
 	if err != nil {
 		t.Fatalf("should succeed after get_context: %v", err)
 	}
@@ -368,20 +368,20 @@ func TestAccountSuspension(t *testing.T) {
 
 func TestDelegationCap(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, err := svc.CreateDeliberation("Delegation Cap", "Testing caps")
+	d, err := svc.CreateDeliberation(context.Background(), "Delegation Cap", "Testing caps")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for i, from := range []string{"a1", "a2", "a3"} {
-		_, err := svc.Delegate(d.ID, from, "target", "")
+		_, err := svc.Delegate(context.Background(), d.ID, from, "target", "")
 		if err != nil {
 			t.Fatalf("delegation %d should succeed: %v", i+1, err)
 		}
 	}
 
 	// 4th delegation to same target should fail
-	_, err = svc.Delegate(d.ID, "a4", "target", "")
+	_, err = svc.Delegate(context.Background(), d.ID, "a4", "target", "")
 	if err == nil {
 		t.Fatal("expected delegation cap error")
 	}
@@ -390,7 +390,7 @@ func TestDelegationCap(t *testing.T) {
 	}
 
 	// Delegation to a different target should succeed
-	_, err = svc.Delegate(d.ID, "a4", "other_target", "")
+	_, err = svc.Delegate(context.Background(), d.ID, "a4", "other_target", "")
 	if err != nil {
 		t.Fatalf("delegation to different target should succeed: %v", err)
 	}

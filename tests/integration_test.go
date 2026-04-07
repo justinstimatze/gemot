@@ -75,7 +75,7 @@ func TestFullDeliberationLoop(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Step 1: Create deliberation
-	d, err := svc.CreateDeliberation("AI Governance", "How should we govern AI development?")
+	d, err := svc.CreateDeliberation(context.Background(), "AI Governance", "How should we govern AI development?")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestFullDeliberationLoop(t *testing.T) {
 
 	var positionIDs []string
 	for i, agent := range agents {
-		p, err := svc.SubmitPosition(d.ID, agent, contents[i])
+		p, err := svc.SubmitPosition(context.Background(), d.ID, agent, contents[i])
 		if err != nil {
 			t.Fatalf("submitting position for %s: %v", agent, err)
 		}
@@ -102,7 +102,7 @@ func TestFullDeliberationLoop(t *testing.T) {
 	}
 
 	// Step 3: Verify positions
-	positions, err := svc.GetPositions(d.ID, nil, nil)
+	positions, err := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestFullDeliberationLoop(t *testing.T) {
 
 	// Test exclude_agent_id filter
 	excludeAlice := "alice"
-	filtered, err := svc.GetPositions(d.ID, &excludeAlice, nil)
+	filtered, err := svc.GetPositions(context.Background(), d.ID, &excludeAlice, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,17 +122,17 @@ func TestFullDeliberationLoop(t *testing.T) {
 
 	// Step 4: Vote
 	// Alice agrees with Bob, disagrees with Dave
-	if err := svc.Vote(d.ID, "alice", positionIDs[1], 1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "alice", positionIDs[1], 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Vote(d.ID, "alice", positionIDs[3], -1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "alice", positionIDs[3], -1); err != nil {
 		t.Fatal(err)
 	}
 	// Bob agrees with Dave, disagrees with Carol
-	if err := svc.Vote(d.ID, "bob", positionIDs[3], 1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "bob", positionIDs[3], 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Vote(d.ID, "bob", positionIDs[2], -1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "bob", positionIDs[2], -1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -155,13 +155,13 @@ func TestFullDeliberationLoop(t *testing.T) {
 	}
 
 	// Verify round advanced
-	d2, _ := svc.GetDeliberation(d.ID)
+	d2, _ := svc.GetDeliberation(context.Background(), d.ID)
 	if d2.Round != 2 {
 		t.Fatalf("expected round 2 after analysis, got %d", d2.Round)
 	}
 
 	// Step 6: Get context for alice
-	ctx, err := svc.GetContext(d.ID, "alice")
+	ctx, err := svc.GetContext(context.Background(), d.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestFullDeliberationLoop(t *testing.T) {
 	}
 
 	// Step 7: List deliberations
-	list, err := svc.ListDeliberations(0, 0, "")
+	list, err := svc.ListDeliberations(context.Background(), 0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,22 +188,22 @@ func TestFullDeliberationLoop(t *testing.T) {
 func TestVoteValidation(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, _ := svc.CreateDeliberation("Test", "")
-	p, _ := svc.SubmitPosition(d.ID, "agent-1", "A position")
+	d, _ := svc.CreateDeliberation(context.Background(), "Test", "")
+	p, _ := svc.SubmitPosition(context.Background(), d.ID, "agent-1", "A position")
 
 	// Invalid vote value
-	if err := svc.Vote(d.ID, "agent-2", p.ID, 5); err == nil {
+	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 5); err == nil {
 		t.Fatal("expected error for invalid vote value")
 	}
 
 	// Valid votes
-	if err := svc.Vote(d.ID, "agent-2", p.ID, 1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Vote(d.ID, "agent-2", p.ID, 0); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Vote(d.ID, "agent-2", p.ID, -1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, -1); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -211,10 +211,10 @@ func TestVoteValidation(t *testing.T) {
 func TestClosedDeliberationRejectsInput(t *testing.T) {
 	svc, db := newTestService(t)
 
-	d, _ := svc.CreateDeliberation("Test", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Test", "")
 	db.UpdateDeliberationStatus(context.Background(), d.ID, "closed")
 
-	if _, err := svc.SubmitPosition(d.ID, "agent-1", "Late position"); err == nil {
+	if _, err := svc.SubmitPosition(context.Background(), d.ID, "agent-1", "Late position"); err == nil {
 		t.Fatal("expected error submitting to closed deliberation")
 	}
 }

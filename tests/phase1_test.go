@@ -12,11 +12,11 @@ func TestConvictionWeights(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Conviction test", "")
-	p1, _ := svc.SubmitPosition(d.ID, "alice", "Strong opinion", deliberation.WithConviction(0.9))
-	p2, _ := svc.SubmitPosition(d.ID, "bob", "Weak opinion", deliberation.WithConviction(0.2))
+	d, _ := svc.CreateDeliberation(context.Background(), "Conviction test", "")
+	p1, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Strong opinion", deliberation.WithConviction(0.9))
+	p2, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "Weak opinion", deliberation.WithConviction(0.2))
 
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	for _, p := range positions {
 		if p.ID == p1.ID && p.Conviction != 0.9 {
 			t.Fatalf("expected conviction 0.9, got %f", p.Conviction)
@@ -31,13 +31,13 @@ func TestConvictionClamped(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Clamp test", "")
-	p, _ := svc.SubmitPosition(d.ID, "alice", "Over 9000", deliberation.WithConviction(5.0))
+	d, _ := svc.CreateDeliberation(context.Background(), "Clamp test", "")
+	p, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Over 9000", deliberation.WithConviction(5.0))
 	if p.Conviction > 1.0 {
 		t.Fatalf("conviction should be clamped to 1.0, got %f", p.Conviction)
 	}
 
-	p2, _ := svc.SubmitPosition(d.ID, "bob", "Negative", deliberation.WithConviction(-3.0))
+	p2, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "Negative", deliberation.WithConviction(-3.0))
 	if p2.Conviction < 0.0 {
 		t.Fatalf("conviction should be clamped to 0.0, got %f", p2.Conviction)
 	}
@@ -47,11 +47,11 @@ func TestReservationValues(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Reservation test", "")
-	svc.SubmitPosition(d.ID, "alice", "I want X",
+	d, _ := svc.CreateDeliberation(context.Background(), "Reservation test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "I want X",
 		deliberation.WithReservation("Cannot accept anything less than 60% of budget"))
 
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if positions[0].Reservation == "" {
 		t.Fatal("expected reservation to be set")
 	}
@@ -64,11 +64,11 @@ func TestOnBehalfOf(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Principal test", "")
-	svc.SubmitPosition(d.ID, "alice-agent", "Position for Alice Corp",
+	d, _ := svc.CreateDeliberation(context.Background(), "Principal test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice-agent", "Position for Alice Corp",
 		deliberation.WithOnBehalfOf("Alice Corp"))
 
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if positions[0].OnBehalfOf != "Alice Corp" {
 		t.Fatalf("expected on_behalf_of 'Alice Corp', got %q", positions[0].OnBehalfOf)
 	}
@@ -78,13 +78,13 @@ func TestCommitBasic(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Commit test", "")
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Commit test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 	svc.Analyze(context.Background(), d.ID)
 
 	// Alice commits
-	c, err := svc.Commit(d.ID, "alice", "I accept the compromise on safety standards", "")
+	c, err := svc.Commit(context.Background(), d.ID, "alice", "I accept the compromise on safety standards", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestCommitBasic(t *testing.T) {
 	}
 
 	// Check commitments
-	commitments, _ := svc.GetCommitments(d.ID)
+	commitments, _ := svc.GetCommitments(context.Background(), d.ID)
 	if len(commitments) != 1 {
 		t.Fatalf("expected 1 commitment, got %d", len(commitments))
 	}
@@ -106,12 +106,12 @@ func TestCommitConditional(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Conditional commit", "")
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Conditional commit", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 	svc.Analyze(context.Background(), d.ID)
 
-	c, err := svc.Commit(d.ID, "alice", "I accept X", "if bob also commits to Y")
+	c, err := svc.Commit(context.Background(), d.ID, "alice", "I accept X", "if bob also commits to Y")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestVisibilityValidation(t *testing.T) {
 
 	// Valid visibilities
 	for _, vis := range []string{"open", "private", "link"} {
-		d, err := svc.CreateDeliberation("Vis "+vis, "", deliberation.WithVisibility(vis))
+		d, err := svc.CreateDeliberation(context.Background(), "Vis "+vis, "", deliberation.WithVisibility(vis))
 		if err != nil {
 			t.Fatalf("valid visibility %q rejected: %v", vis, err)
 		}
@@ -159,7 +159,7 @@ func TestVisibilityValidation(t *testing.T) {
 	}
 
 	// Invalid visibility
-	_, err := svc.CreateDeliberation("Bad vis", "", deliberation.WithVisibility("secret"))
+	_, err := svc.CreateDeliberation(context.Background(), "Bad vis", "", deliberation.WithVisibility("secret"))
 	if err == nil {
 		t.Fatal("expected error for invalid visibility")
 	}
@@ -169,19 +169,19 @@ func TestMaxParticipants(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Cap test", "", deliberation.WithMaxParticipants(2))
+	d, _ := svc.CreateDeliberation(context.Background(), "Cap test", "", deliberation.WithMaxParticipants(2))
 
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 
 	// Third agent should be rejected
-	_, err := svc.SubmitPosition(d.ID, "carol", "C")
+	_, err := svc.SubmitPosition(context.Background(), d.ID, "carol", "C")
 	if err == nil {
 		t.Fatal("expected error for exceeding max_participants")
 	}
 
 	// Existing agent can still submit
-	_, err = svc.SubmitPosition(d.ID, "alice", "A revised")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "alice", "A revised")
 	if err != nil {
 		t.Fatalf("existing participant should still be able to submit: %v", err)
 	}

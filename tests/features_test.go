@@ -13,12 +13,12 @@ func TestDisputeCrux(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Dispute test", "")
-	svc.SubmitPosition(d.ID, "alice", "Position A")
-	svc.SubmitPosition(d.ID, "bob", "Position B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Dispute test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Position A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Position B")
 
 	// File a dispute
-	disp, err := svc.DisputeCrux(d.ID, "alice", "The approach should prioritize safety", "I actually agree with this — my position was misclassified")
+	disp, err := svc.DisputeCrux(context.Background(), d.ID, "alice", "The approach should prioritize safety", "I actually agree with this — my position was misclassified")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +51,12 @@ func TestDeliberationType(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, err := svc.CreateDeliberation("Type test", "Testing types", deliberation.WithType("reasoning"))
+	d, err := svc.CreateDeliberation(context.Background(), "Type test", "Testing types", deliberation.WithType("reasoning"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	got, _ := svc.GetDeliberation(d.ID)
+	got, _ := svc.GetDeliberation(context.Background(), d.ID)
 	if got.Type != "reasoning" {
 		t.Fatalf("expected type 'reasoning', got %q", got.Type)
 	}
@@ -66,15 +66,15 @@ func TestSubGroupPositions(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Group test", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Group test", "")
 
 	// Submit positions in different groups
-	svc.SubmitPosition(d.ID, "alice", "Group A position", deliberation.WithGroup("team-a"))
-	svc.SubmitPosition(d.ID, "bob", "Group B position", deliberation.WithGroup("team-b"))
-	svc.SubmitPosition(d.ID, "carol", "Group A position 2", deliberation.WithGroup("team-a"))
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Group A position", deliberation.WithGroup("team-a"))
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Group B position", deliberation.WithGroup("team-b"))
+	svc.SubmitPosition(context.Background(), d.ID, "carol", "Group A position 2", deliberation.WithGroup("team-a"))
 
 	// Get all positions
-	all, _ := svc.GetPositions(d.ID, nil, nil)
+	all, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if len(all) != 3 {
 		t.Fatalf("expected 3 positions, got %d", len(all))
 	}
@@ -95,11 +95,11 @@ func TestModelFamily(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Model test", "")
-	svc.SubmitPosition(d.ID, "alice", "Claude position", deliberation.WithModelFamily("claude"))
-	svc.SubmitPosition(d.ID, "bob", "GPT position", deliberation.WithModelFamily("gpt"))
+	d, _ := svc.CreateDeliberation(context.Background(), "Model test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Claude position", deliberation.WithModelFamily("claude"))
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "GPT position", deliberation.WithModelFamily("gpt"))
 
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	families := map[string]bool{}
 	for _, p := range positions {
 		if p.ModelFamily != "" {
@@ -145,10 +145,10 @@ func TestCSVExportFormat(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("CSV test", "")
-	svc.SubmitPosition(d.ID, "alice", `Position with "quotes" and, commas`)
+	d, _ := svc.CreateDeliberation(context.Background(), "CSV test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", `Position with "quotes" and, commas`)
 
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if len(positions) != 1 {
 		t.Fatal("expected 1 position")
 	}
@@ -181,7 +181,7 @@ func TestLLMCache(t *testing.T) {
 func TestJobQueue(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
-	d, _ := svc.CreateDeliberation("Job test", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Job test", "")
 
 	job := &store.Job{
 		DeliberationID: d.ID,

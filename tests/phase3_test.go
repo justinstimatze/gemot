@@ -11,13 +11,13 @@ func TestChallengeAnalysis(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Challenge test", "")
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Challenge test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 	svc.Analyze(context.Background(), d.ID)
 
 	// Challenge the analysis
-	_, err := svc.DisputeCrux(d.ID, "alice", "[FULL ANALYSIS CHALLENGE]",
+	_, err := svc.DisputeCrux(context.Background(), d.ID, "alice", "[FULL ANALYSIS CHALLENGE]",
 		"The crux detection missed the key disagreement about implementation timeline")
 	if err != nil {
 		t.Fatal(err)
@@ -81,9 +81,9 @@ func TestCoalitionDetection(t *testing.T) {
 	}}
 
 	svc := deliberation.NewService(db, analyzer)
-	d, _ := svc.CreateDeliberation("Coalition test", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Coalition test", "")
 	for _, a := range []string{"alice", "bob", "carol", "dave"} {
-		svc.SubmitPosition(d.ID, a, "Position from "+a)
+		svc.SubmitPosition(context.Background(), d.ID, a, "Position from "+a)
 	}
 
 	result, err := svc.Analyze(context.Background(), d.ID)
@@ -128,8 +128,8 @@ func TestReframeRequiresGenerator(t *testing.T) {
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 	// Don't set reframer
 
-	d, _ := svc.CreateDeliberation("Reframe test", "")
-	p, _ := svc.SubmitPosition(d.ID, "alice", "Strong opinion")
+	d, _ := svc.CreateDeliberation(context.Background(), "Reframe test", "")
+	p, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Strong opinion")
 
 	_, err := svc.ReframePosition(context.Background(), d.ID, p.ID)
 	if err == nil {

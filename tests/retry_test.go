@@ -19,7 +19,7 @@ func TestRetryEnrichedContext(t *testing.T) {
 	}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, err := svc.CreateDeliberation("Enriched context test", "Testing full pipeline enriched context")
+	d, err := svc.CreateDeliberation(context.Background(), "Enriched context test", "Testing full pipeline enriched context")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestRetryEnrichedContext(t *testing.T) {
 		"carol": "Capability advancement drives progress, safety is secondary",
 	}
 	for agent, content := range positions {
-		if _, err := svc.SubmitPosition(d.ID, agent, content); err != nil {
+		if _, err := svc.SubmitPosition(context.Background(), d.ID, agent, content); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -47,7 +47,7 @@ func TestRetryEnrichedContext(t *testing.T) {
 	}
 
 	// Verify GetContext returns enriched fields for alice
-	ctx, err := svc.GetContext(d.ID, "alice")
+	ctx, err := svc.GetContext(context.Background(), d.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestRetryEnrichedContext(t *testing.T) {
 	_ = ctx.DiversityNudge
 
 	// Verify for carol too (the "other" faction)
-	ctxCarol, err := svc.GetContext(d.ID, "carol")
+	ctxCarol, err := svc.GetContext(context.Background(), d.ID, "carol")
 	if err != nil {
 		t.Fatal(err)
 	}

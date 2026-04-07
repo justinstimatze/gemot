@@ -11,12 +11,12 @@ func TestInviteAgent(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Invite test", "")
-	svc.SubmitPosition(d.ID, "alice", "Position A")
-	svc.SubmitPosition(d.ID, "bob", "Position B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Invite test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Position A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Position B")
 
 	// Alice invites an expert
-	inv, err := svc.InviteAgent(d.ID, "alice", "expert-agent", "expert", "Need domain expertise on safety evaluation")
+	inv, err := svc.InviteAgent(context.Background(), d.ID, "alice", "expert-agent", "expert", "Need domain expertise on safety evaluation")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,10 +28,10 @@ func TestInviteAgent(t *testing.T) {
 	}
 
 	// Expert sees the invitation in their context (need analysis first)
-	svc.Vote(d.ID, "alice", "pos1", 1) // need some votes for analysis
+	svc.Vote(context.Background(), d.ID, "alice", "pos1", 1) // need some votes for analysis
 	svc.Analyze(context.Background(), d.ID)
 
-	ctx, err := svc.GetContext(d.ID, "expert-agent")
+	ctx, err := svc.GetContext(context.Background(), d.ID, "expert-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,13 +43,13 @@ func TestInviteAgent(t *testing.T) {
 	}
 
 	// Accept invitation
-	err = svc.AcceptInvitation(inv.ID)
+	err = svc.AcceptInvitation(context.Background(), inv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// No longer pending after acceptance
-	ctx2, _ := svc.GetContext(d.ID, "expert-agent")
+	ctx2, _ := svc.GetContext(context.Background(), d.ID, "expert-agent")
 	if len(ctx2.PendingInvitations) != 0 {
 		t.Fatal("expected 0 pending invitations after acceptance")
 	}
@@ -59,8 +59,8 @@ func TestInviteAgentInvalidRole(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Role test", "")
-	_, err := svc.InviteAgent(d.ID, "alice", "bob", "dictator", "I want power")
+	d, _ := svc.CreateDeliberation(context.Background(), "Role test", "")
+	_, err := svc.InviteAgent(context.Background(), d.ID, "alice", "bob", "dictator", "I want power")
 	if err == nil {
 		t.Fatal("expected error for invalid role")
 	}
@@ -72,7 +72,7 @@ func TestDeliberationTypeValidation(t *testing.T) {
 
 	// Valid types
 	for _, typ := range []string{"reasoning", "knowledge", "negotiation", "policy"} {
-		d, err := svc.CreateDeliberation("Test "+typ, "", deliberation.WithType(typ))
+		d, err := svc.CreateDeliberation(context.Background(), "Test "+typ, "", deliberation.WithType(typ))
 		if err != nil {
 			t.Fatalf("valid type %q rejected: %v", typ, err)
 		}
@@ -82,13 +82,13 @@ func TestDeliberationTypeValidation(t *testing.T) {
 	}
 
 	// Invalid type
-	_, err := svc.CreateDeliberation("Bad type", "", deliberation.WithType("garbage"))
+	_, err := svc.CreateDeliberation(context.Background(), "Bad type", "", deliberation.WithType("garbage"))
 	if err == nil {
 		t.Fatal("expected error for invalid type")
 	}
 
 	// Empty type is fine
-	d, err := svc.CreateDeliberation("No type", "")
+	d, err := svc.CreateDeliberation(context.Background(), "No type", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +101,8 @@ func TestProposeCompromiseRequiresAnalysis(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Compromise test", "")
-	svc.SubmitPosition(d.ID, "alice", "Position A")
+	d, _ := svc.CreateDeliberation(context.Background(), "Compromise test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Position A")
 
 	// No analysis yet — should fail
 	_, err := svc.ProposeCompromise(context.Background(), d.ID)
@@ -116,10 +116,10 @@ func TestProposeCompromiseRequiresGenerator(t *testing.T) {
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 	// Don't set compromise generator
 
-	d, _ := svc.CreateDeliberation("No generator", "")
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
-	svc.Vote(d.ID, "alice", "bogus", 1) // ignored but needed
+	d, _ := svc.CreateDeliberation(context.Background(), "No generator", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
+	svc.Vote(context.Background(), d.ID, "alice", "bogus", 1) // ignored but needed
 	svc.Analyze(context.Background(), d.ID)
 
 	_, err := svc.ProposeCompromise(context.Background(), d.ID)
@@ -152,13 +152,13 @@ func TestDiversityNudgeMinority(t *testing.T) {
 	}}
 
 	svc := deliberation.NewService(db, analyzer)
-	d, _ := svc.CreateDeliberation("Nudge test", "")
-	svc.SubmitPosition(d.ID, "alice", "Minority view")
-	svc.SubmitPosition(d.ID, "bob", "Majority view")
-	svc.SubmitPosition(d.ID, "carol", "Majority view too")
+	d, _ := svc.CreateDeliberation(context.Background(), "Nudge test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Minority view")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Majority view")
+	svc.SubmitPosition(context.Background(), d.ID, "carol", "Majority view too")
 	svc.Analyze(context.Background(), d.ID)
 
-	ctx, err := svc.GetContext(d.ID, "alice")
+	ctx, err := svc.GetContext(context.Background(), d.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestDiversityNudgeMinority(t *testing.T) {
 	t.Logf("Nudge: %s", ctx.DiversityNudge)
 
 	// Majority agent should get a different nudge or none
-	ctx2, _ := svc.GetContext(d.ID, "bob")
+	ctx2, _ := svc.GetContext(context.Background(), d.ID, "bob")
 	if ctx2.DiversityNudge == ctx.DiversityNudge {
 		t.Fatal("majority agent should get different nudge than minority")
 	}
@@ -178,8 +178,8 @@ func TestGetInvitationsEmpty(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Empty invites", "")
-	invs, err := svc.GetInvitations(d.ID)
+	d, _ := svc.CreateDeliberation(context.Background(), "Empty invites", "")
+	invs, err := svc.GetInvitations(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
