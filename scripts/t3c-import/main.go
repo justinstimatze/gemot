@@ -481,6 +481,7 @@ func main() {
 	nullControl := flag.Bool("null-control", false, "Run null control (shuffled data) for validation")
 	spotCheck := flag.Bool("spot-check", false, "LLM-verify 15% of stance assignments against source quotes")
 	replicate := flag.Int("replicate", 0, "Run N replication runs to test pipeline stability")
+	coverageAudit := flag.Bool("coverage-audit", false, "Detect missing perspectives in unchallenged positions")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -508,7 +509,7 @@ func main() {
 	case "speaker":
 		runSpeakerMode(&data, mcpURL, *template, *threshold, *allCruxes, *dryRun, *groupID)
 	case "structural":
-		runStructuralMode(&data, mcpURL, *template, *threshold, *allCruxes, *dryRun, *groupID, *rounds, *reportPath, *nullControl, *spotCheck, *replicate)
+		runStructuralMode(&data, mcpURL, *template, *threshold, *allCruxes, *dryRun, *groupID, *rounds, *reportPath, *nullControl, *spotCheck, *replicate, *coverageAudit)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode: %s (use speaker or structural)\n", *mode)
 		os.Exit(1)
@@ -616,7 +617,7 @@ func runSpeakerMode(data *ReportData, mcpURL, tmplFlag string, threshold float64
 
 // --- Structural mode v2: phased protocol with vote seeding ---
 
-func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold float64, allCruxes, dryRun bool, groupID string, numRounds int, reportPath string, nullControl, spotCheckFlag bool, replicateN int) {
+func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold float64, allCruxes, dryRun bool, groupID string, numRounds int, reportPath string, nullControl, spotCheckFlag bool, replicateN int, coverageAuditFlag bool) {
 	totalClaims := countClaims(data)
 
 	setup := buildR1Setup(data, threshold, "t3c-")
@@ -988,6 +989,15 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 		repResult = runReplication(data, mcpURL, secret, tmpl, groupID, threshold, replicateN)
 	}
 
+	// Run coverage audit if requested
+	var covResult *coverageResult
+	if coverageAuditFlag && r1Result != "" {
+		fmt.Fprintf(os.Stderr, "\n=== Coverage Audit ===\n")
+		var r1Analysis analysisResult
+		json.Unmarshal([]byte(r1Result), &r1Analysis)
+		covResult = runCoverageAudit(&r1Analysis)
+	}
+
 	// Run spot-check if requested
 	var scResult *spotCheckResult
 	if spotCheckFlag {
@@ -997,7 +1007,7 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 
 	// Write markdown report if requested
 	if reportPath != "" && r1Result != "" {
-		md := generateReport(data, r1Result, r2Result, r3Result, r1Compromise, r2Compromise, r3Compromise, r1Agents, r2Agents, r3Agents, tmpl, delibID, joinCode, ncResult, scResult, repResult)
+		md := generateReport(data, r1Result, r2Result, r3Result, r1Compromise, r2Compromise, r3Compromise, r1Agents, r2Agents, r3Agents, tmpl, delibID, joinCode, ncResult, scResult, repResult, covResult)
 		if err := os.WriteFile(reportPath, []byte(md), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "writing report: %v\n", err)
 		} else {

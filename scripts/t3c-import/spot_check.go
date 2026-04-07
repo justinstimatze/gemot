@@ -75,8 +75,8 @@ func collectQuotes(c Claim, sourceIDs map[string]bool) []string {
 func runSpotCheck(data *ReportData, sampleRate float64) *spotCheckResult {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  spot-check: ANTHROPIC_API_KEY not set, skipping\n")
-		return nil
+		fmt.Fprintf(os.Stderr, "  spot-check: ANTHROPIC_API_KEY not set\n")
+		os.Exit(1)
 	}
 
 	if data.AddOns == nil || data.AddOns.SpeakerCruxMatrix == nil {
