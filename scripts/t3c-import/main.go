@@ -509,7 +509,21 @@ func main() {
 	case "speaker":
 		runSpeakerMode(&data, mcpURL, *template, *threshold, *allCruxes, *dryRun, *groupID)
 	case "structural":
-		runStructuralMode(&data, mcpURL, *template, *threshold, *allCruxes, *dryRun, *groupID, *rounds, *reportPath, *nullControl, *spotCheck, *replicate, *coverageAudit)
+		cfg := &pipelineConfig{
+			MCPURL:        mcpURL,
+			Template:      *template,
+			Threshold:     *threshold,
+			AllCruxes:     *allCruxes,
+			DryRun:        *dryRun,
+			GroupID:       *groupID,
+			Rounds:        *rounds,
+			ReportPath:    *reportPath,
+			NullControl:   *nullControl,
+			SpotCheck:     *spotCheck,
+			ReplicateN:    *replicate,
+			CoverageAudit: *coverageAudit,
+		}
+		runStructuralMode(&data, cfg)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode: %s (use speaker or structural)\n", *mode)
 		os.Exit(1)
@@ -617,10 +631,10 @@ func runSpeakerMode(data *ReportData, mcpURL, tmplFlag string, threshold float64
 
 // --- Structural mode v2: phased protocol with vote seeding ---
 
-func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold float64, allCruxes, dryRun bool, groupID string, numRounds int, reportPath string, nullControl, spotCheckFlag bool, replicateN int, coverageAuditFlag bool) {
+func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	totalClaims := countClaims(data)
 
-	setup := buildR1Setup(data, threshold, "t3c-")
+	setup := buildR1Setup(data, cfg.Threshold, "t3c-")
 	clusters := setup.clusters
 	controversialCruxes := setup.controversialCruxes
 	consensusCruxes := setup.consensusCruxes
@@ -634,7 +648,7 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 			maxControversy = c.ControversyScore
 		}
 	}
-	tmpl := tmplFlag
+	tmpl := cfg.Template
 	if tmpl == "auto" {
 		tmpl = pickTemplate(maxControversy)
 	}
@@ -643,7 +657,6 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 	if len(r1Agents) > 10 && (tmpl == "negotiation" || tmpl == "review") {
 		tmpl = "assembly"
 	}
-	// Round 2 agents add ~4 more, so check with margin
 	if len(r1Agents)+4 > 10 && (tmpl == "negotiation" || tmpl == "review") {
 		tmpl = "assembly"
 	}
@@ -655,20 +668,20 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 		len(data.AddOns.SubtopicCruxes), len(controversialCruxes), len(topicCruxes), len(consensusCruxes))
 	fmt.Fprintf(os.Stderr, "  %d clusters (%d multi-member, %d singletons)\n",
 		len(clusters), countMultiMember(clusters), len(clusters)-countMultiMember(clusters))
-	fmt.Fprintf(os.Stderr, "  template: %s | rounds: %d\n\n", tmpl, numRounds)
+	fmt.Fprintf(os.Stderr, "  template: %s | rounds: %d\n\n", tmpl, cfg.Rounds)
 
 	fmt.Fprintf(os.Stderr, "Round 1 agents (%d):\n", len(r1Agents))
 	for _, a := range r1Agents {
 		fmt.Fprintf(os.Stderr, "  %-40s %s\n", a.ID, a.Role)
 	}
-	if numRounds >= 2 {
+	if cfg.Rounds >= 2 {
 		fmt.Fprintf(os.Stderr, "\nRound 2 agents: bridge + dissent + empty chairs (determined after R1 analysis)\n")
 	}
-	if numRounds >= 3 {
+	if cfg.Rounds >= 3 {
 		fmt.Fprintf(os.Stderr, "Round 3 agents: revised speaker positions (LLM-generated, informed by R2 findings)\n")
 	}
 
-	if dryRun {
+	if cfg.DryRun {
 		fmt.Fprintf(os.Stderr, "\n[dry run] would create 1 deliberation with %d+ agents\n", len(r1Agents))
 		for _, a := range r1Agents {
 			fmt.Fprintf(os.Stderr, "\n--- %s ---\n%s\n", a.ID, a.Position)
@@ -678,7 +691,7 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 
 	// --- Connect ---
 	_, secret := getMCPConfig()
-	session, err := connect(mcpURL, secret)
+	session, err := connect(cfg.MCPURL, secret)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect failed: %v\n", err)
 		os.Exit(1)
@@ -696,7 +709,7 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 
 	createJSON := call(session, "deliberation", map[string]any{
 		"action": "create", "topic": topic, "template": tmpl,
-		"type": "reasoning", "group_id": groupID,
+		"type": "reasoning", "group_id": cfg.GroupID,
 	})
 	var created struct {
 		DeliberationID string `json:"deliberation_id"`
@@ -728,7 +741,7 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 	call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
 
 	// Poll for completion
-	r1Result := pollAndGetResult(session, mcpURL, secret, delibID, 1)
+	r1Result := pollAndGetResult(session, cfg.MCPURL, secret, delibID, 1)
 	if r1Result == "" {
 		fmt.Fprintf(os.Stderr, "  round 1 analysis did not complete\n")
 		os.Exit(1)
@@ -737,7 +750,7 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 
 	// Generate compromise proposal for R1
 	r1Compromise := ""
-	if reportPath != "" {
+	if cfg.ReportPath != "" {
 		fmt.Fprintf(os.Stderr, "  generating compromise proposal...\n")
 		compJSON := callSoft(session, "analyze", map[string]any{
 			"action": "propose_compromise", "deliberation_id": delibID,
@@ -753,10 +766,10 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 	var r2Agents []agentPlan
 	r2Compromise := ""
 
-	if numRounds >= 2 {
+	if cfg.Rounds >= 2 {
 		// Reconnect — the polling loop may have replaced the session
 		session.Close()
-		session, err = connect(mcpURL, secret)
+		session, err = connect(cfg.MCPURL, secret)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "reconnect for R2 failed: %v\n", err)
 			os.Exit(1)
@@ -862,13 +875,13 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 			// Trigger R2 analysis
 			fmt.Fprintf(os.Stderr, "  analyzing...\n")
 			call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
-			r2Result = pollAndGetResult(session, mcpURL, secret, delibID, 2)
+			r2Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 2)
 			if r2Result != "" {
 				fmt.Fprintf(os.Stderr, "  round 2 complete\n")
-				if reportPath != "" {
+				if cfg.ReportPath != "" {
 					// Reconnect for compromise
 					session.Close()
-					session, err = connect(mcpURL, secret)
+					session, err = connect(cfg.MCPURL, secret)
 					if err == nil {
 						fmt.Fprintf(os.Stderr, "  generating R2 compromise proposal...\n")
 						compJSON := callSoft(session, "analyze", map[string]any{
@@ -889,10 +902,10 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 	var r3Agents []agentPlan
 	r3Compromise := ""
 
-	if numRounds >= 3 && r2Result != "" {
+	if cfg.Rounds >= 3 && r2Result != "" {
 		// Reconnect for R3
 		session.Close()
-		session, err = connect(mcpURL, secret)
+		session, err = connect(cfg.MCPURL, secret)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "reconnect for R3 failed: %v\n", err)
 			os.Exit(1)
@@ -928,12 +941,12 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 			// Trigger R3 analysis
 			fmt.Fprintf(os.Stderr, "  analyzing...\n")
 			call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
-			r3Result = pollAndGetResult(session, mcpURL, secret, delibID, 3)
+			r3Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 3)
 			if r3Result != "" {
 				fmt.Fprintf(os.Stderr, "  round 3 complete\n")
-				if reportPath != "" {
+				if cfg.ReportPath != "" {
 					session.Close()
-					session, err = connect(mcpURL, secret)
+					session, err = connect(cfg.MCPURL, secret)
 					if err == nil {
 						fmt.Fprintf(os.Stderr, "  generating R3 compromise proposal...\n")
 						compJSON := callSoft(session, "analyze", map[string]any{
@@ -964,34 +977,34 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 
 	r := structuralResult{
 		DeliberationID: delibID, Template: tmpl,
-		Rounds: numRounds, R1Agents: len(r1Agents),
+		Rounds: cfg.Rounds, R1Agents: len(r1Agents),
 		R1Votes: voteCount, JoinCode: joinCode,
 	}
 	out, _ := json.MarshalIndent(r, "", "  ")
 	fmt.Println(string(out))
 
-	fmt.Fprintf(os.Stderr, "\nDone. Deliberation %s (%d rounds)\n", delibID, numRounds)
+	fmt.Fprintf(os.Stderr, "\nDone. Deliberation %s (%d rounds)\n", delibID, cfg.Rounds)
 	if joinCode != "" {
 		fmt.Fprintf(os.Stderr, "  Join: %s\n", joinCode)
 	}
 
 	// Run null control if requested
 	var ncResult *nullControlResult
-	if nullControl && r1Result != "" {
+	if cfg.NullControl && r1Result != "" {
 		_, secret := getMCPConfig()
-		ncResult = runNullControl(data, r1Result, len(clusters), mcpURL, secret, tmpl, groupID, threshold)
+		ncResult = runNullControl(data, r1Result, len(clusters), cfg.MCPURL, secret, tmpl, cfg.GroupID, cfg.Threshold)
 	}
 
 	// Run replication if requested
 	var repResult *replicationResult
-	if replicateN >= 2 && r1Result != "" {
+	if cfg.ReplicateN >= 2 && r1Result != "" {
 		_, secret := getMCPConfig()
-		repResult = runReplication(data, mcpURL, secret, tmpl, groupID, threshold, replicateN)
+		repResult = runReplication(data, cfg.MCPURL, secret, tmpl, cfg.GroupID, cfg.Threshold, cfg.ReplicateN)
 	}
 
 	// Run coverage audit if requested
 	var covResult *coverageResult
-	if coverageAuditFlag && r1Result != "" {
+	if cfg.CoverageAudit && r1Result != "" {
 		fmt.Fprintf(os.Stderr, "\n=== Coverage Audit ===\n")
 		var r1Analysis analysisResult
 		json.Unmarshal([]byte(r1Result), &r1Analysis)
@@ -1000,18 +1013,25 @@ func runStructuralMode(data *ReportData, mcpURL, tmplFlag string, threshold floa
 
 	// Run spot-check if requested
 	var scResult *spotCheckResult
-	if spotCheckFlag {
+	if cfg.SpotCheck {
 		fmt.Fprintf(os.Stderr, "\n=== Spot Check ===\n")
 		scResult = runSpotCheck(data, 0.15)
 	}
 
 	// Write markdown report if requested
-	if reportPath != "" && r1Result != "" {
-		md := generateReport(data, r1Result, r2Result, r3Result, r1Compromise, r2Compromise, r3Compromise, r1Agents, r2Agents, r3Agents, tmpl, delibID, joinCode, ncResult, scResult, repResult, covResult)
-		if err := os.WriteFile(reportPath, []byte(md), 0o644); err != nil {
+	if cfg.ReportPath != "" && r1Result != "" {
+		ri := &reportInput{
+			Data: data, R1JSON: r1Result, R2JSON: r2Result, R3JSON: r3Result,
+			R1Compromise: r1Compromise, R2Compromise: r2Compromise, R3Compromise: r3Compromise,
+			R1Agents: r1Agents, R2Agents: r2Agents, R3Agents: r3Agents,
+			Template: tmpl, DelibID: delibID, JoinCode: joinCode,
+			NullControl: ncResult, SpotCheck: scResult, Replication: repResult, Coverage: covResult,
+		}
+		md := generateReport(ri)
+		if err := os.WriteFile(cfg.ReportPath, []byte(md), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "writing report: %v\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "  Report: %s\n", reportPath)
+			fmt.Fprintf(os.Stderr, "  Report: %s\n", cfg.ReportPath)
 		}
 	}
 }
