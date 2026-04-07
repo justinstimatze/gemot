@@ -541,8 +541,17 @@ func generateReport(ri *reportInput) string {
 	b.WriteString("**Circularity**: AI-synthesized agents deliberating about AI governance is inherently circular. ")
 	b.WriteString("This report maps discourse structure — it does not produce independent evidence. ")
 	b.WriteString("Conclusions should be treated as hypotheses to be tested against primary sources and real expert input.\n\n")
-	b.WriteString("**Replicability**: This is a single pipeline run. LLM outputs are stochastic — a second run on the same input will produce different crux wordings, scores, and topic labels. ")
-	b.WriteString("Findings that appear across multiple runs are more robust than single-run results.\n\n")
+	if repResult != nil && len(repResult.Runs) >= 2 {
+		fmt.Fprintf(&b, "**Replicability**: This analysis was replicated across %d runs. ", len(repResult.Runs))
+		if repResult.Stability.AllStable {
+			b.WriteString("Cross-run metrics are stable (CV < 0.2). Findings are reproducible.\n\n")
+		} else {
+			b.WriteString("Some metrics showed high variance across runs. Findings should be interpreted with caution.\n\n")
+		}
+	} else {
+		b.WriteString("**Replicability**: This is a single pipeline run. LLM outputs are stochastic — a second run on the same input will produce different crux wordings, scores, and topic labels. ")
+		b.WriteString("Findings that appear across multiple runs are more robust than single-run results.\n\n")
+	}
 
 	// Next steps
 	if joinCode != "" || delibID != "" {
@@ -550,7 +559,14 @@ func generateReport(ri *reportInput) string {
 		if joinCode != "" {
 			fmt.Fprintf(&b, "- **Join the deliberation**: `coordinate action:join code:%s`\n", joinCode)
 		}
-		b.WriteString("- **Continue deliberating**: submit new positions to extend beyond Round 2\n")
+		lastRound := 1
+		if r2JSON != "" {
+			lastRound = 2
+		}
+		if r3JSON != "" {
+			lastRound = 3
+		}
+		fmt.Fprintf(&b, "- **Continue deliberating**: submit new positions to extend beyond Round %d\n", lastRound)
 		fmt.Fprintf(&b, "- **Generate new compromise**: `analyze action:propose_compromise deliberation_id:%s`\n", delibID)
 		b.WriteString("- **Replicate**: run the import again to test stability of findings across runs\n")
 		b.WriteString("- **Validate grounding**: spot-check 10-15 agent stances against primary source documents\n")
@@ -664,9 +680,11 @@ func cleanConsensus(statements []struct{ Content string }) []string {
 				if strings.HasPrefix(upper, "SPEAKER:") ||
 					strings.HasPrefix(upper, "STEELMAN") ||
 					strings.HasPrefix(upper, "ADVERSARY") ||
+					strings.HasPrefix(upper, "PROBE") ||
 					strings.HasPrefix(upper, "BRIDGE") ||
 					strings.HasPrefix(upper, "DISSENT") ||
 					strings.HasPrefix(upper, "EMPTY CHAIR") ||
+					strings.HasPrefix(upper, "REVISED POSITION") ||
 					strings.HasPrefix(upper, "ROUND ") ||
 					strings.HasPrefix(upper, "CRUX") ||
 					strings.HasPrefix(upper, "WHAT'S THE ") {
