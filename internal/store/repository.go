@@ -267,6 +267,17 @@ func (s *DB) CountPositions(ctx context.Context, deliberationID string) (int, er
 	return count, err
 }
 
+// CheckParticipantCap checks if a deliberation has reached its max participants
+// and whether the given agent is already participating. Single query instead of
+// loading all positions into memory.
+func (s *DB) CheckParticipantCap(ctx context.Context, deliberationID, agentID string, maxParticipants int) (capped bool, alreadyIn bool, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT agent_id) >= $2, BOOL_OR(agent_id = $3) FROM positions WHERE deliberation_id = $1`,
+		deliberationID, maxParticipants, agentID,
+	).Scan(&capped, &alreadyIn)
+	return
+}
+
 func (s *DB) CreatePosition(ctx context.Context, p *deliberation.Position) error {
 	p.ID = uuid.New().String()
 	p.CreatedAt = time.Now().UTC()

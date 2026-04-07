@@ -6,16 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
 )
-
-var sseConnectionCount atomic.Int64
-
-const maxSSEConnections = 100
 
 // EventsHandler returns an SSE endpoint that streams deliberation events.
 //
@@ -26,19 +21,12 @@ const maxSSEConnections = 100
 //	join_code       — join code for anonymous read-only access (scoped to one deliberation)
 //
 // Auth: Bearer token via header or query param, OR join_code query param.
+// Connection limit enforced by SubscribeIfUnder (max 100 concurrent).
 func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		events := svc.Events()
 		if events == nil {
 			http.Error(w, "events not enabled", http.StatusServiceUnavailable)
-			return
-		}
-
-		// Connection limit
-		current := sseConnectionCount.Add(1)
-		defer sseConnectionCount.Add(-1)
-		if current > maxSSEConnections {
-			http.Error(w, "too many connections", http.StatusServiceUnavailable)
 			return
 		}
 
