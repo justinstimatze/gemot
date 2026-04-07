@@ -647,7 +647,9 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	for _, a := range agents {
 		validAgentSet[a] = true
 	}
-	cruxes, cruxWarnings := validateCruxAgents(cruxes, validAgentSet)
+	validated, cruxWarnings := validateCruxAgents(cruxes, validAgentSet)
+	cruxes = validated.Valid
+	discardedCruxes := validated.Degenerate
 	warnings = append(warnings, cruxWarnings...)
 
 	// Integrity: check for Sybil-like voting patterns
@@ -906,6 +908,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		EmergentNorms:        emergentNorms,
 		RuleViolations:       ruleViolations,
 		Cruxes:               cruxes,
+		DiscardedCruxes:      discardedCruxes,
 		ConsensusStatements:  consensus,
 		BridgingStatements:   bridging,
 		TopicSummaries:       summaries,
@@ -1017,11 +1020,20 @@ func (a *TextAnalyzer) getTaxonomy(ctx context.Context, deliberationTopic, posit
 		"required": []string{"topics"},
 	}
 
+	priorTaxGuidance := ""
+	if prior, ok := ctx.Value(deliberation.ContextKeyPriorTaxonomy{}).(string); ok && prior != "" {
+		priorTaxGuidance = "\nTAXONOMY STABILITY: A prior round of analysis used the following topics. " +
+			"Prefer reusing these topic names where they still apply, to maintain consistency across rounds. " +
+			"You may add, merge, or rename topics if the new positions warrant it, but avoid gratuitous renaming.\n" +
+			"Prior topics:\n" + prior + "\n"
+	}
+
 	prompt := strings.NewReplacer(
 		"{{TOPIC}}", deliberationTopic,
 		"{{POSITIONS}}", positionText,
 		"{{MAX_TOPICS}}", strconv.Itoa(maxTopics),
 		"{{MAX_SUBTOPICS}}", strconv.Itoa(maxSubtopics),
+		"{{PRIOR_TAXONOMY}}", priorTaxGuidance,
 	).Replace(taxonomyPrompt)
 
 	var result taxonomyResult

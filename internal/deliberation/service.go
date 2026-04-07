@@ -401,6 +401,9 @@ func WithDeadline(d time.Time) DeliberationOption {
 // ContextKeyTemplate is the context key for passing the template name through analysis.
 type ContextKeyTemplate struct{}
 
+// ContextKeyPriorTaxonomy passes prior round topic names for taxonomy stability.
+type ContextKeyPriorTaxonomy struct{}
+
 // RuleInt reads an integer rule from a deliberation, returning the default if not set.
 func RuleInt(d *Deliberation, key string, defaultVal int) int {
 	if d.Rules == nil {
@@ -960,18 +963,18 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	if len(agentCheck) < 2 {
 		resetStatus()
 		thinResult := &AnalysisResult{
-			DeliberationID:    deliberationID,
-			Round:             d.Round,
-			Clusters:          []OpinionCluster{},
-			Cruxes:            []Crux{},
+			DeliberationID:      deliberationID,
+			Round:               d.Round,
+			Clusters:            []OpinionCluster{},
+			Cruxes:              []Crux{},
 			ConsensusStatements: []ConsensusStatement{},
-			TopicSummaries:    []TopicSummary{},
-			AgentCount:        len(agentCheck),
-			PositionCount:     len(positions),
-			Confidence:        "low",
-			IntegrityWarnings: []string{fmt.Sprintf("INSUFFICIENT_AGENTS: %d agent(s) — crux analysis requires at least 2", len(agentCheck))},
-			AnalyzedAt:        time.Now().UTC(),
-			RecommendedAction: "await_more_participants",
+			TopicSummaries:      []TopicSummary{},
+			AgentCount:          len(agentCheck),
+			PositionCount:       len(positions),
+			Confidence:          "low",
+			IntegrityWarnings:   []string{fmt.Sprintf("INSUFFICIENT_AGENTS: %d agent(s) — crux analysis requires at least 2", len(agentCheck))},
+			AnalyzedAt:          time.Now().UTC(),
+			RecommendedAction:   "await_more_participants",
 		}
 		if err := s.store.SaveAnalysisResult(ctx, deliberationID, d.Round, thinResult); err != nil {
 			return nil, fmt.Errorf("saving thin result: %w", err)
@@ -1037,6 +1040,14 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 			}
 			if len(prevResult.ExtractedClaims) > 0 {
 				analysisCtx = context.WithValue(analysisCtx, ContextKeyPriorClaims{}, prevResult.ExtractedClaims)
+			}
+			// Pass prior taxonomy for topic stability across rounds
+			if len(prevResult.TopicSummaries) > 0 {
+				var priorTopics []string
+				for _, ts := range prevResult.TopicSummaries {
+					priorTopics = append(priorTopics, "- "+ts.Topic)
+				}
+				analysisCtx = context.WithValue(analysisCtx, ContextKeyPriorTaxonomy{}, strings.Join(priorTopics, "\n"))
 			}
 		}
 	}

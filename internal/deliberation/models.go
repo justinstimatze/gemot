@@ -46,17 +46,17 @@ type VoteTally struct {
 }
 
 type Position struct {
-	ID               string    `json:"position_id"`
-	DeliberationID   string    `json:"deliberation_id"`
-	AgentID          string    `json:"agent_id"`
-	Content          string    `json:"content"`
-	ModelFamily      string    `json:"model_family,omitempty"`       // optional: "claude", "gpt", "gemini", etc.
-	Group            string    `json:"group,omitempty"`              // optional: sub-group for decentralized deliberation
-	Conviction       float64   `json:"conviction,omitempty"`         // 0.0-1.0, strength of belief (default 0.5)
-	Reservation      string    `json:"reservation,omitempty"`        // what outcome is unacceptable to this agent
-	OnBehalfOf       string    `json:"on_behalf_of,omitempty"`       // principal this agent represents
-	Interests        string    `json:"interests,omitempty"`          // what this agent optimizes for (transparent objectives)
-	Draft            bool      `json:"draft,omitempty"`              // if true, not yet visible to others
+	ID               string         `json:"position_id"`
+	DeliberationID   string         `json:"deliberation_id"`
+	AgentID          string         `json:"agent_id"`
+	Content          string         `json:"content"`
+	ModelFamily      string         `json:"model_family,omitempty"`       // optional: "claude", "gpt", "gemini", etc.
+	Group            string         `json:"group,omitempty"`              // optional: sub-group for decentralized deliberation
+	Conviction       float64        `json:"conviction,omitempty"`         // 0.0-1.0, strength of belief (default 0.5)
+	Reservation      string         `json:"reservation,omitempty"`        // what outcome is unacceptable to this agent
+	OnBehalfOf       string         `json:"on_behalf_of,omitempty"`       // principal this agent represents
+	Interests        string         `json:"interests,omitempty"`          // what this agent optimizes for (transparent objectives)
+	Draft            bool           `json:"draft,omitempty"`              // if true, not yet visible to others
 	ParentPositionID string         `json:"parent_position_id,omitempty"` // amendment to this position
 	Metadata         map[string]any `json:"metadata,omitempty"`           // extensible metadata (lat, lon, label, etc.)
 	Round            int            `json:"round_number"`

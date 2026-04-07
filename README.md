@@ -239,6 +239,7 @@ gemot/
 
 - **[Calendar Scheduling](docs/calendar-scheduling.md)** — 5 agents negotiate a meeting time without sharing calendars. Privacy-preserving, conviction-weighted, ZOPA-aware. `go run ./scripts/calendar-scheduling`
 - **[GitHub PR Review](docs/github-pr-review.md)** — Action posts crux analysis on PRs with join codes for contributor agents. [Workflows](.github/workflows/)
+- **[Talk to the City](integrations/t3c/)** — Import T3C reports as live deliberations. Speaker mode (one per crux) or structural mode (topology-derived agents). `go run ./scripts/t3c-import/ report.json --mode structural`
 - **[Wasteland](integrations/wasteland/)** — Deliberation for federated agent work. [Stamp mapping](integrations/wasteland/stamp-mapping.md), [A2A examples](integrations/wasteland/a2a-example.sh)
 - **[Hermes Agent](integrations/hermes-agent/README.md)** — Proposal for consensus/voting integration (addresses [NousResearch/hermes-agent#412](https://github.com/NousResearch/hermes-agent/issues/412))
 - **[Research Lineage](docs/research-lineage.md)** — From Semantic Web (2001) and FIPA to modern agent deliberation
@@ -253,10 +254,14 @@ Apache 2.0 — see [LICENSE](LICENSE)
 - [Talk to the City (T3C)](https://github.com/AIObjectives/talktothe.city) — claim extraction and crux detection pipeline
 - [Polis](https://pol.is) — vote matrix analysis, bridging scores concept
 - [Plurality (Weyl, Tang et al.)](https://github.com/pluralitybook/plurality) — correlation discounting, quadratic voting, broad listening framework
-- [Habermas Machine](https://github.com/google-Speaker L/habermas_machine) — iterative statement refinement inspiration
+- [Habermas Machine](https://arxiv.org/abs/2410.11302) — AI mediator generating common-ground statements, 5,734 UK participants (Science, 2024)
 - [Moltbook](https://arxiv.org/abs/2602.14299) — empirical validation that agent societies need structural mechanisms
-- [Generative Social Choice](https://arxiv.org/abs/2309.01291) — compromise proposal generation framework
+- [Generative Social Choice](https://arxiv.org/abs/2309.01291) — compromise proposal generation framework (Fish, Procaccia et al., EC 2024)
+- [Deliberative Collective Intelligence](https://arxiv.org/abs/2603.11781) — typed epistemic acts, convergent flow, minority reports (Prakash, 2025)
+- [The Empty Chair](https://arxiv.org/abs/2503.13812) — LLM personas for missing stakeholder perspectives in deliberation (Fulay, Dimitrakopoulou & Roy, CSCW 2025)
+- [Debate or Vote](https://arxiv.org/abs/2508.17536) — voting matters more than debate; structure matters more than rounds (Choi, Zhu & Li, NeurIPS 2025 Spotlight)
 - [FREE-MAD](https://arxiv.org/abs/2509.11035) — anti-conformity mechanism for multi-agent debate
+- [CQs-Gen](https://argmining-org.github.io/2025/) — critical question generation as crux detection (ArgMining @ ACL 2025)
 - [Mechanism Design for LLMs](https://arxiv.org/abs/2310.10826) — weighted aggregation, incentive compatibility (WWW 2024)
 - [ANAC](https://dl.acm.org/doi/abs/10.5555/3709347.3744072) — automated negotiation protocol design (AAMAS 2025)
 - [SmartJudge](https://github.com/COMSYS/smartjudge) — mediator-verifier commitment pattern

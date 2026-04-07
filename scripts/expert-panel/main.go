@@ -281,14 +281,14 @@ func main() {
 	fmt.Printf("Experts: %d | Time: %ds\n", panel.ExpertCount, int(elapsed.Seconds()))
 
 	if len(result.TopicSummaries) > 0 {
-		fmt.Println("\n## Summaries\n")
+		fmt.Print("\n## Summaries\n\n")
 		for _, ts := range result.TopicSummaries {
 			fmt.Printf("### %s\n\n%s\n\n", ts.Topic, ts.Summary)
 		}
 	}
 
 	if len(result.Cruxes) > 0 {
-		fmt.Println("## Key Disagreements\n")
+		fmt.Print("## Key Disagreements\n\n")
 		for i, c := range result.Cruxes {
 			fmt.Printf("%d. **%s** (%.0f%% controversy)\n", i+1, c.Claim, c.Score*100)
 			fmt.Printf("   - Agree: %s\n", strings.Join(c.Agree, ", "))
@@ -298,7 +298,7 @@ func main() {
 	}
 
 	if len(result.ConsensusStatements) > 0 {
-		fmt.Println("## Consensus\n")
+		fmt.Print("## Consensus\n\n")
 		for _, cs := range result.ConsensusStatements {
 			fmt.Printf("- %s\n", cs.Content)
 		}
@@ -306,7 +306,7 @@ func main() {
 	}
 
 	if len(result.BridgingStatements) > 0 {
-		fmt.Println("## Bridging Statements\n")
+		fmt.Print("## Bridging Statements\n\n")
 		for _, bs := range result.BridgingStatements {
 			fmt.Printf("- [%.0f%%] %s\n", bs.Score*100, bs.Content)
 		}
