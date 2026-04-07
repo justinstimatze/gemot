@@ -2,7 +2,7 @@
 #
 #   docker compose up -d
 #   export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
-#   export GEMOT_ANTHROPIC_KEY=sk-ant-...
+#   export ANTHROPIC_API_KEY=sk-ant-...
 #   ./gemot http --addr :8080
 #
 # Data persists in the gemot_data volume between restarts.

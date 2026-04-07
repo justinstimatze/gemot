@@ -124,7 +124,7 @@ Direct agent-to-server connection, no HTTP overhead. Good for single-agent workf
 
 ```bash
 go build -o gemot .
-export GEMOT_ANTHROPIC_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=sk-ant-...
 export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
 ./gemot serve
 ```
@@ -137,7 +137,7 @@ Multi-agent access over HTTP/SSE. No API key or payment setup required for local
 # Start Postgres (or use docker compose up -d)
 docker compose up -d
 
-export GEMOT_ANTHROPIC_KEY=sk-ant-...
+export ANTHROPIC_API_KEY=sk-ant-...
 export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
 go build -o gemot .
 ./gemot http --addr :8080
@@ -151,7 +151,7 @@ To add authentication, set `GEMOT_API_SECRET=your-secret-here` and pass it as a 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DATABASE_URL` | Yes | `postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable` | Postgres connection string |
-| `GEMOT_ANTHROPIC_KEY` | Yes | — | Anthropic API key for LLM analysis |
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key for LLM analysis |
 | `GEMOT_MODEL` | No | `claude-sonnet-4-6` | Default model (`claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`) |
 | `GEMOT_API_SECRET` | No | — | Bearer token for auth. Unset = dev mode (no auth, rate-limited) |
 | `GEMOT_BASE_URL` | No | — | Public URL for Stripe checkout return links |

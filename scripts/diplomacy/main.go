@@ -180,11 +180,16 @@ func main() {
 	ctx := context.Background()
 
 	// Get Anthropic API key for v12 LLM enrichments
-	anthropicKey := os.Getenv("GEMOT_ANTHROPIC_KEY")
+	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+	if anthropicKey == "" {
+		anthropicKey = os.Getenv("GEMOT_ANTHROPIC_KEY") // legacy fallback
+	}
 	if anthropicKey == "" {
 		if b, err := os.ReadFile(".env"); err == nil {
 			for _, line := range strings.Split(string(b), "\n") {
-				if strings.HasPrefix(line, "GEMOT_ANTHROPIC_KEY=") {
+				if strings.HasPrefix(line, "ANTHROPIC_API_KEY=") {
+					anthropicKey = strings.TrimPrefix(line, "ANTHROPIC_API_KEY=")
+				} else if anthropicKey == "" && strings.HasPrefix(line, "GEMOT_ANTHROPIC_KEY=") {
 					anthropicKey = strings.TrimPrefix(line, "GEMOT_ANTHROPIC_KEY=")
 				}
 			}
@@ -257,7 +262,7 @@ func main() {
 
 		enrichWg.Wait()
 	} else {
-		fmt.Fprintf(os.Stderr, "  [v12] GEMOT_ANTHROPIC_KEY not set — skipping LLM enrichments\n")
+		fmt.Fprintf(os.Stderr, "  [v12] ANTHROPIC_API_KEY not set — skipping LLM enrichments\n")
 	}
 
 	// 2d: Relationship state machine (no LLM needed)

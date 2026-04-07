@@ -31,4 +31,4 @@ jobs:
         run: go test ./... -v -count=1
         env:
           # LLM-dependent tests are skipped when this is unset
-          GEMOT_ANTHROPIC_KEY: ${{ secrets.GEMOT_ANTHROPIC_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

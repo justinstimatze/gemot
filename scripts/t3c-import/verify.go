@@ -40,7 +40,7 @@ type verifyDetail struct {
 func verifyStances(data *ReportData, threshold int) *verifyResult {
 	apiKey := getAnthropicKey()
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  verify-stances: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required\n")
+		fmt.Fprintf(os.Stderr, "  verify-stances: ANTHROPIC_API_KEY required\n")
 		os.Exit(1)
 	}
 

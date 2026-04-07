@@ -10,7 +10,7 @@
 //
 // Usage: go run scripts/pr-review-demo.go
 //
-// Requires: GEMOT_ANTHROPIC_KEY (or .env), GEMOT_API_SECRET
+// Requires: ANTHROPIC_API_KEY (or .env), GEMOT_API_SECRET
 
 package main
 
