@@ -49,6 +49,6 @@ trap "kill $PROXY_PID 2>/dev/null || true" EXIT
 sleep 3
 
 echo "Migrating from local → prod..."
-go run scripts/migrate-demos/ --from "$LOCAL_DB" --to "$PROD_DB" "$@"
+go run ./scripts/migrate-demos/ --from "$LOCAL_DB" --to "$PROD_DB" "$@"
 
 echo "Done."
