@@ -30,10 +30,13 @@ type server struct {
 // RunAnalysisAsync starts an analysis in a background goroutine with proper
 // context management, credit refunding on failure, and job tracking.
 // Shared between MCP and A2A handlers to avoid divergent code paths.
-func RunAnalysisAsync(svc *deliberation.Service, db *store.DB, credits *payments.CreditStore, deliberationID, model, apiKey string, creditCost int) {
+func RunAnalysisAsync(svc *deliberation.Service, db *store.DB, credits *payments.CreditStore, deliberationID, model, apiKey string, creditCost int, opts ...func(context.Context) context.Context) {
 	analyzeCtx, analyzeCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	if model != "" {
 		analyzeCtx = context.WithValue(analyzeCtx, llm.ContextKeyModel{}, model)
+	}
+	for _, opt := range opts {
+		analyzeCtx = opt(analyzeCtx)
 	}
 
 	// Create persistent job if DB available
@@ -711,8 +714,10 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 			return errResult(err)
 		}
 		// Trigger analysis async — panel creation and position submission are already done
+		// Expert panels use interactive priority (reserved API slots)
 		s.audit(ctx, "analyze:expert_panel", result.DeliberationID, "")
-		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost)
+		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost,
+			func(c context.Context) context.Context { return context.WithValue(c, llm.ContextKeyInteractive{}, true) })
 		return jsonResultWithHints(result,
 			fmt.Sprintf("Panel created with %d experts. Analysis started — poll deliberation action:get (deliberation_id: %s) for status, then analyze action:get_result for results.",
 				result.ExpertCount, result.DeliberationID))
@@ -741,7 +746,8 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 			return errResult(err)
 		}
 		s.audit(ctx, "analyze:follow_up", result.DeliberationID, "")
-		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost)
+		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost,
+			func(c context.Context) context.Context { return context.WithValue(c, llm.ContextKeyInteractive{}, true) })
 		return jsonResultWithHints(result,
 			fmt.Sprintf("Follow-up round started with %d experts. Poll deliberation action:get for status, then analyze action:get_result.",
 				result.ExpertCount))

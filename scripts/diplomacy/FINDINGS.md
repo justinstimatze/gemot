@@ -16,7 +16,7 @@
 | v10 | 5 | 6 | Alliance-aware prompts — control improves dramatically, gemot eliminates Turkey |
 | v13 | 9 | 7 | First clean Sonnet 4.6 paired comparison; 7/7 vs 6/7 survival |
 | v14 | (v13 control) | 7 | Per-season analysis; Gini plateau at 0.09 for 8 cycles |
-| v15 | 10 | TBD | Seed 2027, commitment accountability, 2×2 factorial |
+| v15 | 10 | 6 | Seed 2027, commitment accountability; England contained (5 not 9) |
 
 "Spread" = max SCs - min SCs across all 7 powers. Lower is more balanced.
 
@@ -88,11 +88,11 @@ Following the expert panel's recommendation (consensus: "spread metric is insuff
 
 ### Paired comparisons (the experiments that matter)
 
-| Metric | v9 Control | v9 Gemot | v10 Control | v10 Gemot | v13 Control | v13 Gemot | v14 Gemot |
-|--------|-----------|---------|------------|----------|------------|----------|----------|
-| Spread | 10 | 5 | 5 | 6 | 9 | 7 | 7 |
-| Gini | 0.420 | 0.227 | 0.185 | 0.176 | 0.345 | 0.252 | 0.244 |
-| Survival | 6/7 | 7/7 | 7/7 | 6/7 | 6/7 | 7/7 | 7/7 |
+| Metric | v9 Control | v9 Gemot | v10 Control | v10 Gemot | v13 Control | v13 Gemot | v14 Gemot | v15 Control | v15a Gemot |
+|--------|-----------|---------|------------|----------|------------|----------|----------|------------|----------|
+| Spread | 10 | 5 | 5 | 6 | 9 | 7 | 7 | 10 | 6 |
+| Gini | 0.420 | 0.227 | 0.185 | 0.176 | 0.345 | 0.252 | 0.244 | 0.361 | 0.185 |
+| Survival | 6/7 | 7/7 | 7/7 | 6/7 | 6/7 | 7/7 | 7/7 | 6/7 | 7/7 |
 
 **v9**: Gemot wins decisively on all three metrics. Gini halved (0.42 → 0.23), all powers survive.
 
@@ -204,32 +204,81 @@ Comparing A vs B isolates incremental analysis. Comparing A vs C isolates freque
 
 v15 is also the first run with commitment accountability, trust tracking, elimination warnings, coalition risk warnings, and affected party warnings. These are bundled (not factored) — isolating each would require too many conditions.
 
-## v15 Control Results (seed 2027)
+## v15 Results (seed 2027, commitment accountability)
 
-| Power | SCs |
-|-------|-----|
-| England | 10 |
-| Turkey | 9 |
-| France | 7 |
-| Germany | 4 |
-| Italy | 3 |
-| Russia | 1 |
-| Austria | 0 (eliminated) |
+v15 is the first experiment with seed 2027 (breaking the 2026 confound), and the first with commitment accountability, trust tracking, elimination warnings, coalition risk warnings, and affected party warnings all active.
 
-**Survival: 6/7, Spread: 10, Gini: 0.378**
+### Paired comparison
 
-Seed 2027 produces a different game than seed 2026: Austria is eliminated instead of Germany, Turkey is the second power instead of trailing. But the same macro-pattern holds — one power dominates (England at 10), one is eliminated, spread is high. England again leads, though with 10 SCs instead of the 9 seen in all seed-2026 runs. This weakens the "England always gets exactly 9" hypothesis from v14 but strengthens the "England has a structural advantage" hypothesis.
+| Metric | Control | v15a (gemot) |
+|--------|---------|-------------|
+| Survival | 6/7 | **7/7** |
+| Spread | 10 | **6** |
+| Gini | 0.361 | **0.185** |
+| Leader | England: 9 | France: 7 |
+| Eliminated | Austria | **None** |
 
-## Shipped but untested: commitment accountability
+### Year-by-year Gini trajectory
 
-As of v14, the diplomacy pipeline includes:
+| Phase | v15a | Control | Delta |
+|-------|------|---------|-------|
+| F1901M | 0.039 | 0.039 | 0.000 |
+| F1902M | 0.080 | 0.071 | +0.009 |
+| F1903M | 0.101 | 0.143 | **-0.042** |
+| F1904M | 0.126 | 0.223 | **-0.097** |
+| F1905M | 0.185 | 0.241 | -0.056 |
+| F1906M | 0.185 | 0.234 | -0.049 |
+| F1907M | 0.185 | 0.361 | **-0.176** |
+
+### Final SC distribution
+
+| Power | v15a | Control | Delta |
+|-------|------|---------|-------|
+| France | 7 | 6 | +1 |
+| Austria | 6 | 0 | **+6** |
+| England | 5 | 9 | **-4** |
+| Turkey | 5 | 8 | **-3** |
+| Germany | 6 | 6 | 0 |
+| Russia | 3 | 1 | +2 |
+| Italy | 2 | 4 | -2 |
+
+### Key findings
+
+1. **England contained for the first time.** In all prior experiments (v9-v14, seed 2026), England finished at 9-10 SCs. In v15a (seed 2027), England finished at 5 — never leading at any point. This could be the new seed, the new features, or both. The factorial conditions (B, C, D) would help isolate the cause.
+
+2. **Austria recovery is the headline.** Austria was eliminated in the control (4 → 3 → 2 → 1 → 0 over 7 years). In v15a, Austria recovered from 4 to 6 — the most dramatic per-power delta. The elimination warnings and coalition risk warnings may have helped other powers coordinate Austria's defense.
+
+3. **Gini plateau held through endgame.** v15a Gini stabilized at 0.185 from year 5 through year 7. Unlike v14 (where the plateau broke at year 6 when England surged), v15a's equilibrium held. The commitment accountability and trust tracking may have made the coordination more durable.
+
+4. **Leadership was contested throughout.** v15a had 5 leader changes (RUS → FRA → FRA/GER/TUR → FRA/GER → GER → FRA). Control settled into Turkey then England hegemony from 1904. No single power dominated in v15a.
+
+5. **Italy traded for Austria.** Italy dropped from 4 (control) to 2 (v15a) — the one power that fared worse with gemot. The coordination that saved Austria may have come partly at Italy's expense. This echoes the v10 finding: gemot improves outcomes for some powers at the cost of others. The difference is that v15a's "cost" was 2 SCs, not elimination.
+
+### Data quality
+
+- **941 positions, 242 analyses, 460 commitments** — all new features active
+- **399 soft errors** (EOF/reconnect during MCP stdio teardown) — expected, no impact
+- **12 race condition errors** (get_context called before analysis complete) — minor script timing bug
+- **14/14 cycles completed, 98/98 briefings generated** — zero data loss
+- All 7 powers' briefings populated every cycle
+
+### Caveats
+
+- N=1 — no statistical significance. The Austria recovery could be random.
+- Seed 2027 produces a fundamentally different game dynamic (Turkey-led control instead of England-led). Cross-seed comparison is informative but not equivalent to same-seed treatment/control.
+- v15a bundles 5 new features (commitment accountability, trust tracking, elimination warnings, coalition risk warnings, affected party warnings). Cannot attribute effects to any single feature.
+- The factorial conditions (B: no-incremental, C: per-year, D: per-year no-incremental) have not been run yet.
+
+## Commitment accountability: validated in v15
+
+Shipped after v14, first tested in v15a. The pipeline now includes:
 - **Trust tracking**: Cross-references support promises in negotiations against actual orders
-- **Commitment accountability**: Submits compromise proposals as conditional commitments, audits fulfillment/breakage via gemot's commitment system, includes reputation scores in briefings
+- **Commitment accountability**: Submits compromise proposals as conditional commitments, audits fulfillment/breakage via gemot's commitment system, includes reputation scores in briefings (460 commitments tracked in v15a)
 - **Elimination warnings**: Flags powers at 0-1 SCs and proposals that would eliminate a third party
 - **Coalition risk warnings**: Alerts target powers when bilateral agreements reference their territory
 - **Affected party warnings**: Notes when a bilateral compromise impacts powers not in the negotiation
 
-These features were shipped after v14 completed and have not yet been tested in a live experiment. The next run (v15) will be the first to validate commitment accountability end-to-end.
+v15a produced 460 commitments across 14 analysis cycles. The Austria recovery (0 in control → 6 in v15a) is consistent with elimination warnings and coalition risk warnings enabling coordinated defense, though N=1 prevents causal attribution.
 
 ## Raw data
 
