@@ -30,7 +30,13 @@ func validateCoverage(positions []deliberation.Position, claims []claim) []strin
 
 // validateCruxAgents checks that every agent listed in a crux's agree/disagree/no_clear_position
 // actually submitted a position. The LLM sometimes hallucinates agent assignments.
-func validateCruxAgents(cruxes []deliberation.Crux, validAgents map[string]bool) ([]deliberation.Crux, []string) {
+// ValidatedCruxes holds valid cruxes and degenerate ones separately.
+type ValidatedCruxes struct {
+	Valid      []deliberation.Crux
+	Degenerate []deliberation.Crux
+}
+
+func validateCruxAgents(cruxes []deliberation.Crux, validAgents map[string]bool) (ValidatedCruxes, []string) {
 	var warnings []string
 	cleaned := make([]deliberation.Crux, len(cruxes))
 
@@ -51,25 +57,30 @@ func validateCruxAgents(cruxes []deliberation.Crux, validAgents map[string]bool)
 			))
 		}
 
-		// A crux with all agents on one side is not a crux
 		if len(cleaned[i].AgreeAgents) == 0 || len(cleaned[i].DisagreeAgents) == 0 {
-			warnings = append(warnings, fmt.Sprintf(
-				"DEGENERATE: crux %q has no agents on one side after validation — discarding",
-				truncateClaim(crux.Claim, 60),
-			))
+			cleaned[i].Degenerate = true
 			cleaned[i].ControversyScore = 0
+			emptySide := "agree"
+			if len(cleaned[i].AgreeAgents) > 0 {
+				emptySide = "disagree"
+			}
+			warnings = append(warnings, fmt.Sprintf(
+				"DEGENERATE: crux %q has no agents on the %s side after validation",
+				truncateClaim(crux.Claim, 60), emptySide,
+			))
 		}
 	}
 
-	// Filter out degenerate cruxes (empty sides)
-	var valid []deliberation.Crux
+	var result ValidatedCruxes
 	for _, c := range cleaned {
-		if len(c.AgreeAgents) > 0 && len(c.DisagreeAgents) > 0 {
-			valid = append(valid, c)
+		if c.Degenerate {
+			result.Degenerate = append(result.Degenerate, c)
+		} else {
+			result.Valid = append(result.Valid, c)
 		}
 	}
 
-	return valid, warnings
+	return result, warnings
 }
 
 // validateVoteSimilarity checks for suspiciously correlated voting patterns (Sybil signal).

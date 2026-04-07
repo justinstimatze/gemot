@@ -747,8 +747,8 @@ Or if your agent supports MCP, add {"mcpServers":{"gemot":{"type":"sse","url":"h
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      300 * time.Second, // generous for SSE streaming
-		IdleTimeout:       10 * time.Minute, // match WriteTimeout for long SSE analyses
-		MaxHeaderBytes:    1 << 20, // 1MB
+		IdleTimeout:       10 * time.Minute,  // match WriteTimeout for long SSE analyses
+		MaxHeaderBytes:    1 << 20,           // 1MB
 	}
 
 	errCh := make(chan error, 1)

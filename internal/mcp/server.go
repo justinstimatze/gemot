@@ -717,7 +717,9 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		// Expert panels use interactive priority (reserved API slots)
 		s.audit(ctx, "analyze:expert_panel", result.DeliberationID, "")
 		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost,
-			func(c context.Context) context.Context { return context.WithValue(c, llm.ContextKeyInteractive{}, true) })
+			func(c context.Context) context.Context {
+				return context.WithValue(c, llm.ContextKeyInteractive{}, true)
+			})
 		return jsonResultWithHints(result,
 			fmt.Sprintf("Panel created with %d experts. Analysis started — poll deliberation action:get (deliberation_id: %s) for status, then analyze action:get_result for results.",
 				result.ExpertCount, result.DeliberationID))
@@ -747,7 +749,9 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		}
 		s.audit(ctx, "analyze:follow_up", result.DeliberationID, "")
 		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost,
-			func(c context.Context) context.Context { return context.WithValue(c, llm.ContextKeyInteractive{}, true) })
+			func(c context.Context) context.Context {
+				return context.WithValue(c, llm.ContextKeyInteractive{}, true)
+			})
 		return jsonResultWithHints(result,
 			fmt.Sprintf("Follow-up round started with %d experts. Poll deliberation action:get for status, then analyze action:get_result.",
 				result.ExpertCount))

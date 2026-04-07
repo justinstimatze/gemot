@@ -13,6 +13,7 @@ SIZE CONSTRAINTS:
 - Maximum {{MAX_SUBTOPICS}} subtopics per topic
 - Merge closely related areas into a single topic rather than creating separate ones
 - Only create subtopics for genuinely distinct dimensions within a topic
+{{PRIOR_TAXONOMY}}
 
 DESCRIPTION LENGTH REQUIREMENTS:
 - Topic names: Keep very concise (2-5 words)
@@ -104,6 +105,10 @@ For each participant who made claims in this subtopic, categorize them as:
 - "no_clear_position": Mentioned the topic but didn't take a clear stance on this specific crux
 
 Please explain your reasoning and assign participants into the three groups. Make the cruxClaim as precise and unique as possible to the given subtopic and claims, and pick a cruxClaim that best balances the "agree" and "disagree" sides, with close to the same number of participants on each side.
+
+CRITICAL VALIDITY REQUIREMENTS:
+- The cruxClaim MUST have at least one participant who would agree AND at least one who would disagree based on their actual statements. If you cannot identify clear participants on both sides, do NOT generate the crux — return an empty agree or disagree list and explain why no balanced crux was possible for this subtopic.
+- Avoid absolute deterministic language in the cruxClaim. Use conditional framing ("tends to", "creates strong pressure toward", "significantly increases the risk of") rather than absolutes ("inevitably", "will always", "makes it impossible", "systematically overrides"). The crux should be debatable, not a straw man.
 
 IMPORTANT: Format requirements for your response:
 1. In the agree/disagree/no_clear_position lists, use ONLY the exact numeric IDs from the input (like 0, 1, 2)
