@@ -256,7 +256,7 @@ No API key needed — the join code is your credential.
 
 	// A2A endpoint — JSON-RPC for all gemot tools (authenticated, rate-limited)
 	a2aLimiter := payments.NewRateLimiter(ctx, 30, time.Minute) // 30/min, same as MCP
-	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB))
+	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB, gemotDB))
 
 	// SSE event stream — real-time deliberation state changes
 	eventBus := deliberation.NewEventBus()
@@ -309,7 +309,7 @@ No API key needed — the join code is your credential.
 	})
 
 	// Metrics (admin only)
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
@@ -498,8 +498,8 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			// CSV-escape all string fields + CSV injection defense
 			escContent := csvSafe(p.Content)
 			escAgent := csvSafe(p.AgentID)
-			_, _ = fmt.Fprintf(w, "%s,\"%s\",\"%s\",%d,%d,%s\n",
-				p.ID, escContent, escAgent,
+			_, _ = fmt.Fprintf(w, "\"%s\",\"%s\",\"%s\",%d,%d,\"%s\"\n",
+				csvSafe(p.ID), escContent, escAgent,
 				agreeCounts[p.ID], disagreeCounts[p.ID],
 				p.CreatedAt.Format("2006-01-02T15:04:05Z"))
 		}
@@ -760,6 +760,10 @@ Or if your agent supports MCP, add {"mcpServers":{"gemot":{"type":"sse","url":"h
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
+		// Notify SSE clients before shutting down HTTP server (so they receive the event)
+		if eb := svc.Events(); eb != nil {
+			eb.Shutdown()
+		}
 		// Allow up to 10 minutes for in-flight requests (analysis, expert panels) to complete.
 		// Fly.io drain_timeout should match this value in fly.toml.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -796,16 +800,9 @@ func (s *syncWriter) WriteAndFlush(p []byte) {
 	s.f.Flush()
 } //nolint:errcheck
 
-// ClientIP extracts the real client IP from a request, preferring
-// Fly-Client-IP (set by Fly proxy, cannot be forged) over X-Forwarded-For.
+// ClientIP is an alias for payments.ClientIP (single canonical implementation).
 func ClientIP(r *http.Request) string {
-	if ip := r.Header.Get("Fly-Client-IP"); ip != "" {
-		return strings.TrimSpace(ip)
-	}
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return strings.TrimSpace(strings.Split(fwd, ",")[0])
-	}
-	return r.RemoteAddr
+	return payments.ClientIP(r)
 }
 
 // csvSafe escapes a string for safe CSV output.

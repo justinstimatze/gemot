@@ -50,6 +50,7 @@ type PositionStore interface {
 	GetPositions(ctx context.Context, deliberationID string, round *int) ([]Position, error)
 	GetPositionByID(ctx context.Context, id string) (*Position, error)
 	CountPositions(ctx context.Context, deliberationID string) (int, error)
+	CheckParticipantCap(ctx context.Context, deliberationID, agentID string, maxParticipants int) (bool, bool, error)
 	PublishPosition(ctx context.Context, id string) error
 	WithdrawPositions(ctx context.Context, deliberationID, agentID string) error
 }
@@ -563,6 +564,9 @@ func (s *Service) DeleteDeliberation(deliberationID, callerKeyID string, isAdmin
 	if err := s.store.DeleteDeliberation(context.TODO(), deliberationID); err != nil {
 		return err
 	}
+	s.resolutionMu.Lock()
+	delete(s.resolutionLocks, deliberationID)
+	s.resolutionMu.Unlock()
 	s.audit("deliberation:delete", deliberationID, "")
 	return nil
 }
@@ -656,26 +660,11 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 		return nil, fmt.Errorf("deliberation has reached the maximum of %d positions", maxPositions)
 	}
 
-	// Enforce max_participants cap (locked to prevent race)
+	// Enforce max_participants cap (single query, no position loading)
 	if d.MaxParticipants > 0 {
-		if err := func() error {
-			mu := s.resolutionLock(deliberationID)
-			mu.Lock()
-			defer mu.Unlock()
-			positions, err := s.store.GetPositions(context.TODO(), deliberationID, nil)
-			if err != nil {
-				return nil
-			}
-			uniqueAgents := map[string]bool{}
-			for _, p := range positions {
-				uniqueAgents[p.AgentID] = true
-			}
-			if !uniqueAgents[agentID] && len(uniqueAgents) >= d.MaxParticipants {
-				return fmt.Errorf("deliberation has reached the maximum of %d participants", d.MaxParticipants)
-			}
-			return nil
-		}(); err != nil {
-			return nil, err
+		capped, alreadyIn, err := s.store.CheckParticipantCap(context.TODO(), deliberationID, agentID, d.MaxParticipants)
+		if err == nil && capped && !alreadyIn {
+			return nil, fmt.Errorf("deliberation has reached the maximum of %d participants", d.MaxParticipants)
 		}
 	}
 
@@ -788,29 +777,7 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 		}
 	}
 
-	// Re-read deliberation inside the lock so resolution sees the latest state.
-	d, _ = s.store.GetDeliberation(context.TODO(), deliberationID)
-
-	// Recalculate resolution after every vote.
-	// Resolution is informational, not a status change — deliberation stays "open"
-	// so analysis and further voting can continue.
-	if resolution := s.checkResolution(d); resolution != nil {
-		if err := s.store.SaveResolution(context.TODO(), deliberationID, resolution); err != nil {
-			slog.Error("resolution save failed", "deliberation_id", deliberationID, "error", err)
-		} else {
-			s.emit("resolved", deliberationID, resolution.AgentID, resolution.PositionID)
-			slog.Info("deliberation resolved",
-				"deliberation_id", deliberationID,
-				"position_id", resolution.PositionID,
-				"approval_pct", int(resolution.Approval*100),
-				"strategy", resolution.Strategy)
-		}
-	} else {
-		// Clear stale resolution if votes changed and threshold no longer met
-		if err := s.store.SaveResolution(context.TODO(), deliberationID, nil); err != nil {
-			slog.Error("clear resolution failed", "deliberation_id", deliberationID, "error", err)
-		}
-	}
+	// Resolution deferred to Analyze() — recalculated after analysis, not per-vote.
 	return nil
 }
 
@@ -1134,6 +1101,16 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	}
 
 	s.emit("analysis_complete", deliberationID, "", fmt.Sprintf("round_%d", d.Round))
+
+	// Recalculate resolution after analysis (deferred from Vote for performance).
+	if updated, _ := s.store.GetDeliberation(ctx, deliberationID); updated != nil {
+		if resolution := s.checkResolution(updated); resolution != nil {
+			_ = s.store.SaveResolution(ctx, deliberationID, resolution)
+		} else {
+			_ = s.store.SaveResolution(ctx, deliberationID, nil)
+		}
+	}
+
 	return result, nil
 }
 

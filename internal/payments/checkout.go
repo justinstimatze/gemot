@@ -180,7 +180,7 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 				}
 
 				// Try to add to existing key, or create new one
-				key, balance, err := store.AddCreditsByEmail(email, credits)
+				key, balance, err := store.AddCreditsByEmail(email, credits, sess.ID)
 				if err != nil {
 					// No existing key — create one
 					key, err = store.GenerateKey(email, customerID, sess.ID, credits)

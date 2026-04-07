@@ -15,6 +15,7 @@ import (
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
+	"github.com/justinstimatze/gemot/internal/store"
 )
 
 // sanitizeError maps known internal errors to user-friendly messages.
@@ -66,7 +67,7 @@ type AuditStore interface {
 	GetAuditLog(deliberationID string, limit int) ([]map[string]string, error)
 }
 
-func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter, auditLog AuditStore) http.HandlerFunc {
+func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter, auditLog AuditStore, jobDB *store.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST required", http.StatusMethodNotAllowed)
@@ -547,7 +548,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				RunAnalysisAsync(svc, nil, creditStore, deliberationID, str(s, "model"), keyID, creditCost)
+				RunAnalysisAsync(svc, jobDB, creditStore, deliberationID, str(s, "model"), keyID, creditCost)
 				writeA2AResult(w, req.ID, map[string]string{
 					"status":          "analysis started",
 					"deliberation_id": deliberationID,
@@ -639,7 +640,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				RunAnalysisAsync(svc, nil, creditStore, result.DeliberationID, result.Model, keyID, creditCost)
+				RunAnalysisAsync(svc, jobDB, creditStore, result.DeliberationID, result.Model, keyID, creditCost)
 				writeA2AResult(w, req.ID, result)
 
 			case "follow_up":
@@ -657,7 +658,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				RunAnalysisAsync(svc, nil, creditStore, result.DeliberationID, result.Model, keyID, creditCost)
+				RunAnalysisAsync(svc, jobDB, creditStore, result.DeliberationID, result.Model, keyID, creditCost)
 				writeA2AResult(w, req.ID, result)
 
 			default:

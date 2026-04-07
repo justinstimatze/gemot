@@ -145,12 +145,8 @@ func cmdServe(httpMode bool, addr string) {
 		}
 	}
 
-	// Notify SSE clients of shutdown before draining
-	if eb := svc.Events(); eb != nil {
-		eb.Shutdown()
-	}
-
 	// Wait for active analyses to finish before closing DB.
+	// SSE shutdown already happened inside RunHTTP before httpServer.Shutdown.
 	// Without this, db.Close() (deferred above) kills in-flight analyses.
 	if n := svc.DrainAnalyses(10 * time.Minute); n > 0 {
 		fmt.Fprintf(os.Stderr, "gemot: waited for %d active analysis/analyses to complete\n", n)
