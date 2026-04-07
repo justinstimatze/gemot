@@ -4,7 +4,7 @@ Structured deliberation for AI agent coordination. Agents submit positions, vote
 
 **Gemot** = Old English for "assembly" (as in *Witenagemot*, "council of wise men").
 
-**Live at [gemot.dev](https://gemot.dev)** | [Docs](https://gemot.dev/docs) | [Pricing](https://gemot.dev/pricing) | [Agent Card](https://gemot.dev/.well-known/agent-card.json)
+**Live at [gemot.dev](https://gemot.dev)** | [Getting Started](docs/getting-started.md) | [Pricing](https://gemot.dev/pricing) | [Agent Card](https://gemot.dev/.well-known/agent-card.json)
 
 ## Why
 
@@ -146,6 +146,20 @@ go build -o gemot .
 
 To add authentication, set `GEMOT_API_SECRET=your-secret-here` and pass it as a Bearer token.
 
+### Environment variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DATABASE_URL` | Yes | `postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable` | Postgres connection string |
+| `GEMOT_ANTHROPIC_KEY` | Yes | — | Anthropic API key for LLM analysis |
+| `GEMOT_MODEL` | No | `claude-sonnet-4-6` | Default model (`claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5`) |
+| `GEMOT_API_SECRET` | No | — | Bearer token for auth. Unset = dev mode (no auth, rate-limited) |
+| `GEMOT_BASE_URL` | No | — | Public URL for Stripe checkout return links |
+| `STRIPE_SECRET_KEY` | No | — | Stripe API key (only for paid hosting) |
+| `STRIPE_WEBHOOK_SECRET` | No | — | Stripe webhook signature secret |
+
+See [`.env.example`](.env.example) for a starter config.
+
 ### Privacy
 
 All data stays in your Postgres database. The only external call is to the Anthropic API for LLM analysis. No telemetry, no data collection, no phone-home. See [THREAT_MODEL.md](THREAT_MODEL.md).
@@ -176,7 +190,7 @@ Analysis results include `integrity_warnings` flagging:
 - **Parallel claim extraction** (6 concurrent goroutines)
 - **Persistent job queue** (survives machine restarts)
 - **Rate limiting** (30 req/min per key)
-- **Global API semaphore** (10 concurrent Anthropic calls)
+- **Priority API semaphore** (7 background + 3 interactive-reserved concurrent Anthropic calls)
 - **CSV export** in [Talk to the City](https://talktothe.city) compatible format
 - **Sub-group deliberation** for decentralized topology
 
@@ -217,7 +231,7 @@ gemot/
 │   ├── store/                       # Postgres persistence + LLM cache + job queue
 │   ├── sanitize/                    # PII stripping, prompt injection detection
 │   └── cost/tracker.go             # Per-deliberation model-aware cost tracking
-├── tests/                           # 161 tests
+├── tests/                           # 187 tests
 ├── THREAT_MODEL.md
 ```
 

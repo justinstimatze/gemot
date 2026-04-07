@@ -87,7 +87,7 @@ A malicious agent submits positions carefully crafted to appear as consensus (mo
 | Topic-level crux fallback | ✅ Implemented | `internal/analysis/text.go` |
 | Consistent consensus thresholds (50%) | ✅ Implemented | `internal/analysis/text.go`, `votes.go` |
 | Stderr not stdout for error logging | ✅ Implemented | `internal/deliberation/service.go` |
-| SQLite single-conn + busy timeout | ✅ Implemented | `internal/store/store.go` |
+| Postgres connection pooling + limits | ✅ Implemented | `internal/store/store.go` |
 
 ## Planned Defenses (Pre-Open-Federation)
 

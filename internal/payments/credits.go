@@ -72,10 +72,17 @@ func (s *CreditStore) AddCreditsByEmail(email string, amount int, sessionID ...s
 
 	var balance int
 	if len(sessionID) > 0 && sessionID[0] != "" {
+		// Idempotency: only credit if this session hasn't already been applied.
+		// The WHERE clause rejects the UPDATE if stripe_session_id already matches,
+		// preventing double-crediting from duplicate webhook deliveries.
 		err = s.db.QueryRow(
-			`UPDATE api_keys SET credits_remaining = credits_remaining + $1, stripe_session_id = $3 WHERE key = $2 RETURNING credits_remaining`,
+			`UPDATE api_keys SET credits_remaining = credits_remaining + $1, stripe_session_id = $3 WHERE key = $2 AND (stripe_session_id IS DISTINCT FROM $3) RETURNING credits_remaining`,
 			amount, key, sessionID[0],
 		).Scan(&balance)
+		if err != nil {
+			return key, 0, fmt.Errorf("credits already applied for session %s (idempotency check)", sessionID[0])
+		}
+		return key, balance, nil
 	} else {
 		err = s.db.QueryRow(
 			`UPDATE api_keys SET credits_remaining = credits_remaining + $1 WHERE key = $2 RETURNING credits_remaining`,
