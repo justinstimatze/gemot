@@ -270,6 +270,77 @@ func findAllClaimsForSpeaker(data *ReportData, speakerName string) []string {
 	return findClaimsForSpeaker(data, speakerName, "", "")
 }
 
+// claimsForSpeakerBySubtopic returns a map of subtopicTitle -> claim titles
+// for a speaker, preserving the structural context of where each claim appears.
+func claimsForSpeakerBySubtopic(data *ReportData, speakerName string) map[string][]string {
+	sourceIDs := map[string]bool{}
+	for _, s := range data.Sources {
+		if strings.EqualFold(s.Interview, speakerName) {
+			sourceIDs[s.ID] = true
+		}
+	}
+	result := map[string][]string{}
+	for _, topic := range data.Topics {
+		for _, sub := range topic.Subtopics {
+			for _, claim := range sub.Claims {
+				if claimHasSpeaker(claim, sourceIDs) {
+					key := topic.Title + " > " + sub.Title
+					result[key] = append(result[key], claim.Title)
+				}
+			}
+		}
+	}
+	return result
+}
+
+// speakerSubtopicSet returns the set of subtopics a speaker has claims in.
+func speakerSubtopicSet(data *ReportData, speakerName string) map[string]bool {
+	bySubtopic := claimsForSpeakerBySubtopic(data, speakerName)
+	set := map[string]bool{}
+	for k := range bySubtopic {
+		set[k] = true
+	}
+	return set
+}
+
+// sharedClaimCount returns how many claim titles two speakers share (attributed to both).
+func sharedClaimCount(data *ReportData, speaker1, speaker2 string) int {
+	claims1 := map[string]bool{}
+	for _, c := range findAllClaimsForSpeaker(data, speaker1) {
+		claims1[c] = true
+	}
+	shared := 0
+	for _, c := range findAllClaimsForSpeaker(data, speaker2) {
+		if claims1[c] {
+			shared++
+		}
+	}
+	return shared
+}
+
+// jaccardSubtopics computes Jaccard similarity on the subtopic sets of two speakers.
+func jaccardSubtopics(set1, set2 map[string]bool) float64 {
+	if len(set1) == 0 && len(set2) == 0 {
+		return 0
+	}
+	intersection := 0
+	for k := range set1 {
+		if set2[k] {
+			intersection++
+		}
+	}
+	union := len(set1)
+	for k := range set2 {
+		if !set1[k] {
+			union++
+		}
+	}
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
 func claimHasSpeaker(c Claim, sourceIDs map[string]bool) bool {
 	for _, q := range c.Quotes {
 		if sourceIDs[q.Reference.SourceID] {
@@ -323,110 +394,11 @@ func distinctiveClaims(data *ReportData, speakerNames []string, allClusters []cl
 	return myClaims[:maxN]
 }
 
-// --- Cluster derivation ---
+// --- Cluster type ---
 
 type cluster struct {
-	ID         int
-	Members    []string // speaker refs ("id:name")
-	Pattern    []string // voting pattern across cruxes
-	AgreeOn    []int
-	DisagreeOn []int
-}
-
-func deriveClusters(matrix *SpeakerCruxMatrix) []cluster {
-	n := len(matrix.Speakers)
-	if n == 0 {
-		return nil
-	}
-
-	patterns := make([][]string, n)
-	for i := range n {
-		if i < len(matrix.Matrix) {
-			patterns[i] = matrix.Matrix[i]
-		}
-	}
-
-	assigned := make([]int, n)
-	for i := range assigned {
-		assigned[i] = -1
-	}
-
-	clusterID := 0
-	for i := range n {
-		if assigned[i] >= 0 {
-			continue
-		}
-		assigned[i] = clusterID
-		for j := i + 1; j < n; j++ {
-			if assigned[j] >= 0 {
-				continue
-			}
-			if patternSimilarity(patterns[i], patterns[j]) >= 0.7 {
-				assigned[j] = clusterID
-			}
-		}
-		clusterID++
-	}
-
-	clusterMap := map[int]*cluster{}
-	for i, cid := range assigned {
-		if _, ok := clusterMap[cid]; !ok {
-			clusterMap[cid] = &cluster{ID: cid}
-		}
-		clusterMap[cid].Members = append(clusterMap[cid].Members, matrix.Speakers[i])
-		if clusterMap[cid].Pattern == nil && i < len(patterns) {
-			clusterMap[cid].Pattern = patterns[i]
-		}
-	}
-
-	for _, c := range clusterMap {
-		for j, pos := range c.Pattern {
-			switch pos {
-			case "agree":
-				c.AgreeOn = append(c.AgreeOn, j)
-			case "disagree":
-				c.DisagreeOn = append(c.DisagreeOn, j)
-			}
-		}
-	}
-
-	var clusters []cluster
-	for _, c := range clusterMap {
-		clusters = append(clusters, *c)
-	}
-	sort.Slice(clusters, func(i, j int) bool {
-		return len(clusters[i].Members) > len(clusters[j].Members)
-	})
-	return clusters
-}
-
-func patternSimilarity(a, b []string) float64 {
-	if len(a) == 0 || len(b) == 0 {
-		return 0
-	}
-	n := min(len(a), len(b))
-	matches := 0
-	for i := range n {
-		if a[i] == b[i] {
-			matches++
-		}
-	}
-	return float64(matches) / float64(n)
-}
-
-// speakerStanceOnCrux returns "agree", "disagree", or "no_position" for a speaker on a crux
-func speakerStanceOnCrux(matrix *SpeakerCruxMatrix, speakerName string, cruxIdx int) string {
-	if matrix == nil {
-		return "no_position"
-	}
-	for i, s := range matrix.Speakers {
-		if parseSpeakerID(s) == speakerName {
-			if i < len(matrix.Matrix) && cruxIdx < len(matrix.Matrix[i]) {
-				return matrix.Matrix[i][cruxIdx]
-			}
-		}
-	}
-	return "no_position"
+	ID      int
+	Members []string // speaker names
 }
 
 func getMCPConfig() (string, string) {
@@ -482,8 +454,6 @@ func main() {
 	spotCheck := flag.Bool("spot-check", false, "LLM-verify 15% of stance assignments against source quotes")
 	replicate := flag.Int("replicate", 0, "Run N replication runs to test pipeline stability")
 	coverageAudit := flag.Bool("coverage-audit", false, "Detect missing perspectives in unchallenged positions")
-	verifyStances := flag.Bool("verify-stances", false, "Verify stances against source quotes before pipeline")
-	verifyThreshold := flag.Int("verify-threshold", 2, "Stances scoring at or below this (1-5) are downgraded (default 2)")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -524,8 +494,6 @@ func main() {
 			SpotCheck:     *spotCheck,
 			ReplicateN:    *replicate,
 			CoverageAudit:  *coverageAudit,
-			VerifyStances:   *verifyStances,
-			VerifyThreshold: *verifyThreshold,
 		}
 		runStructuralMode(&data, cfg)
 	default:
@@ -638,13 +606,6 @@ func runSpeakerMode(data *ReportData, mcpURL, tmplFlag string, threshold float64
 func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	totalClaims := countClaims(data)
 
-	// Pre-pipeline stance verification: check disagree stances against source quotes
-	var vfResult *verifyResult
-	if cfg.VerifyStances {
-		fmt.Fprintf(os.Stderr, "\n=== Stance Verification ===\n")
-		vfResult = verifyStances(data, cfg.VerifyThreshold)
-	}
-
 	setup := buildR1Setup(data, cfg.Threshold, "t3c-")
 	clusters := setup.clusters
 	controversialCruxes := setup.controversialCruxes
@@ -745,7 +706,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	}
 
 	// Seed votes
-	voteCount := seedStructuralVotes(session, data, r1Agents, clusters, topicCruxes, delibID)
+	voteCount := seedClaimVotes(session, data, r1Agents, delibID)
 	fmt.Fprintf(os.Stderr, "  %d votes seeded\n", voteCount)
 
 	// Trigger analysis
@@ -1042,7 +1003,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 			R1Compromise: r1Compromise, R2Compromise: r2Compromise, R3Compromise: r3Compromise,
 			R1Agents: r1Agents, R2Agents: r2Agents, R3Agents: r3Agents,
 			Template: tmpl, DelibID: delibID, JoinCode: joinCode,
-			NullControl: ncResult, SpotCheck: scResult, Replication: repResult, Coverage: covResult, Verify: vfResult,
+			NullControl: ncResult, SpotCheck: scResult, Replication: repResult, Coverage: covResult,
 		}
 		md := generateReport(ri)
 		if err := os.WriteFile(cfg.ReportPath, []byte(md), 0o644); err != nil {
@@ -1053,20 +1014,20 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	}
 
 	// Persist validation results on R1 analysis via update_result
-	if r1Result != "" && (vfResult != nil || ncResult != nil || repResult != nil || covResult != nil) {
+	if r1Result != "" && (ncResult != nil || repResult != nil || covResult != nil) {
 		fmt.Fprintf(os.Stderr, "\n=== Store Validation ===\n")
 		storeSession, err := connect(cfg.MCPURL, secret)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  store-validation: connect failed: %v\n", err)
 		} else {
-			storeValidation(storeSession, delibID, r1Result, vfResult, ncResult, repResult, covResult)
+			storeValidation(storeSession, delibID, r1Result, ncResult, repResult, covResult)
 			storeSession.Close()
 		}
 	}
 }
 
 // storeValidation persists validation results on the R1 analysis via update_result.
-func storeValidation(session *sdkmcp.ClientSession, delibID, r1JSON string, vf *verifyResult, nc *nullControlResult, rep *replicationResult, cov *coverageResult) {
+func storeValidation(session *sdkmcp.ClientSession, delibID, r1JSON string, nc *nullControlResult, rep *replicationResult, cov *coverageResult) {
 	// Unmarshal raw result into a map so we can add fields without importing internal types
 	var result map[string]any
 	if err := json.Unmarshal([]byte(r1JSON), &result); err != nil {
@@ -1074,9 +1035,6 @@ func storeValidation(session *sdkmcp.ClientSession, delibID, r1JSON string, vf *
 		return
 	}
 
-	if vf != nil {
-		result["verification"] = vf
-	}
 	if nc != nil {
 		result["null_control"] = nc
 	}
@@ -1093,10 +1051,6 @@ func storeValidation(session *sdkmcp.ClientSession, delibID, r1JSON string, vf *
 		return
 	}
 
-	// Debug: show score_dist before sending
-	if vf != nil {
-		fmt.Fprintf(os.Stderr, "  store-validation: score_dist=%v\n", vf.ScoreDist)
-	}
 	fmt.Fprintf(os.Stderr, "  store-validation: sending update_result (%d bytes)...\n", len(updated))
 	resp := call(session, "analyze", map[string]any{
 		"action": "update_result", "deliberation_id": delibID,
@@ -1122,17 +1076,14 @@ func getPositions(session *sdkmcp.ClientSession, delibID string) []positionRef {
 	return positions
 }
 
-func seedStructuralVotes(session *sdkmcp.ClientSession, data *ReportData, agents []agentPlan, clusters []cluster, topicCruxes map[string][]SubtopicCrux, delibID string) int {
+// seedClaimVotes seeds votes based on claim overlap, not matrix stances.
+// Encodes engagement and known agreement. Disagreement discovery is the analysis engine's job.
+func seedClaimVotes(session *sdkmcp.ClientSession, data *ReportData, agents []agentPlan, delibID string) int {
 	positions := getPositions(session, delibID)
 
-	// Build agent lookup
 	agentByID := map[string]*agentPlan{}
 	for i := range agents {
 		agentByID[agents[i].ID] = &agents[i]
-	}
-	posIDByAgent := map[string]string{}
-	for _, p := range positions {
-		posIDByAgent[p.AgentID] = p.ID
 	}
 
 	voteCount := 0
@@ -1140,16 +1091,16 @@ func seedStructuralVotes(session *sdkmcp.ClientSession, data *ReportData, agents
 		voter := &agents[vi]
 		for _, pos := range positions {
 			if pos.AgentID == voter.ID {
-				continue // don't self-vote
+				continue
 			}
 			target := agentByID[pos.AgentID]
 			if target == nil {
 				continue
 			}
 
-			vote := deriveVote(data, voter, target, clusters, topicCruxes)
+			vote := deriveClaimVote(data, voter, target)
 			if vote == 99 {
-				continue // skip, don't submit a vote
+				continue
 			}
 
 			call(session, "participate", map[string]any{
@@ -1162,92 +1113,94 @@ func seedStructuralVotes(session *sdkmcp.ClientSession, data *ReportData, agents
 	return voteCount
 }
 
-func deriveVote(data *ReportData, voter, target *agentPlan, clusters []cluster, topicCruxes map[string][]SubtopicCrux) int {
-	// Speaker/steelman → speaker/steelman: pattern similarity from T3C matrix
+func deriveClaimVote(data *ReportData, voter, target *agentPlan) int {
+	// Speaker/steelman -> speaker/steelman: claim overlap
 	if (voter.Kind == "speaker" || voter.Kind == "steelman") && (target.Kind == "speaker" || target.Kind == "steelman") {
-		if voter.Cluster != nil && target.Cluster != nil {
-			sim := patternSimilarity(voter.Cluster.Pattern, target.Cluster.Pattern)
-			if sim >= 0.6 {
-				return 1
-			}
-			if sim <= 0.4 {
-				return -1
-			}
-			return 0
+		if voter.Cluster == nil || target.Cluster == nil {
+			return 99
 		}
-		return 99 // skip
+		// Count shared claims between the two clusters' members
+		shared := 0
+		voterSubtopics := map[string]bool{}
+		targetSubtopics := map[string]bool{}
+		for _, vm := range voter.Cluster.Members {
+			for _, tm := range target.Cluster.Members {
+				shared += sharedClaimCount(data, vm, tm)
+			}
+			for k := range speakerSubtopicSet(data, vm) {
+				voterSubtopics[k] = true
+			}
+		}
+		for _, tm := range target.Cluster.Members {
+			for k := range speakerSubtopicSet(data, tm) {
+				targetSubtopics[k] = true
+			}
+		}
+
+		if shared >= 2 {
+			return 1 // clear agreement on specific points
+		}
+		// Check subtopic overlap (engaging with same issues)
+		overlap := 0
+		for k := range voterSubtopics {
+			if targetSubtopics[k] {
+				overlap++
+			}
+		}
+		if overlap > 0 {
+			return 0 // same topics, stance unknown
+		}
+		return 99 // no basis for comparison, skip
 	}
 
-	// Speaker/steelman → probe: does this speaker engage with the probe's topic cruxes?
+	// Speaker/steelman -> probe: does speaker have claims in probe's topic?
 	if (voter.Kind == "speaker" || voter.Kind == "steelman") && target.Kind == "probe" {
-		cruxes := topicCruxes[target.Topic]
-		if len(cruxes) == 0 || voter.Cluster == nil || data.AddOns.SpeakerCruxMatrix == nil {
+		if voter.Cluster == nil {
 			return 0
 		}
-		agrees, disagrees, noPos := 0, 0, 0
-		representative := parseSpeakerID(voter.Cluster.Members[0])
-		for _, c := range cruxes {
-			label := cruxLabel(c.Topic, c.Subtopic)
-			for idx, l := range data.AddOns.SpeakerCruxMatrix.CruxLabels {
-				if normLabel(l) == label {
-					stance := speakerStanceOnCrux(data.AddOns.SpeakerCruxMatrix, representative, idx)
-					if stance == "agree" {
-						agrees++
-					} else if stance == "disagree" {
-						disagrees++
-					} else {
-						noPos++
-					}
-					break
-				}
-			}
+		totalClaims := 0
+		for _, m := range voter.Cluster.Members {
+			totalClaims += len(findClaimsForSpeaker(data, m, target.Topic, ""))
 		}
-		// If mostly no_position on this topic's cruxes, vote 0 (not engaged)
-		if noPos > agrees+disagrees {
-			return 0
-		}
-		if agrees > disagrees {
+		if totalClaims >= 3 {
 			return 1
 		}
-		if disagrees > agrees {
+		if totalClaims == 0 {
+			return 99 // no engagement, skip
+		}
+		return 0
+	}
+
+	// Probe -> speaker/steelman: same but reversed
+	if voter.Kind == "probe" && (target.Kind == "speaker" || target.Kind == "steelman") {
+		if target.Cluster == nil {
+			return 0
+		}
+		totalClaims := 0
+		for _, m := range target.Cluster.Members {
+			totalClaims += len(findClaimsForSpeaker(data, m, voter.Topic, ""))
+		}
+		if totalClaims >= 3 {
+			return 1
+		}
+		if totalClaims == 0 {
 			return -1
 		}
 		return 0
 	}
 
-	// Probe → speaker/steelman: does the speaker engage with this probe's topic?
-	if voter.Kind == "probe" && (target.Kind == "speaker" || target.Kind == "steelman") {
-		if target.Cluster == nil {
-			return 0
-		}
-		// Count claims in topic — more engagement = stronger vote
-		totalClaims := 0
-		for _, m := range target.Cluster.Members {
-			claims := findClaimsForSpeaker(data, parseSpeakerID(m), voter.Topic, "")
-			totalClaims += len(claims)
-		}
-		if totalClaims >= 3 {
-			return 1 // strong engagement
-		}
-		if totalClaims == 0 {
-			return -1 // no engagement — disagree with relevance
-		}
-		return 0 // weak engagement
-	}
-
-	// Probe → probe: diversify by topic relationship to avoid identical patterns
+	// Probe -> probe: diversify by topic relationship
 	if voter.Kind == "probe" && target.Kind == "probe" {
 		if voter.Topic == target.Topic {
 			return 1
 		}
-		// Use alphabetical ordering for consistent asymmetric votes
 		if voter.Topic < target.Topic {
 			return 1
 		}
 		return -1
 	}
 
-	return 0 // default: pass
+	return 0
 }
 
 func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, r1Analysis *analysisResult, delibID string) int {
