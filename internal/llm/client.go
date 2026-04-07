@@ -49,9 +49,37 @@ func NewClient(apiKey, model string) *Client {
 	}
 }
 
-// apiSemaphore limits concurrent Anthropic API calls across all analyses.
-// Prevents rate limit hits when multiple deliberations analyze simultaneously.
-var apiSemaphore = make(chan struct{}, 10)
+// API semaphores: background (batch/experiment) and interactive (user-facing panels).
+// Background gets 7 slots; interactive gets 3 reserved + can use background slots.
+// Total concurrent calls stays at 10; interactive work won't starve behind batch jobs.
+var bgSemaphore = make(chan struct{}, 7)
+var interactiveSemaphore = make(chan struct{}, 3)
+
+// ContextKeyInteractive marks a request as user-facing (expert panel, sandbox).
+type ContextKeyInteractive struct{}
+
+// acquireSemaphore blocks until a slot is available. Interactive callers try their
+// reserved pool first, then fall back to the background pool. Background callers
+// only use the background pool.
+func acquireSemaphore(ctx context.Context) (release func(), err error) {
+	if interactive, _ := ctx.Value(ContextKeyInteractive{}).(bool); interactive {
+		// Try interactive pool first (non-blocking), then background pool
+		select {
+		case interactiveSemaphore <- struct{}{}:
+			return func() { <-interactiveSemaphore }, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			// Interactive pool full, fall back to background
+		}
+	}
+	select {
+	case bgSemaphore <- struct{}{}:
+		return func() { <-bgSemaphore }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
 
 // isRetryable returns true for errors that should be retried with backoff.
 func isRetryable(err error) bool {
@@ -126,15 +154,14 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		attempts = attempt
 
-		// Acquire API slot (blocks if 10 concurrent calls are in flight).
-		// Use a func scope so defer releases even if the API call panics.
+		// Acquire API slot (blocks if all slots are in flight).
+		// Interactive callers get priority via reserved slots.
 		lastErr = func() error {
-			select {
-			case apiSemaphore <- struct{}{}:
-				defer func() { <-apiSemaphore }()
-			case <-ctx.Done():
-				return ctx.Err()
+			release, err := acquireSemaphore(ctx)
+			if err != nil {
+				return err
 			}
+			defer release()
 			resp, lastErr = c.client.Messages.New(ctx, params)
 			return lastErr
 		}()
@@ -201,14 +228,13 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		attempts = attempt
 
-		// Acquire API slot — func scope ensures defer releases even on panic
+		// Acquire API slot — interactive callers get priority via reserved slots
 		lastErr = func() error {
-			select {
-			case apiSemaphore <- struct{}{}:
-				defer func() { <-apiSemaphore }()
-			case <-ctx.Done():
-				return ctx.Err()
+			release, err := acquireSemaphore(ctx)
+			if err != nil {
+				return err
 			}
+			defer release()
 			resp, lastErr = c.client.Messages.New(ctx, params)
 			return lastErr
 		}()
