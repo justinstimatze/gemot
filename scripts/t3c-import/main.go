@@ -640,7 +640,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	var vfResult *verifyResult
 	if cfg.VerifyStances {
 		fmt.Fprintf(os.Stderr, "\n=== Stance Verification ===\n")
-		vfResult = verifyDisagreeStances(data)
+		vfResult = verifyStances(data)
 	}
 
 	setup := buildR1Setup(data, cfg.Threshold, "t3c-")

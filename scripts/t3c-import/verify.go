@@ -10,23 +10,23 @@ import (
 )
 
 type verifyResult struct {
-	Total      int
-	Checked    int
+	Total      int // total stances checked
+	Checked    int // stances where verification was attempted
 	Downgraded int
 	Details    []verifyDetail
 }
 
 type verifyDetail struct {
-	Speaker string
-	Crux    string
-	Reason  string
+	Speaker      string
+	Crux         string
+	OrigStance   string // "agree" or "disagree"
+	Reason       string
 }
 
-// verifyDisagreeStances checks all "disagree" stances in the speaker-crux matrix
-// against source quotes. Ungrounded disagree stances are downgraded to "no_position".
-// Modifies the data in place. Only disagree stances are checked — agree stances
-// are generally well-grounded since the speaker said something supportive.
-func verifyDisagreeStances(data *ReportData) *verifyResult {
+// verifyStances checks agree and disagree stances in the speaker-crux matrix
+// against source quotes. Ungrounded stances are downgraded to "no_position".
+// Modifies the data in place.
+func verifyStances(data *ReportData) *verifyResult {
 	apiKey := getAnthropicKey()
 	if apiKey == "" {
 		fmt.Fprintf(os.Stderr, "  verify-stances: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required\n")
@@ -38,15 +38,18 @@ func verifyDisagreeStances(data *ReportData) *verifyResult {
 	}
 	matrix := data.AddOns.SpeakerCruxMatrix
 
-	// Count disagree stances
+	// Count non-neutral stances
 	total := 0
 	for i := range matrix.Speakers {
 		if i >= len(matrix.Matrix) {
 			continue
 		}
 		for j := range matrix.CruxLabels {
-			if j < len(matrix.Matrix[i]) && matrix.Matrix[i][j] == "disagree" {
-				total++
+			if j < len(matrix.Matrix[i]) {
+				s := matrix.Matrix[i][j]
+				if s == "agree" || s == "disagree" {
+					total++
+				}
 			}
 		}
 	}
@@ -54,7 +57,7 @@ func verifyDisagreeStances(data *ReportData) *verifyResult {
 		return &verifyResult{}
 	}
 
-	fmt.Fprintf(os.Stderr, "  verify-stances: checking %d disagree stances...\n", total)
+	fmt.Fprintf(os.Stderr, "  verify-stances: checking %d stances...\n", total)
 
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 	result := &verifyResult{Total: total}
@@ -67,12 +70,16 @@ func verifyDisagreeStances(data *ReportData) *verifyResult {
 		var quotes []string // lazy-loaded per speaker
 
 		for j, label := range matrix.CruxLabels {
-			if j >= len(matrix.Matrix[i]) || matrix.Matrix[i][j] != "disagree" {
+			if j >= len(matrix.Matrix[i]) {
+				continue
+			}
+			stance := matrix.Matrix[i][j]
+			if stance != "agree" && stance != "disagree" {
 				continue
 			}
 			result.Checked++
 
-			// Lazy-load quotes for this speaker
+			// Lazy-load quotes
 			if quotes == nil {
 				quotes = findAllQuotesForSpeaker(data, speakerName)
 				if len(quotes) > 12 {
@@ -98,44 +105,32 @@ func verifyDisagreeStances(data *ReportData) *verifyResult {
 				matrix.Matrix[i][j] = "no_position"
 				result.Downgraded++
 				result.Details = append(result.Details, verifyDetail{
-					Speaker: speakerName,
-					Crux:    cruxClaim[:min(80, len(cruxClaim))],
-					Reason:  "no source quotes found",
+					Speaker: speakerName, Crux: cruxClaim[:min(80, len(cruxClaim))],
+					OrigStance: stance, Reason: "no source quotes found",
 				})
-				updateSubtopicCrux(data, label, speaker)
-				fmt.Fprintf(os.Stderr, "    ↓ %s: no quotes (downgraded)\n", speakerName)
+				updateSubtopicCrux(data, label, speaker, stance)
+				fmt.Fprintf(os.Stderr, "    ↓ %s: %s not grounded — no quotes\n", speakerName, stance)
 				continue
 			}
 
-			// LLM verification
-			quotesStr := strings.Join(quotes, "\n- ")
-			prompt := fmt.Sprintf(
-				"Speaker: %s\nClaim: \"%s\"\n\nTheir source quotes:\n- %s\n\n"+
-					"T3C classified this speaker as DISAGREE on this claim. "+
-					"Do the quotes provide clear evidence that this speaker opposes or rejects this claim? "+
-					"Answer YES if the quotes show explicit disagreement. Answer NO if the quotes are silent on this topic, "+
-					"show nuanced/partial agreement, or don't clearly oppose the claim.",
-				speakerName, cruxClaim, quotesStr,
-			)
+			// Build stance-specific prompt
+			system, prompt := verifyPrompt(speakerName, cruxClaim, quotes, stance)
 
 			resp, err := callAnthropic(client, anthropic.MessageNewParams{
 				Model:     "claude-haiku-4-5",
 				MaxTokens: 150,
-				System: []anthropic.TextBlockParam{
-					{Text: "You verify whether source quotes support a DISAGREE stance classification. Be strict: absence of agreement is NOT disagreement. The speaker must explicitly oppose or reject the claim for DISAGREE to be justified."},
-				},
+				System:    []anthropic.TextBlockParam{{Text: system}},
 				Messages: []anthropic.MessageParam{
 					anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 				},
 			})
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "    ? %s: verification failed, keeping stance\n", speakerName)
+				fmt.Fprintf(os.Stderr, "    ? %s: verification failed, keeping %s\n", speakerName, stance)
 				continue
 			}
 
 			answer := extractText(resp)
 			if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(answer)), "YES") {
-				// Downgrade to no_position
 				matrix.Matrix[i][j] = "no_position"
 				result.Downgraded++
 
@@ -144,37 +139,74 @@ func verifyDisagreeStances(data *ReportData) *verifyResult {
 					reason = reason[:117] + "..."
 				}
 				result.Details = append(result.Details, verifyDetail{
-					Speaker: speakerName,
-					Crux:    cruxClaim[:min(80, len(cruxClaim))],
-					Reason:  reason,
+					Speaker: speakerName, Crux: cruxClaim[:min(80, len(cruxClaim))],
+					OrigStance: stance, Reason: reason,
 				})
-				updateSubtopicCrux(data, label, speaker)
-				fmt.Fprintf(os.Stderr, "    ↓ %s: disagree not grounded (downgraded)\n", speakerName)
+				updateSubtopicCrux(data, label, speaker, stance)
+				fmt.Fprintf(os.Stderr, "    ↓ %s: %s not grounded (downgraded)\n", speakerName, stance)
 			}
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "  verify-stances: %d/%d disagree stances downgraded to no_position\n", result.Downgraded, result.Checked)
+	fmt.Fprintf(os.Stderr, "  verify-stances: %d/%d stances downgraded to no_position\n", result.Downgraded, result.Checked)
 	return result
 }
 
-// updateSubtopicCrux moves a speaker from Disagree to NoPosition in SubtopicCruxes
-// to keep the two data structures consistent after a matrix downgrade.
-func updateSubtopicCrux(data *ReportData, matrixLabel, speaker string) {
+func verifyPrompt(speaker, cruxClaim string, quotes []string, stance string) (system, prompt string) {
+	quotesStr := strings.Join(quotes, "\n- ")
+
+	if stance == "disagree" {
+		system = "You verify whether source quotes support a DISAGREE stance classification. " +
+			"Be strict: absence of agreement is NOT disagreement. " +
+			"The speaker must explicitly oppose or reject the claim for DISAGREE to be justified."
+		prompt = fmt.Sprintf(
+			"Speaker: %s\nClaim: \"%s\"\n\nTheir source quotes:\n- %s\n\n"+
+				"T3C classified this speaker as DISAGREE on this claim. "+
+				"Do the quotes provide clear evidence that this speaker opposes or rejects this claim? "+
+				"Answer YES if the quotes show explicit disagreement. "+
+				"Answer NO if the quotes are silent, show nuanced/partial agreement, or don't clearly oppose the claim.",
+			speaker, cruxClaim, quotesStr,
+		)
+	} else {
+		system = "You verify whether source quotes support an AGREE stance classification. " +
+			"Be strict: the speaker must express views that clearly align with the claim. " +
+			"Tangential mentions of the topic are NOT agreement."
+		prompt = fmt.Sprintf(
+			"Speaker: %s\nClaim: \"%s\"\n\nTheir source quotes:\n- %s\n\n"+
+				"T3C classified this speaker as AGREE on this claim. "+
+				"Do the quotes provide clear evidence that this speaker supports or endorses this claim? "+
+				"Answer YES if the quotes show explicit agreement. "+
+				"Answer NO if the quotes only tangentially mention the topic, address a different aspect, or don't clearly support the specific claim.",
+			speaker, cruxClaim, quotesStr,
+		)
+	}
+	return
+}
+
+// updateSubtopicCrux moves a speaker from Agree/Disagree to NoPosition in SubtopicCruxes.
+func updateSubtopicCrux(data *ReportData, matrixLabel, speaker, origStance string) {
 	normalizedLabel := normLabel(matrixLabel)
 	for i, c := range data.AddOns.SubtopicCruxes {
 		if cruxLabel(c.Topic, c.Subtopic) != normalizedLabel {
 			continue
 		}
-		// Remove from Disagree
-		var newDisagree []string
-		for _, d := range c.Disagree {
-			if d != speaker {
-				newDisagree = append(newDisagree, d)
+		if origStance == "disagree" {
+			var filtered []string
+			for _, d := range c.Disagree {
+				if d != speaker {
+					filtered = append(filtered, d)
+				}
 			}
+			data.AddOns.SubtopicCruxes[i].Disagree = filtered
+		} else {
+			var filtered []string
+			for _, a := range c.Agree {
+				if a != speaker {
+					filtered = append(filtered, a)
+				}
+			}
+			data.AddOns.SubtopicCruxes[i].Agree = filtered
 		}
-		data.AddOns.SubtopicCruxes[i].Disagree = newDisagree
-		// Add to NoPosition
 		data.AddOns.SubtopicCruxes[i].NoPosition = append(c.NoPosition, speaker)
 		return
 	}
