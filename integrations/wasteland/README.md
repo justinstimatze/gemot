@@ -37,7 +37,7 @@ curl -s https://gemot.dev/a2a -X POST \
   }}'
 ```
 
-See [a2a-example.sh](../integrations/wasteland/a2a-example.sh) for a full dispute flow between a contributor rig and a validator rig.
+See [a2a-example.sh](a2a-example.sh) for a full dispute flow between a contributor rig and a validator rig.
 
 ## What a Dispute Looks Like
 
@@ -75,7 +75,7 @@ Wasteland stamps have `valence` (quality, reliability, creativity), `confidence`
 | `confidence` | Analysis `confidence` | Direct: high → 0.9, medium → 0.7, low → 0.5, refused → 0.0. |
 | `severity` | Max `controversy_score` | Highest crux controversy maps to stamp severity. |
 
-See [stamp-mapping.md](../integrations/wasteland/stamp-mapping.md) for derivation scripts.
+See [stamp-mapping.md](stamp-mapping.md) for derivation scripts.
 
 ## Trust Tiers → Conviction Weights
 
