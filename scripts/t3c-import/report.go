@@ -34,13 +34,18 @@ func isStructuralAgent(id string) bool {
 		strings.Contains(id, "empty-chair")
 }
 
-func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Compromise string, agents []agentPlan, r2Agents []agentPlan, tmpl, delibID, joinCode string, ncResult *nullControlResult, scResult *spotCheckResult, repResult *replicationResult) string {
+func generateReport(data *ReportData, r1JSON, r2JSON, r3JSON string, r1Compromise, r2Compromise, r3Compromise string, agents []agentPlan, r2Agents, r3Agents []agentPlan, tmpl, delibID, joinCode string, ncResult *nullControlResult, scResult *spotCheckResult, repResult *replicationResult) string {
 	var r1 analysisResult
 	json.Unmarshal([]byte(r1JSON), &r1)
 
 	var r2 analysisResult
 	if r2JSON != "" {
 		json.Unmarshal([]byte(r2JSON), &r2)
+	}
+
+	var r3 analysisResult
+	if r3JSON != "" {
+		json.Unmarshal([]byte(r3JSON), &r3)
 	}
 
 	var b strings.Builder
@@ -94,6 +99,7 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 
 	nSpeakerDerived := len(steelmen) + len(speakers)
 	nStructural := len(probes) + len(r2Agents)
+	nRevised := len(r3Agents)
 
 	if len(steelmen) > 0 {
 		b.WriteString("**Clusters** (speakers grouped by ≥70% agreement across crux stances):\n")
@@ -123,7 +129,18 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 		}
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "*Pool composition: %d speaker-derived, %d structural agents*\n\n", nSpeakerDerived, nStructural)
+	if len(r3Agents) > 0 {
+		b.WriteString("**Round 3 Agents** *(revised positions — informed by R2 analysis)*:\n")
+		for _, a := range r3Agents {
+			fmt.Fprintf(&b, "- %s\n", a.Role)
+		}
+		b.WriteString("\n")
+	}
+	if nRevised > 0 {
+		fmt.Fprintf(&b, "*Pool composition: %d speaker-derived, %d structural, %d revised agents*\n\n", nSpeakerDerived, nStructural, nRevised)
+	} else {
+		fmt.Fprintf(&b, "*Pool composition: %d speaker-derived, %d structural agents*\n\n", nSpeakerDerived, nStructural)
+	}
 
 	// Round 1
 	b.WriteString("## Round 1: Initial Analysis\n\n")
@@ -213,10 +230,37 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 		}
 	}
 
+	// Round 3
+	if r3JSON != "" {
+		b.WriteString("## Round 3: Revised Positions\n\n")
+		b.WriteString("*Speaker-derived agents revised their positions after seeing R2 findings. Revisions are LLM-generated, constrained to what the speaker's stated views would plausibly accommodate.*\n\n")
+		writeAnalysis(&b, &r3, r3Compromise, nSpeakerDerived, nStructural+nRevised)
+
+		// Position evolution
+		if len(r3Agents) > 0 {
+			b.WriteString("### Position Evolution\n\n")
+			for _, r3a := range r3Agents {
+				originalID := strings.TrimSuffix(r3a.ID, "-r3")
+				// Find original R1 agent
+				for _, r1a := range agents {
+					if r1a.ID == originalID {
+						fmt.Fprintf(&b, "**%s**:\n", r1a.Role)
+						fmt.Fprintf(&b, "- *R1*: %s\n", firstLine(r1a.Position))
+						fmt.Fprintf(&b, "- *R3*: %s\n\n", firstLine(r3a.Position))
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Discarded cruxes — retained for diagnostic transparency
 	allDiscarded := r1.DiscardedCruxes
 	if r2JSON != "" {
 		allDiscarded = append(allDiscarded, r2.DiscardedCruxes...)
+	}
+	if r3JSON != "" {
+		allDiscarded = append(allDiscarded, r3.DiscardedCruxes...)
 	}
 	if len(allDiscarded) > 0 {
 		b.WriteString("## Discarded Cruxes\n\n")
@@ -246,6 +290,13 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 	}
 	if r2JSON != "" {
 		for _, w := range r2.IntegrityWarnings {
+			if !strings.HasPrefix(w, "DEGENERATE:") {
+				warnings = append(warnings, w)
+			}
+		}
+	}
+	if r3JSON != "" {
+		for _, w := range r3.IntegrityWarnings {
 			if !strings.HasPrefix(w, "DEGENERATE:") {
 				warnings = append(warnings, w)
 			}
@@ -350,6 +401,9 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 	if r2JSON != "" {
 		totalCruxGenerated += len(r2.Cruxes) + len(r2.DiscardedCruxes)
 	}
+	if r3JSON != "" {
+		totalCruxGenerated += len(r3.Cruxes) + len(r3.DiscardedCruxes)
+	}
 	if totalCruxGenerated > 0 {
 		degenerateRate = (len(allDiscarded) * 100) / totalCruxGenerated
 	}
@@ -370,6 +424,13 @@ func generateReport(data *ReportData, r1JSON, r2JSON string, r1Compromise, r2Com
 	}
 	if r2JSON != "" {
 		for _, w := range r2.IntegrityWarnings {
+			if strings.HasPrefix(w, "HALLUCINATION:") {
+				hallucinationCount++
+			}
+		}
+	}
+	if r3JSON != "" {
+		for _, w := range r3.IntegrityWarnings {
 			if strings.HasPrefix(w, "HALLUCINATION:") {
 				hallucinationCount++
 			}
@@ -657,6 +718,29 @@ func prettyAgentList(agents []string) string {
 		names[i] = strings.Join(words, " ")
 	}
 	return strings.Join(names, ", ")
+}
+
+func firstLine(s string) string {
+	// Skip header lines (SPEAKER:, STEELMAN, REVISED POSITION, etc.)
+	for _, line := range strings.Split(s, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		upper := strings.ToUpper(trimmed)
+		if strings.HasPrefix(upper, "SPEAKER:") || strings.HasPrefix(upper, "STEELMAN") ||
+			strings.HasPrefix(upper, "REVISED POSITION") || strings.HasPrefix(upper, "PROBE") {
+			continue
+		}
+		if len(trimmed) > 120 {
+			return trimmed[:117] + "..."
+		}
+		return trimmed
+	}
+	if len(s) > 120 {
+		return s[:117] + "..."
+	}
+	return s
 }
 
 func metricDelta(real, null int) string {
