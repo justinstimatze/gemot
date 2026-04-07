@@ -166,7 +166,7 @@ type VerificationResult struct {
 	Checked    int            `json:"checked"`
 	Downgraded int            `json:"downgraded"`
 	Threshold  int            `json:"threshold"`
-	ScoreDist  [6]int         `json:"score_dist"`
+	ScoreDist  []int          `json:"score_dist"` // index 0 unused, 1-5 count stances at each score
 	Details    []VerifyDetail `json:"details,omitempty"`
 }
 
