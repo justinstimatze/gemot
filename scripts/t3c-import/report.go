@@ -31,7 +31,8 @@ func isStructuralAgent(id string) bool {
 		strings.Contains(id, "adversary") ||
 		strings.Contains(id, "bridge") ||
 		strings.Contains(id, "dissent") ||
-		strings.Contains(id, "empty-chair")
+		strings.Contains(id, "empty-chair") ||
+		strings.Contains(id, "resolution")
 }
 
 func generateReport(ri *reportInput) string {
@@ -100,17 +101,34 @@ func generateReport(ri *reportInput) string {
 	b.WriteString("\n")
 
 	// Stance verification
-	if vfResult != nil && vfResult.Downgraded > 0 {
+	if vfResult != nil && vfResult.Checked > 0 {
 		b.WriteString("## Stance Verification\n\n")
-		fmt.Fprintf(&b, "*%d/%d stances downgraded to no_position after failing source quote verification. ", vfResult.Downgraded, vfResult.Checked)
-		b.WriteString("Stances without clear supporting evidence in source quotes are treated as unknown.*\n\n")
-		for _, d := range vfResult.Details {
-			fmt.Fprintf(&b, "- **%s** (%s) on: %s\n", d.Speaker, d.OrigStance, d.Crux)
-			if d.Reason != "" {
-				fmt.Fprintf(&b, "  - %s\n", d.Reason)
+		kept := vfResult.Checked - vfResult.Downgraded
+		fmt.Fprintf(&b, "*%d stances checked against source quotes (1-5 grounding scale). %d kept (score 4-5), %d downgraded to no_position (score 1-3).*\n\n", vfResult.Checked, kept, vfResult.Downgraded)
+
+		// Score distribution
+		b.WriteString("| Score | Meaning | Count |\n")
+		b.WriteString("|---|---|---|\n")
+		labels := [6]string{"", "No relevant quotes", "Tangentially related", "Interpretation", "Clearly aligned", "Explicitly supported"}
+		for s := 5; s >= 1; s-- {
+			marker := ""
+			if s <= 3 {
+				marker = " *(downgraded)*"
 			}
+			fmt.Fprintf(&b, "| %d | %s | %d%s |\n", s, labels[s], vfResult.ScoreDist[s], marker)
 		}
 		b.WriteString("\n")
+
+		if len(vfResult.Details) > 0 {
+			b.WriteString("**Downgraded stances:**\n")
+			for _, d := range vfResult.Details {
+				fmt.Fprintf(&b, "- **%s** (%s, score %d) on: %s\n", d.Speaker, d.OrigStance, d.Score, d.Crux)
+				if d.Reason != "" {
+					fmt.Fprintf(&b, "  - %s\n", d.Reason)
+				}
+			}
+			b.WriteString("\n")
+		}
 	}
 
 	// Participants
@@ -506,10 +524,11 @@ func generateReport(ri *reportInput) string {
 	fmt.Fprintf(&b, "| Agent hallucinations | %s | %s |\n", correctionLabel, correctionDetail)
 	if vfResult != nil {
 		vfLabel := "pass"
-		vfDetail := fmt.Sprintf("All %d stances verified against source quotes", vfResult.Checked)
+		kept := vfResult.Checked - vfResult.Downgraded
+		vfDetail := fmt.Sprintf("All %d stances scored 4-5 against source quotes", vfResult.Checked)
 		if vfResult.Downgraded > 0 {
 			vfLabel = "cleaned"
-			vfDetail = fmt.Sprintf("%d/%d stances downgraded to no_position", vfResult.Downgraded, vfResult.Checked)
+			vfDetail = fmt.Sprintf("%d/%d kept (score 4-5), %d downgraded (score 1-3)", kept, vfResult.Checked, vfResult.Downgraded)
 		}
 		fmt.Fprintf(&b, "| Stance grounding | %s | %s |\n", vfLabel, vfDetail)
 	}
@@ -781,6 +800,7 @@ func prettyAgentList(agents []string) string {
 		a = strings.TrimPrefix(a, "steelman-")
 		a = strings.TrimPrefix(a, "probe-")
 		a = strings.TrimPrefix(a, "adversary-")
+		a = strings.TrimPrefix(a, "resolution-")
 		a = strings.ReplaceAll(a, "-", " ")
 		words := strings.Fields(a)
 		for j, w := range words {

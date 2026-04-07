@@ -920,12 +920,15 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 			os.Exit(1)
 		}
 
-		fmt.Fprintf(os.Stderr, "\n=== Round 3: Position Revision ===\n")
+		fmt.Fprintf(os.Stderr, "\n=== Round 3: Revision + Resolutions ===\n")
 
 		var r2Analysis analysisResult
 		json.Unmarshal([]byte(r2Result), &r2Analysis)
 
+		// Generate revised speaker positions + resolution proposals
 		r3Agents = buildR3Agents(r1Agents, &r2Analysis, data)
+		resolutionAgents := buildResolutionAgents(&r2Analysis, data)
+		r3Agents = append(r3Agents, resolutionAgents...)
 
 		if len(r3Agents) > 0 {
 			// Get context for each R3 agent
