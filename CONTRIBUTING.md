@@ -23,7 +23,7 @@ go build -o gemot .
 go test ./...
 
 # Start local HTTP server
-GEMOT_ANTHROPIC_KEY=sk-ant-... ./gemot http
+ANTHROPIC_API_KEY=sk-ant-... ./gemot http
 
 # Run the calendar scheduling demo against your local server
 GEMOT_LIVE_URL=http://localhost:8080/mcp GEMOT_API_SECRET=your-secret go run ./scripts/calendar-scheduling

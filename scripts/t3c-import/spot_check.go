@@ -12,23 +12,22 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-// getAnthropicKey reads the API key from GEMOT_ANTHROPIC_KEY (project convention)
-// or ANTHROPIC_API_KEY (SDK standard), or from .env.
+// getAnthropicKey reads the API key from ANTHROPIC_API_KEY (standard),
+// GEMOT_ANTHROPIC_KEY (legacy), or from .env.
 func getAnthropicKey() string {
-	if key := os.Getenv("GEMOT_ANTHROPIC_KEY"); key != "" {
-		return key
-	}
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 		return key
 	}
-	// Try .env file
+	if key := os.Getenv("GEMOT_ANTHROPIC_KEY"); key != "" {
+		return key
+	}
 	if b, err := os.ReadFile(".env"); err == nil {
 		for _, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, "GEMOT_ANTHROPIC_KEY=") {
-				return strings.TrimPrefix(line, "GEMOT_ANTHROPIC_KEY=")
-			}
 			if strings.HasPrefix(line, "ANTHROPIC_API_KEY=") {
 				return strings.TrimPrefix(line, "ANTHROPIC_API_KEY=")
+			}
+			if strings.HasPrefix(line, "GEMOT_ANTHROPIC_KEY=") {
+				return strings.TrimPrefix(line, "GEMOT_ANTHROPIC_KEY=")
 			}
 		}
 	}
@@ -124,7 +123,7 @@ func collectQuotes(c Claim, sourceIDs map[string]bool) []string {
 func runSpotCheck(data *ReportData, sampleRate float64) *spotCheckResult {
 	apiKey := getAnthropicKey()
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  spot-check: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required\n")
+		fmt.Fprintf(os.Stderr, "  spot-check: ANTHROPIC_API_KEY required\n")
 		os.Exit(1)
 	}
 

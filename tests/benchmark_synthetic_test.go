@@ -26,7 +26,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 
 	cfg := config.Load()
 	if cfg.AnthropicKey == "" {
-		t.Skip("GEMOT_ANTHROPIC_KEY not set")
+		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 
 	// Set up service with real LLM analyzer

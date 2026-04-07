@@ -15,7 +15,7 @@ import (
 func buildResolutionAgents(r2Analysis *analysisResult, data *ReportData) []agentPlan {
 	apiKey := getAnthropicKey()
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  R3: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required for resolutions\n")
+		fmt.Fprintf(os.Stderr, "  R3: ANTHROPIC_API_KEY required for resolutions\n")
 		os.Exit(1)
 	}
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
@@ -121,7 +121,7 @@ func buildResolutionAgents(r2Analysis *analysisResult, data *ReportData) []agent
 func buildR3Agents(r1Agents []agentPlan, r2Analysis *analysisResult, data *ReportData) []agentPlan {
 	apiKey := getAnthropicKey()
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  R3: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required for position revision\n")
+		fmt.Fprintf(os.Stderr, "  R3: ANTHROPIC_API_KEY required for position revision\n")
 		os.Exit(1)
 	}
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
