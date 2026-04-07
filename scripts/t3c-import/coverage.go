@@ -22,9 +22,9 @@ type coverageResult struct {
 // runCoverageAudit identifies missing perspectives for unchallenged positions.
 // Uses Haiku to ask "what perspective is absent?" for each consensus/unchallenged item.
 func runCoverageAudit(r1Analysis *analysisResult, reportTitle string) *coverageResult {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	apiKey := getAnthropicKey()
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  coverage audit: ANTHROPIC_API_KEY required\n")
+		fmt.Fprintf(os.Stderr, "  coverage audit: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required\n")
 		os.Exit(1)
 	}
 

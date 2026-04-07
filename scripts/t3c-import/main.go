@@ -482,6 +482,7 @@ func main() {
 	spotCheck := flag.Bool("spot-check", false, "LLM-verify 15% of stance assignments against source quotes")
 	replicate := flag.Int("replicate", 0, "Run N replication runs to test pipeline stability")
 	coverageAudit := flag.Bool("coverage-audit", false, "Detect missing perspectives in unchallenged positions")
+	verifyStances := flag.Bool("verify-stances", false, "Verify disagree stances against source quotes before pipeline")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -521,7 +522,8 @@ func main() {
 			NullControl:   *nullControl,
 			SpotCheck:     *spotCheck,
 			ReplicateN:    *replicate,
-			CoverageAudit: *coverageAudit,
+			CoverageAudit:  *coverageAudit,
+			VerifyStances:  *verifyStances,
 		}
 		runStructuralMode(&data, cfg)
 	default:
@@ -633,6 +635,13 @@ func runSpeakerMode(data *ReportData, mcpURL, tmplFlag string, threshold float64
 
 func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	totalClaims := countClaims(data)
+
+	// Pre-pipeline stance verification: check disagree stances against source quotes
+	var vfResult *verifyResult
+	if cfg.VerifyStances {
+		fmt.Fprintf(os.Stderr, "\n=== Stance Verification ===\n")
+		vfResult = verifyDisagreeStances(data)
+	}
 
 	setup := buildR1Setup(data, cfg.Threshold, "t3c-")
 	clusters := setup.clusters
@@ -1025,7 +1034,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 			R1Compromise: r1Compromise, R2Compromise: r2Compromise, R3Compromise: r3Compromise,
 			R1Agents: r1Agents, R2Agents: r2Agents, R3Agents: r3Agents,
 			Template: tmpl, DelibID: delibID, JoinCode: joinCode,
-			NullControl: ncResult, SpotCheck: scResult, Replication: repResult, Coverage: covResult,
+			NullControl: ncResult, SpotCheck: scResult, Replication: repResult, Coverage: covResult, Verify: vfResult,
 		}
 		md := generateReport(ri)
 		if err := os.WriteFile(cfg.ReportPath, []byte(md), 0o644); err != nil {
