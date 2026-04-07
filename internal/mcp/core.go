@@ -117,7 +117,7 @@ func CoreGetAnalysisResult(svc *deliberation.Service, deliberationID, keyID stri
 }
 
 // CoreExportDeliberation returns the complete multi-round history of a deliberation.
-func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID string) (map[string]any, error) {
+func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID string, auditLog ...AuditStore) (map[string]any, error) {
 	if deliberationID == "" {
 		return nil, fmt.Errorf("deliberation_id is required")
 	}
@@ -180,6 +180,14 @@ func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID str
 		"commitments":  commitments,
 		"resolution":   d.Resolution,
 	}
+
+	// Include audit log if store is available
+	if len(auditLog) > 0 && auditLog[0] != nil {
+		if ops, err := auditLog[0].GetAuditLog(deliberationID, 500); err == nil {
+			export["audit_log"] = ops
+		}
+	}
+
 	return export, nil
 }
 
