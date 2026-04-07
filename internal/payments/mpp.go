@@ -91,7 +91,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				// No auth required in dev mode without bearer secret
 				// Rate limit to prevent abuse, but grant admin access (not sandbox)
 				if bearerSecret == "" {
-					ip := clientIP(r)
+					ip := ClientIP(r)
 					if !limiter.Allow("dev:" + ip) {
 						http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
 						return
@@ -102,7 +102,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				}
 				// Allow unauthenticated MCP connections for sandbox mode
 				// Rate-limit by IP to prevent abuse (30 req/min for sandbox)
-				ip := clientIP(r)
+				ip := ClientIP(r)
 				if !limiter.Allow("sandbox:" + ip) {
 					http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)
 					return
@@ -303,8 +303,8 @@ func verifyCredential(ctx context.Context, cfg Config, credB64 string) (*receipt
 	}, nil
 }
 
-// clientIP extracts the real client IP, preferring Fly-Client-IP (unforgeable).
-func clientIP(r *http.Request) string {
+// ClientIP extracts the real client IP, preferring Fly-Client-IP (unforgeable).
+func ClientIP(r *http.Request) string {
 	if ip := r.Header.Get("Fly-Client-IP"); ip != "" {
 		return strings.TrimSpace(ip)
 	}

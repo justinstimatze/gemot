@@ -124,22 +124,15 @@ func TestCreditStoreIdempotency(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Try to create another key with same session ID — this would be a webhook replay
-	// The schema doesn't enforce unique session IDs, but the webhook handler should check
-	key2, err := store.GenerateKey("user@test.com", "cus_1", "cs_session_123", 1000)
-	if err != nil {
-		t.Fatal(err)
+	// Try to create another key with same session ID — DB partial unique index should reject
+	_, err = store.GenerateKey("user@test.com", "cus_1", "cs_session_123", 1000)
+	if err == nil {
+		t.Fatal("expected duplicate session ID to be rejected by DB constraint")
 	}
 
-	// Both keys exist — the idempotency check is in the webhook handler, not the store
-	// But AddCreditsByEmail should add to the MOST RECENT key
-	if key1 == key2 {
-		t.Fatal("expected different keys")
-	}
-
-	// The most recent key should have 1000 credits
-	balance, _ := store.GetBalance(key2)
+	// Original key should still have 1000 credits
+	balance, _ := store.GetBalance(key1)
 	if balance != 1000 {
-		t.Fatalf("expected 1000 for newest key, got %d", balance)
+		t.Fatalf("expected 1000 for original key, got %d", balance)
 	}
 }

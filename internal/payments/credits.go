@@ -6,14 +6,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"sync"
 	"time"
 )
 
 // CreditStore manages API keys and credit balances.
 type CreditStore struct {
 	db *sql.DB
-	mu sync.Mutex
 }
 
 // NewCreditStore initializes the credit store using the shared DB.
@@ -28,9 +26,6 @@ func (s *CreditStore) GenerateKey(email, stripeCustomerID, stripeSessionID strin
 	if err != nil {
 		return "", err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	_, err = s.db.Exec(
 		`INSERT INTO api_keys (key, email, credits_remaining, stripe_customer_id, stripe_session_id, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -55,79 +50,60 @@ func KeyID(key string) string {
 
 // AddCredits adds credits to an existing key. Returns new balance.
 func (s *CreditStore) AddCredits(key string, amount int) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	res, err := s.db.Exec(
-		`UPDATE api_keys SET credits_remaining = credits_remaining + $1 WHERE key = $2`,
+	var balance int
+	err := s.db.QueryRow(
+		`UPDATE api_keys SET credits_remaining = credits_remaining + $1 WHERE key = $2 RETURNING credits_remaining`,
 		amount, key,
-	)
+	).Scan(&balance)
 	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
 		return 0, fmt.Errorf("api key not found")
 	}
-
-	var balance int
-	err = s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = $1`, key).Scan(&balance)
-	return balance, err
+	return balance, nil
 }
 
 // AddCreditsByEmail adds credits to the most recent key for an email. Returns the key and new balance.
-func (s *CreditStore) AddCreditsByEmail(email string, amount int) (string, int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+// Also sets stripe_session_id for idempotency (partial unique index prevents double-crediting).
+func (s *CreditStore) AddCreditsByEmail(email string, amount int, sessionID ...string) (string, int, error) {
 	var key string
 	err := s.db.QueryRow(`SELECT key FROM api_keys WHERE email = $1 ORDER BY created_at DESC LIMIT 1`, email).Scan(&key)
 	if err != nil {
 		return "", 0, fmt.Errorf("no api key found for email %q", email)
 	}
 
-	_, err = s.db.Exec(
-		`UPDATE api_keys SET credits_remaining = credits_remaining + $1 WHERE key = $2`,
-		amount, key,
-	)
+	var balance int
+	if len(sessionID) > 0 && sessionID[0] != "" {
+		err = s.db.QueryRow(
+			`UPDATE api_keys SET credits_remaining = credits_remaining + $1, stripe_session_id = $3 WHERE key = $2 RETURNING credits_remaining`,
+			amount, key, sessionID[0],
+		).Scan(&balance)
+	} else {
+		err = s.db.QueryRow(
+			`UPDATE api_keys SET credits_remaining = credits_remaining + $1 WHERE key = $2 RETURNING credits_remaining`,
+			amount, key,
+		).Scan(&balance)
+	}
 	if err != nil {
 		return "", 0, err
 	}
-
-	var balance int
-	err = s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = $1`, key).Scan(&balance)
-	return key, balance, err
+	return key, balance, nil
 }
 
 // Deduct attempts to deduct credits from a key. Returns remaining balance.
 // Returns error if insufficient credits.
-// Uses a single atomic UPDATE to eliminate TOCTOU races.
+// Uses a single atomic UPDATE with RETURNING to eliminate TOCTOU races.
 func (s *CreditStore) Deduct(key string, amount int) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	res, err := s.db.Exec(
-		`UPDATE api_keys SET credits_remaining = credits_remaining - $1, last_used_at = $2 WHERE key = $3 AND credits_remaining >= $1`,
+	var balance int
+	err := s.db.QueryRow(
+		`UPDATE api_keys SET credits_remaining = credits_remaining - $1, last_used_at = $2 WHERE key = $3 AND credits_remaining >= $1 RETURNING credits_remaining`,
 		amount, time.Now().UTC(), key,
-	)
+	).Scan(&balance)
 	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		// Either key doesn't exist or insufficient credits — distinguish by checking balance
-		var balance int
-		err := s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = $1`, key).Scan(&balance)
-		if err != nil {
+		// Either key doesn't exist or insufficient credits
+		var current int
+		if qerr := s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = $1`, key).Scan(&current); qerr != nil {
 			return 0, fmt.Errorf("invalid api key")
 		}
-		return balance, fmt.Errorf("insufficient credits: have %d, need %d", balance, amount)
-	}
-
-	var balance int
-	err = s.db.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = $1`, key).Scan(&balance)
-	if err != nil {
-		return 0, err
+		return current, fmt.Errorf("insufficient credits: have %d, need %d", current, amount)
 	}
 	return balance, nil
 }

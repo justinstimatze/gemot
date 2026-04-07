@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"fmt"
+	"os"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -39,6 +40,13 @@ func Open(dsn string) (*DB, error) {
 			return nil, fmt.Errorf("running migrations: %w (also failed to close: %v)", err, cerr)
 		}
 		return nil, fmt.Errorf("running migrations: %w", err)
+	}
+
+	// Check schema version — warn if DB is ahead of binary (downgrade)
+	const expectedVersion = 1
+	var dbVersion int
+	if err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&dbVersion); err == nil && dbVersion > expectedVersion {
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: database schema version %d is ahead of binary version %d — consider upgrading\n", dbVersion, expectedVersion)
 	}
 
 	return &DB{db: db, path: dsn}, nil

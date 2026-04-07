@@ -193,6 +193,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_email ON api_keys(email);
 CREATE INDEX IF NOT EXISTS idx_api_keys_stripe ON api_keys(stripe_customer_id);
+-- Prevent double-crediting from concurrent webhook delivery
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_session_unique ON api_keys(stripe_session_id) WHERE stripe_session_id != '';
 
 CREATE INDEX IF NOT EXISTS idx_positions_delib ON positions(deliberation_id, round_number);
 CREATE INDEX IF NOT EXISTS idx_votes_delib ON votes(deliberation_id);
@@ -215,3 +217,10 @@ ALTER TABLE positions ADD COLUMN IF NOT EXISTS parent_position_id TEXT DEFAULT '
 
 -- Migration: position metadata (JSON map for agent coordinates, labels, etc.)
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS metadata TEXT DEFAULT '{}';
+
+-- Schema versioning
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TIMESTAMPTZ DEFAULT NOW()
+);
+INSERT INTO schema_version (version) VALUES (1) ON CONFLICT DO NOTHING;
