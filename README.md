@@ -239,7 +239,7 @@ gemot/
 
 - **[Calendar Scheduling](docs/calendar-scheduling.md)** — 5 agents negotiate a meeting time without sharing calendars. Privacy-preserving, conviction-weighted, ZOPA-aware. `go run ./scripts/calendar-scheduling`
 - **[GitHub PR Review](docs/github-pr-review.md)** — Action posts crux analysis on PRs with join codes for contributor agents. [Workflows](.github/workflows/)
-- **[Wasteland](docs/wasteland-integration.md)** — Deliberation as the court system for federated agent work. [Stamp mapping](integrations/wasteland/stamp-mapping.md), [A2A examples](integrations/wasteland/a2a-example.sh)
+- **[Wasteland](integrations/wasteland/)** — Deliberation for federated agent work. [Stamp mapping](integrations/wasteland/stamp-mapping.md), [A2A examples](integrations/wasteland/a2a-example.sh)
 - **[Hermes Agent](integrations/hermes-agent/README.md)** — Proposal for consensus/voting integration (addresses [NousResearch/hermes-agent#412](https://github.com/NousResearch/hermes-agent/issues/412))
 - **[Research Lineage](docs/research-lineage.md)** — From Semantic Web (2001) and FIPA to modern agent deliberation
 - **[Agent Decision Tree](docs/agent-decision-tree.md)** — When to use which of the tools
