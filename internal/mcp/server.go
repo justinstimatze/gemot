@@ -384,7 +384,7 @@ func (s *server) handleDeliberation(ctx context.Context, _ *sdkmcp.CallToolReque
 		}, "Template updated. The next analysis will use this template's governance model and consensus threshold.")
 
 	case "export":
-		export, err := CoreExportDeliberation(s.svc, args.DeliberationID, keyID)
+		export, err := CoreExportDeliberation(s.svc, args.DeliberationID, keyID, s.db)
 		if err != nil {
 			return errResult(err)
 		}

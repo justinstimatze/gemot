@@ -313,7 +313,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				})
 
 			case "export":
-				export, err := CoreExportDeliberation(svc, str(s, "deliberation_id"), keyID)
+				export, err := CoreExportDeliberation(svc, str(s, "deliberation_id"), keyID, auditLog)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
