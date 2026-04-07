@@ -91,6 +91,37 @@ func generateReport(ri *reportInput) string {
 	}
 	fmt.Fprintf(&b, " · Template: %s · Replication: **%s**\n\n", tmpl, repTier)
 
+	// Executive summary — top cruxes + key finding
+	b.WriteString("## Key Findings\n\n")
+	if len(r1.Cruxes) > 0 {
+		b.WriteString("**Top disagreements:**\n\n")
+		for _, c := range r1.Cruxes[:min(3, len(r1.Cruxes))] {
+			label := controversyLabel(c.Score, len(c.Agree), len(c.Disagree))
+			fmt.Fprintf(&b, "1. **[%s]** %s\n", label, c.Claim[:min(140, len(c.Claim))])
+		}
+		b.WriteString("\n")
+	}
+	cleaned := cleanConsensus(r1.ConsensusStatements)
+	if len(cleaned) > 0 {
+		fmt.Fprintf(&b, "**Common ground** (%d unchallenged positions): ", len(cleaned))
+		fmt.Fprintf(&b, "%s", cleaned[0][:min(120, len(cleaned[0]))])
+		if len(cleaned) > 1 {
+			fmt.Fprintf(&b, " (+%d more)", len(cleaned)-1)
+		}
+		b.WriteString("\n\n")
+	}
+	fmt.Fprintf(&b, "**Pipeline**: %d speakers → %d agents across %d clusters. ", len(data.Sources), len(agents)+len(r2Agents)+len(r3Agents), len(agents))
+	if vfResult != nil && vfResult.Downgraded > 0 {
+		fmt.Fprintf(&b, "%d/%d T3C stance assignments verified against source quotes (%d downgraded). ", vfResult.Checked-vfResult.Downgraded, vfResult.Checked, vfResult.Downgraded)
+	}
+	if r2JSON != "" {
+		b.WriteString("2 rounds of analysis. ")
+	}
+	if r3JSON != "" {
+		b.WriteString("3 rounds including position revision + resolution proposals. ")
+	}
+	b.WriteString("\n\n")
+
 	// Source report
 	totalClaims := countClaims(data)
 	b.WriteString("## Source Report\n\n")
@@ -120,12 +151,13 @@ func generateReport(ri *reportInput) string {
 		b.WriteString("\n")
 
 		if len(vfResult.Details) > 0 {
-			b.WriteString("**Downgraded stances:**\n")
+			b.WriteString("**Downgraded stances:**\n\n")
 			for _, d := range vfResult.Details {
 				fmt.Fprintf(&b, "- **%s** (%s, score %d) on: %s\n", d.Speaker, d.OrigStance, d.Score, d.Crux)
 				if d.Reason != "" {
-					fmt.Fprintf(&b, "  - %s\n", d.Reason)
+					fmt.Fprintf(&b, "  > %s\n", d.Reason)
 				}
+				b.WriteString("\n")
 			}
 			b.WriteString("\n")
 		}
