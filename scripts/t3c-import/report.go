@@ -114,13 +114,27 @@ func generateReport(ri *reportInput) string {
 	if vfResult != nil && vfResult.Downgraded > 0 {
 		fmt.Fprintf(&b, "%d/%d T3C stance assignments verified against source quotes (%d downgraded). ", vfResult.Checked-vfResult.Downgraded, vfResult.Checked, vfResult.Downgraded)
 	}
-	if r2JSON != "" {
-		b.WriteString("2 rounds of analysis. ")
-	}
 	if r3JSON != "" {
-		b.WriteString("3 rounds including position revision + resolution proposals. ")
+		b.WriteString("3 rounds including position revision + resolution proposals.\n\n")
+		// List resolution agents in summary
+		var resolutions []agentPlan
+		for _, a := range r3Agents {
+			if a.Kind == "resolution" {
+				resolutions = append(resolutions, a)
+			}
+		}
+		if len(resolutions) > 0 {
+			b.WriteString("**Proposed resolutions:**\n\n")
+			for i, a := range resolutions {
+				title := strings.TrimPrefix(a.Role, "Resolution: ")
+				fmt.Fprintf(&b, "%d. %s\n", i+1, title)
+			}
+			b.WriteString("\n")
+		}
+	} else if r2JSON != "" {
+		b.WriteString("2 rounds of analysis.\n")
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	// Source report
 	totalClaims := countClaims(data)
