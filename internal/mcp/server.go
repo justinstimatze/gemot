@@ -237,6 +237,7 @@ type analyzeToolParams struct {
 	Reason         string `json:"reason,omitempty"`
 	CruxClaim      string `json:"crux_claim,omitempty"`
 	Correction     string `json:"correction,omitempty"`
+	ResultJSON     string `json:"result_json,omitempty"` // for update_result: full JSON of modified analysis result
 	// expert_panel fields
 	Document   string `json:"document,omitempty"`
 	Experts    string `json:"experts,omitempty"`
@@ -610,6 +611,17 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		)), nil, nil
 
 	case "get_result":
+		// round:-1 returns all rounds as an array
+		if args.Round != nil && *args.Round == -1 {
+			results, err := CoreGetAllAnalysisResults(ctx, s.svc, args.DeliberationID, keyID)
+			if err != nil {
+				return errResult(err)
+			}
+			if len(results) == 0 {
+				return textResult("no analysis results yet"), nil, nil
+			}
+			return jsonResult(results)
+		}
 		result, err := CoreGetAnalysisResult(ctx, s.svc, args.DeliberationID, keyID, args.Round)
 		if err != nil {
 			return errResult(err)
@@ -618,6 +630,25 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 			return textResult("no analysis results yet"), nil, nil
 		}
 		return jsonResult(result)
+
+	case "update_result":
+		if args.DeliberationID == "" || args.Round == nil {
+			return errResult(fmt.Errorf("deliberation_id and round are required"))
+		}
+		if args.ResultJSON == "" {
+			return errResult(fmt.Errorf("result_json is required"))
+		}
+		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
+			return errResult(err)
+		}
+		var updated deliberation.AnalysisResult
+		if err := json.Unmarshal([]byte(args.ResultJSON), &updated); err != nil {
+			return errResult(fmt.Errorf("invalid result_json: %w", err))
+		}
+		if err := s.svc.SaveAnalysisResult(ctx, args.DeliberationID, *args.Round, &updated); err != nil {
+			return errResult(err)
+		}
+		return textResult(fmt.Sprintf("analysis result updated for round %d", *args.Round)), nil, nil
 
 	case "cancel":
 		if args.DeliberationID == "" {

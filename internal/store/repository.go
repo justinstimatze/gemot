@@ -474,6 +474,34 @@ func (s *DB) GetLatestAnalysisResult(ctx context.Context, deliberationID string)
 	return &result, nil
 }
 
+func (s *DB) GetAllAnalysisResults(ctx context.Context, deliberationID string) ([]deliberation.AnalysisResult, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT result_json, analyzed_at FROM analysis_results WHERE deliberation_id = $1 ORDER BY round_number ASC`,
+		deliberationID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var results []deliberation.AnalysisResult
+	for rows.Next() {
+		var resultJSON string
+		var analyzedAt time.Time
+		if err := rows.Scan(&resultJSON, &analyzedAt); err != nil {
+			return nil, err
+		}
+		var result deliberation.AnalysisResult
+		if err := json.Unmarshal([]byte(resultJSON), &result); err != nil {
+			return nil, err
+		}
+		if result.AnalyzedAt.IsZero() {
+			result.AnalyzedAt = analyzedAt
+		}
+		results = append(results, result)
+	}
+	return results, rows.Err()
+}
+
 // GetStuckAnalyzing returns deliberation IDs stuck in "analyzing" for longer than maxAge.
 func (s *DB) GetStuckAnalyzing(ctx context.Context, maxAge time.Duration) ([]string, error) {
 	cutoff := time.Now().UTC().Add(-maxAge)

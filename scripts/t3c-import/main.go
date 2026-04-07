@@ -740,6 +740,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 		call(session, "participate", map[string]any{
 			"action": "submit_position", "deliberation_id": delibID,
 			"agent_id": a.ID, "content": a.Position,
+			"metadata": map[string]any{"kind": a.Kind},
 		})
 	}
 
@@ -876,6 +877,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 				call(session, "participate", map[string]any{
 					"action": "submit_position", "deliberation_id": delibID,
 					"agent_id": a.ID, "content": a.Position,
+					"metadata": map[string]any{"kind": a.Kind},
 				})
 			}
 
@@ -945,6 +947,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 				call(session, "participate", map[string]any{
 					"action": "submit_position", "deliberation_id": delibID,
 					"agent_id": a.ID, "content": a.Position,
+					"metadata": map[string]any{"kind": a.Kind},
 				})
 			}
 

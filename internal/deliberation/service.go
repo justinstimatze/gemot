@@ -83,6 +83,7 @@ type AnalysisStore interface {
 	SaveAnalysisResult(ctx context.Context, deliberationID string, round int, result *AnalysisResult) error
 	GetAnalysisResult(ctx context.Context, deliberationID string, round int) (*AnalysisResult, error)
 	GetLatestAnalysisResult(ctx context.Context, deliberationID string) (*AnalysisResult, error)
+	GetAllAnalysisResults(ctx context.Context, deliberationID string) ([]AnalysisResult, error)
 	GetStuckAnalyzing(ctx context.Context, maxAge time.Duration) ([]string, error)
 	RecoverStuckAnalyzing(ctx context.Context, maxAge time.Duration) (int, error)
 }
@@ -1990,6 +1991,14 @@ func (s *Service) RecoverStuck(ctx context.Context) (int, error) {
 
 func (s *Service) GetAnalysisResult(ctx context.Context, deliberationID string, round int) (*AnalysisResult, error) {
 	return s.store.GetAnalysisResult(ctx, deliberationID, round)
+}
+
+func (s *Service) GetAllAnalysisResults(ctx context.Context, deliberationID string) ([]AnalysisResult, error) {
+	return s.store.GetAllAnalysisResults(ctx, deliberationID)
+}
+
+func (s *Service) SaveAnalysisResult(ctx context.Context, deliberationID string, round int, result *AnalysisResult) error {
+	return s.store.SaveAnalysisResult(ctx, deliberationID, round, result)
 }
 
 // CreateShareToken generates a random share token for a group and stores it.
