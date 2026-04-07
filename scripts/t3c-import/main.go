@@ -1123,16 +1123,15 @@ func deriveVote(data *ReportData, voter, target *agentPlan, clusters []cluster, 
 		return 99 // skip
 	}
 
-	// Speaker/steelman → adversary: does this speaker agree with the adversary's topic cruxes?
+	// Speaker/steelman → probe: does this speaker engage with the probe's topic cruxes?
 	if (voter.Kind == "speaker" || voter.Kind == "steelman") && target.Kind == "probe" {
 		cruxes := topicCruxes[target.Topic]
 		if len(cruxes) == 0 || voter.Cluster == nil || data.AddOns.SpeakerCruxMatrix == nil {
 			return 0
 		}
-		agrees, disagrees := 0, 0
+		agrees, disagrees, noPos := 0, 0, 0
 		representative := parseSpeakerID(voter.Cluster.Members[0])
 		for _, c := range cruxes {
-			// Find crux index in matrix
 			label := cruxLabel(c.Topic, c.Subtopic)
 			for idx, l := range data.AddOns.SpeakerCruxMatrix.CruxLabels {
 				if normLabel(l) == label {
@@ -1141,10 +1140,16 @@ func deriveVote(data *ReportData, voter, target *agentPlan, clusters []cluster, 
 						agrees++
 					} else if stance == "disagree" {
 						disagrees++
+					} else {
+						noPos++
 					}
 					break
 				}
 			}
+		}
+		// If mostly no_position on this topic's cruxes, vote 0 (not engaged)
+		if noPos > agrees+disagrees {
+			return 0
 		}
 		if agrees > disagrees {
 			return 1
@@ -1155,24 +1160,36 @@ func deriveVote(data *ReportData, voter, target *agentPlan, clusters []cluster, 
 		return 0
 	}
 
-	// Adversary → speaker/steelman: does the speaker engage with this adversary's topic?
+	// Probe → speaker/steelman: does the speaker engage with this probe's topic?
 	if voter.Kind == "probe" && (target.Kind == "speaker" || target.Kind == "steelman") {
 		if target.Cluster == nil {
 			return 0
 		}
-		// Check if the target's claims are in the adversary's topic
+		// Count claims in topic — more engagement = stronger vote
+		totalClaims := 0
 		for _, m := range target.Cluster.Members {
 			claims := findClaimsForSpeaker(data, parseSpeakerID(m), voter.Topic, "")
-			if len(claims) > 0 {
-				return 1 // engages with topic
-			}
+			totalClaims += len(claims)
 		}
-		return 0
+		if totalClaims >= 3 {
+			return 1 // strong engagement
+		}
+		if totalClaims == 0 {
+			return -1 // no engagement — disagree with relevance
+		}
+		return 0 // weak engagement
 	}
 
-	// Adversary → adversary: independent probes
+	// Probe → probe: diversify by topic relationship to avoid identical patterns
 	if voter.Kind == "probe" && target.Kind == "probe" {
-		return 0
+		if voter.Topic == target.Topic {
+			return 1
+		}
+		// Use alphabetical ordering for consistent asymmetric votes
+		if voter.Topic < target.Topic {
+			return 1
+		}
+		return -1
 	}
 
 	return 0 // default: pass
