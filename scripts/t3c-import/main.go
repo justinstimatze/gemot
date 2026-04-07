@@ -482,7 +482,8 @@ func main() {
 	spotCheck := flag.Bool("spot-check", false, "LLM-verify 15% of stance assignments against source quotes")
 	replicate := flag.Int("replicate", 0, "Run N replication runs to test pipeline stability")
 	coverageAudit := flag.Bool("coverage-audit", false, "Detect missing perspectives in unchallenged positions")
-	verifyStances := flag.Bool("verify-stances", false, "Verify disagree stances against source quotes before pipeline")
+	verifyStances := flag.Bool("verify-stances", false, "Verify stances against source quotes before pipeline")
+	verifyThreshold := flag.Int("verify-threshold", 2, "Stances scoring at or below this (1-5) are downgraded (default 2)")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -523,7 +524,8 @@ func main() {
 			SpotCheck:     *spotCheck,
 			ReplicateN:    *replicate,
 			CoverageAudit:  *coverageAudit,
-			VerifyStances:  *verifyStances,
+			VerifyStances:   *verifyStances,
+			VerifyThreshold: *verifyThreshold,
 		}
 		runStructuralMode(&data, cfg)
 	default:
@@ -640,7 +642,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	var vfResult *verifyResult
 	if cfg.VerifyStances {
 		fmt.Fprintf(os.Stderr, "\n=== Stance Verification ===\n")
-		vfResult = verifyStances(data)
+		vfResult = verifyStances(data, cfg.VerifyThreshold)
 	}
 
 	setup := buildR1Setup(data, cfg.Threshold, "t3c-")

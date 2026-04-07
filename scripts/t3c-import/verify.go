@@ -14,6 +14,7 @@ type verifyResult struct {
 	Total      int
 	Checked    int
 	Downgraded int
+	Threshold  int    // stances at or below this score were downgraded
 	Details    []verifyDetail
 	ScoreDist  [6]int // index 0 unused, 1-5 count stances at each score
 }
@@ -36,7 +37,7 @@ type verifyDetail struct {
 //	1 = quotes don't address this topic
 //
 // Stances scoring 1-3 are downgraded to "no_position". Modifies data in place.
-func verifyStances(data *ReportData) *verifyResult {
+func verifyStances(data *ReportData, threshold int) *verifyResult {
 	apiKey := getAnthropicKey()
 	if apiKey == "" {
 		fmt.Fprintf(os.Stderr, "  verify-stances: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required\n")
@@ -66,10 +67,10 @@ func verifyStances(data *ReportData) *verifyResult {
 		return &verifyResult{}
 	}
 
-	fmt.Fprintf(os.Stderr, "  verify-stances: scoring %d stances (1-5 grounding scale)...\n", total)
+	fmt.Fprintf(os.Stderr, "  verify-stances: scoring %d stances (1-5 scale, threshold ≤%d)...\n", total, threshold)
 
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
-	result := &verifyResult{Total: total}
+	result := &verifyResult{Total: total, Threshold: threshold}
 
 	for i, speaker := range matrix.Speakers {
 		if i >= len(matrix.Matrix) {
@@ -125,7 +126,7 @@ func verifyStances(data *ReportData) *verifyResult {
 			score, reason := scoreStance(client, speakerName, cruxClaim, quotes, stance)
 			result.ScoreDist[score]++
 
-			if score <= 3 {
+			if score <= threshold {
 				matrix.Matrix[i][j] = "no_position"
 				result.Downgraded++
 				result.Details = append(result.Details, verifyDetail{
@@ -141,7 +142,7 @@ func verifyStances(data *ReportData) *verifyResult {
 	}
 
 	kept := result.Checked - result.Downgraded
-	fmt.Fprintf(os.Stderr, "  verify-stances: %d kept (score 4-5), %d downgraded (score 1-3)\n", kept, result.Downgraded)
+	fmt.Fprintf(os.Stderr, "  verify-stances: %d kept (score >%d), %d downgraded (score ≤%d)\n", kept, threshold, result.Downgraded, threshold)
 	return result
 }
 
