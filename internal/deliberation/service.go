@@ -619,7 +619,7 @@ func (s *Service) SubmitPosition(ctx context.Context, deliberationID, agentID, c
 	// Content screening — LLM classifier (Haiku, ~200ms, ~$0.001)
 	var screeningWarning string
 	if s.contentClassifier != nil {
-		screenCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		screenCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		blocked, reason := sanitize.ScreenContent(screenCtx, s.contentClassifier, content)
 		if blocked {
