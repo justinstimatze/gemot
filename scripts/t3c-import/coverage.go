@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -23,7 +21,7 @@ type coverageResult struct {
 
 // runCoverageAudit identifies missing perspectives for unchallenged positions.
 // Uses Haiku to ask "what perspective is absent?" for each consensus/unchallenged item.
-func runCoverageAudit(r1Analysis *analysisResult) *coverageResult {
+func runCoverageAudit(r1Analysis *analysisResult, reportTitle string) *coverageResult {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
 		fmt.Fprintf(os.Stderr, "  coverage audit: ANTHROPIC_API_KEY required\n")
@@ -69,20 +67,17 @@ func runCoverageAudit(r1Analysis *analysisResult) *coverageResult {
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 
 	prompt := fmt.Sprintf(
-		"These positions from an AI governance deliberation were either unchallenged (no agent disagreed) or had very few agents on one side:\n\n%s\n\n"+
+		"These positions from a deliberation about %q were either unchallenged (no agent disagreed) or had very few agents on one side:\n\n%s\n\n"+
 			"For each position, identify:\n"+
 			"1. What real-world perspective or stakeholder group is ABSENT that would likely challenge it?\n"+
 			"2. Name a specific organization, researcher, or community that would contest this.\n\n"+
 			"Be concrete. Don't say 'critics' — name the specific perspective (e.g., 'labor unions concerned about job displacement', 'Global South AI researchers', 'open-source AI advocates').\n\n"+
 			"Format: one line per position, structured as:\n"+
 			"POSITION: [first few words] | MISSING: [perspective] | SOURCE: [specific entity]",
-		strings.Join(positions, "\n"),
+		reportTitle, strings.Join(positions, "\n"),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	resp, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+	resp, err := callAnthropic(client, anthropic.MessageNewParams{
 		Model:     "claude-haiku-4-5",
 		MaxTokens: 800,
 		System: []anthropic.TextBlockParam{
@@ -97,13 +92,7 @@ func runCoverageAudit(r1Analysis *analysisResult) *coverageResult {
 		return nil
 	}
 
-	answer := ""
-	for _, block := range resp.Content {
-		if block.Type == "text" {
-			answer = block.AsText().Text
-			break
-		}
-	}
+	answer := extractText(resp)
 
 	result := &coverageResult{}
 	for _, line := range strings.Split(answer, "\n") {
