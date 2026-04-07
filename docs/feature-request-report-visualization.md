@@ -4,166 +4,130 @@
 
 gemotvis has a report mode (`?view=report`) that renders deliberation analysis as a static document. It currently consumes data from the standard `gemot/analyze action:get_result` A2A response (`AnalysisResult` struct).
 
-The t3c-import pipeline's `report.go` generates richer reports with sections that depend on data not currently available through the standard API: null control comparisons, replication stability, stance verification (1-5 confidence scoring), coverage gap analysis, resolution proposals, and multi-round evolution tracking.
+The t3c-import pipeline now generates rich validation data and multi-round analysis (null control, stance verification with 1-5 confidence scoring, replication stability, coverage gap analysis, resolution proposals, position revision). Most of this data is now available through gemot's API — gemotvis just needs to consume it.
 
-This doc describes what gemot could expose to let gemotvis (and any other consumer) render these richer reports without reimplementing pipeline-specific logic.
+**Reference output**: `integrations/t3c/ai-manifestos-report.md` shows the full report structure that gemotvis should be able to render interactively.
 
-## Already Available But Not Consumed
+## What's Shipped (gemot side) — Ready for gemotvis to Consume
 
-### 1. `discarded_cruxes` field
+### 1. `discarded_cruxes` field — SHIPPED
+On `AnalysisResult` as `DiscardedCruxes []Crux`, serialized as `discarded_cruxes`. Includes `Degenerate bool` flag.
 
-**Status**: Already on `AnalysisResult` in gemot (`DiscardedCruxes []Crux`), already serialized as `discarded_cruxes` in JSON. gemotvis just needs to add the field to its mirrored type and consume it.
+**gemotvis TODO**: Add `discarded_cruxes` to `internal/gemot/types.go` and `frontend/src/types.ts`. Render as a "Discarded Cruxes" section. Replace the current hack of parsing `DEGENERATE:` integrity warnings.
 
-**gemotvis action**: Add `discarded_cruxes` to `internal/gemot/types.go` and `frontend/src/types.ts`. Replace the current hack of parsing `DEGENERATE:` integrity warnings.
+### 2. `topic_id` on TopicSummary — SHIPPED
+On `TopicSummary` as `TopicID string`. Assigned as T1-T6 after taxonomy extraction, persists across rounds.
 
-### 2. HALLUCINATION warnings in `integrity_warnings`
+**gemotvis TODO**: Add `topic_id` to mirrored type. Use for cross-round topic tracking in evolution display.
 
-**Status**: Already emitted by the analysis engine. gemotvis could parse `HALLUCINATION:` prefixed warnings to show a hallucination corrections row in the reliability table (tiered severity: none/minor 1-3/moderate 4-9/high 10+).
-
-**gemotvis action**: Frontend-only change, no API work needed.
-
-### 3. ANALYSIS_REFUSED warnings
-
-**Status**: Already emitted. gemotvis should suppress the compromise proposal when this warning is present (report.go already does this).
-
-**gemotvis action**: Frontend-only change.
-
-### 4. `topic_id` on TopicSummary
-
-**Status**: Already on `TopicSummary` in gemot (`TopicID string`). Assigned as T1-T6 in Go after taxonomy extraction, persists across rounds via `ContextKeyPriorTopicIDs`. gemotvis can use this for cross-round topic tracking.
-
-**gemotvis action**: Add `topic_id` to the mirrored type. Use for round selector and evolution display.
-
-## Proposed New API Fields
-
-### 5. Multi-round analysis access
-
-**Problem**: `get_result` returns only the latest round's analysis. report.go compares R1 vs R2 vs R3 to show evolution (new cruxes, topic taxonomy changes, position revisions).
-
-**Proposal**: Add `round` parameter to `get_result`:
+### 3. Multi-round analysis via `round:-1` — SHIPPED
+`get_result` now accepts `round: -1` to return all rounds as a JSON array:
 
 ```
-gemot/analyze action:get_result deliberation_id:X           → latest round (current behavior)
-gemot/analyze action:get_result deliberation_id:X round:1   → specific round
-gemot/analyze action:get_result deliberation_id:X round:all → all rounds as array
+analyze action:get_result deliberation_id:X round:-1
+→ [AnalysisResult, AnalysisResult, ...]  (ordered by round number)
 ```
 
-**Impact**: Enables evolution tracking, cross-round crux comparison, position revision display.
+Existing behavior unchanged: omit `round` for latest, or `round:N` for specific round.
 
-### 6. Validation results as structured data
+**gemotvis TODO**: Add a round selector/scrubber. Fetch all rounds on load. Show evolution section: new cruxes between rounds, topic taxonomy changes (renamed/added/dropped using `topic_id`), position revision comparison.
 
-The t3c-import pipeline produces five validation types. These are currently pipeline-internal structs (`verifyResult`, `nullControlResult`, `replicationResult`, `spotCheckResult`, `coverageResult` in `scripts/t3c-import/`). Making them available through the API enables any consumer to render the full reliability table.
+### 4. Validation results on AnalysisResult — SHIPPED
+Four optional fields added to `AnalysisResult` (all `omitempty`, zero overhead for non-validated deliberations):
 
-**Proposal**: Add optional fields to `AnalysisResult`:
-
-```go
-type AnalysisResult struct {
-    // ... existing fields ...
-
-    // Validation results (optional, populated by pipelines that run these checks)
-    NullControl   *NullControlResult   `json:"null_control,omitempty"`
-    Replication   *ReplicationResult   `json:"replication,omitempty"`
-    Verification  *VerificationResult  `json:"verification,omitempty"`
-    CoverageGaps  []CoverageGap        `json:"coverage_gaps,omitempty"`
-}
-
-type NullControlResult struct {
-    Pass          bool              `json:"pass"`
-    RealMetrics   ValidationMetrics `json:"real_metrics"`
-    NullMetrics   ValidationMetrics `json:"null_metrics"`
-    FailedMetrics []string          `json:"failed_metrics,omitempty"`
-    NullDelibID   string            `json:"null_delib_id"`
-}
-
-type ValidationMetrics struct {
-    CruxCount      int     `json:"crux_count"`
-    AvgControversy float64 `json:"avg_controversy"`
-    ConsensusCount int     `json:"consensus_count"`
-    BridgingCount  int     `json:"bridging_count"`
-    ClusterCount   int     `json:"cluster_count"`
-    Confidence     string  `json:"confidence"`
-}
-
-type ReplicationResult struct {
-    Runs      []ValidationMetrics `json:"runs"`
-    Stability struct {
-        CruxCV      float64 `json:"crux_cv"`
-        ControvCV   float64 `json:"controv_cv"`
-        ConsensusCV float64 `json:"consensus_cv"`
-        AllStable   bool    `json:"all_stable"`
-        Tier        int     `json:"tier"` // 0=unreplicated, 1=replicated, 2=stable
-    } `json:"stability"`
-}
-
-type VerificationResult struct {
-    Checked    int            `json:"checked"`
-    Downgraded int            `json:"downgraded"`
-    Threshold  int            `json:"threshold"` // stances at or below this score downgraded
-    ScoreDist  map[int]int    `json:"score_dist"` // score (1-5) → count
-    Details    []VerifyDetail `json:"details,omitempty"`
-}
-
-type VerifyDetail struct {
-    Speaker    string `json:"speaker"`
-    Crux       string `json:"crux"`
-    OrigStance string `json:"orig_stance"`
-    Score      int    `json:"score"` // 1-5 grounding confidence
-    Reason     string `json:"reason"`
-}
-
-type CoverageGap struct {
-    Position           string `json:"position"`
-    MissingPerspective string `json:"missing_perspective"`
-    SuggestedSource    string `json:"suggested_source"`
+```json
+{
+  "null_control": {
+    "null_delib_id": "...",
+    "real_metrics": { "crux_count": 13, "avg_controversy": 0.72, ... },
+    "null_metrics": { "crux_count": 10, "avg_controversy": 0.51, ... },
+    "failed_metrics": [],
+    "pass": true
+  },
+  "verification": {
+    "total": 44, "checked": 44, "downgraded": 19, "threshold": 2,
+    "score_dist": [0, 4, 15, 9, 13, 3],
+    "details": [{ "speaker": "...", "crux": "...", "orig_stance": "disagree", "score": 2, "reason": "..." }]
+  },
+  "replication": {
+    "num_runs": 3, "delib_ids": ["...", "...", "..."],
+    "runs": [{ "crux_count": 12, ... }, ...],
+    "stability": { "tier": 2, "crux_cv": 0.08, "controv_cv": 0.12, "consensus_cv": 0.15, "all_stable": true }
+  },
+  "coverage_gaps": [
+    { "position": "...", "missing_perspective": "...", "suggested_source": "..." }
+  ]
 }
 ```
 
-These fields are `omitempty` so they add zero overhead for deliberations that haven't run validation. The t3c-import pipeline would store them alongside the analysis result after each validation pass.
+The t3c-import pipeline stores these on the R1 analysis result via `update_result` after validation steps complete.
 
-### 7. Agent metadata: type classification
+**gemotvis TODO**: 
+- **Reliability table**: Render a table matching report.go's format with rows for internal coherence, agent hallucinations, stance grounding, null control, replication stability, grounding fidelity. Each row has status (pass/fail/partial/untested/cleaned) and detail text. Check for field presence — show "untested" when a field is null.
+- **Stance verification section**: If `verification` is present, show score distribution table (1-5 scale) and list of downgraded stances with reasons. Use blockquote for reasons.
+- **Null control section**: If `null_control` is present, show comparison table (real vs null metrics with delta percentages) and pass/fail verdict.
+- **Replication section**: If `replication` is present, show per-run metrics table, CV scores, and stability tier.
+- **Missing Perspectives**: If `coverage_gaps` is present, list each gap with the missing perspective and suggested source.
 
-**Problem**: report.go splits crux agree/disagree lists by agent type (speaker-derived vs structural). gemotvis can't do this because `AgentInfo` only has `id`, `model_family`, `conviction`, and optional coordinates.
+### 5. Agent kind via position metadata — SHIPPED
+t3c-import now sends `{"kind": "speaker"}` (or steelman, probe, bridge, dissent, empty-chair, resolution) in position metadata on all submissions. Available on `Position.Metadata` in `get_positions` responses.
 
-**Proposal**: Add `kind` field to agent info:
+**gemotvis TODO**: Read `metadata.kind` from positions. Use for:
+- **Crux display**: Split agree/disagree lists into "Speakers" and "Structural" tracks (matching report.go's two-track display)
+- **Participant list**: Categorize agents by kind (Clusters, Speakers, Probes, R2 Agents, R3 Agents, Resolutions)
+- **Graph view**: Different node shapes or colors by kind (speakers = circles, probes = diamonds, resolutions = squares, etc.)
 
-```go
-type AgentInfo struct {
-    ID          string  `json:"id"`
-    ModelFamily string  `json:"model_family"`
-    Conviction  float64 `json:"conviction"`
-    Kind        string  `json:"kind,omitempty"` // "speaker", "steelman", "probe", "bridge", "dissent", "empty-chair", "resolution"
-    // ... existing optional fields ...
-}
+### 6. `update_result` action — SHIPPED
+Pipelines can write validation data back to analysis results:
+
+```
+analyze action:update_result deliberation_id:X round:1 result_json:"{...}"
 ```
 
-This is already tracked internally (t3c-import `agentPlan.Kind`). Just needs to be stored on the agent record and returned via `get_positions` or agent listing.
+Access-checked. gemotvis doesn't call this directly — it's for pipeline use. But it means validation data will be present in `get_result` responses for deliberations that ran validation.
 
-**Impact**: Enables speaker/structural split in crux display, participant categorization in report, resolution proposal highlighting, and visual differentiation in graph view.
+### 7. ANALYSIS_REFUSED / HALLUCINATION warnings — ALREADY AVAILABLE
+Already in `integrity_warnings` array. No API changes needed.
 
-## What gemotvis Would Do With This Data
+**gemotvis TODO**:
+- Parse `ANALYSIS_REFUSED:` prefix → suppress compromise proposal, show warning banner
+- Parse `HALLUCINATION:` prefix → count occurrences, show tiered severity in reliability table (1-3: minor, 4-9: moderate, 10+: high)
 
-| Data | Report section | Graph view enhancement |
-|---|---|---|
-| `discarded_cruxes` | Dedicated section (currently hacked via warning parsing) | — |
-| `topic_id` | Cross-round topic tracking in evolution section | — |
-| Multi-round analysis | Evolution section (new cruxes, topic changes, position revision) | Round selector in scrubber |
-| Null control | Comparison table + reliability row | Confidence badge color |
-| Replication | Stability table + reliability row | — |
-| Verification | Score distribution (1-5) + reliability row | — |
-| Coverage gaps | "Missing Perspectives" section | — |
-| Agent kind | Speaker/structural split in cruxes, resolution highlighting | Node shape/color by type |
+## Implementation Guide for gemotvis
 
-## Priority
+### Phase 1: Quick wins (frontend-only, no API changes)
+1. Add `discarded_cruxes` and `topic_id` to mirrored types
+2. Parse `ANALYSIS_REFUSED` / `HALLUCINATION` from integrity warnings
+3. Read `metadata.kind` from positions for agent categorization
+4. Suppress compromise when ANALYSIS_REFUSED
 
-1. **Consume `discarded_cruxes` + `topic_id`** — zero API work, just gemotvis types (do now)
-2. **Parse ANALYSIS_REFUSED / HALLUCINATION from integrity warnings** — frontend-only (do now)
-3. **Agent `kind` field** — small API change, high impact on both report and graph
-4. **Multi-round access** — enables the most valuable report sections (evolution)
-5. **Validation results on AnalysisResult** — enables full reliability table parity with report.go
-6. **Coverage gaps** — nice-to-have, lower priority
+### Phase 2: Validation display
+5. Check for `null_control`, `verification`, `replication`, `coverage_gaps` on analysis results
+6. Render reliability table (conditional on field presence)
+7. Render stance verification score distribution
+8. Render missing perspectives section
 
-## Alternatives Considered
+### Phase 3: Multi-round evolution
+9. Fetch all rounds via `round:-1`
+10. Build evolution section: cross-round crux comparison, topic rename tracking, position revision display
+11. Add round selector/scrubber to report view
 
-- **gemotvis calls t3c-import directly**: Wrong — t3c-import is a batch pipeline, not a service. gemotvis should only talk to gemot's A2A API.
-- **Embed report.go output as markdown**: Could render pre-generated markdown, but loses interactivity (collapsible sections, theme support, graph integration).
-- **Parse all data from integrity_warnings**: Current approach for discarded cruxes. Works but fragile — coupled to warning string format, loses structured data.
+### Report structure reference
+The sections in order (matching `integrations/t3c/ai-manifestos-report.md`):
+
+1. **Key Findings** — top 3 cruxes + proposed resolutions (if R3)
+2. **Stance Verification** — score distribution table + downgraded stances
+3. **Participants** — categorized by kind (clusters, speakers, probes, R2, R3)
+4. **Round 1: Initial Analysis** — cruxes (two-track display), unchallenged positions, compromise, topics
+5. **Round 2: Emergent Findings** — same structure, plus evolution section
+6. **Round 3: Revised Positions** — cruxes with resolution agents, position evolution (R1→R3)
+7. **Discarded Cruxes** — with failure mode classification
+8. **Integrity** — warnings (excluding DEGENERATE which is shown above)
+9. **Null Control** — comparison table + verdict
+10. **Missing Perspectives** — coverage gaps
+11. **Replication** — per-run metrics + stability CV
+12. **Spot-Check Failures** — failed stance verifications with reasons
+13. **Cluster Stability** — multi-threshold table (70/80/90%)
+14. **Reliability** — summary table (coherence, hallucinations, stance grounding, null control, replication, grounding fidelity)
+15. **Methodology Notes** — agent construction, score interpretation, multiple comparisons, circularity, replicability
+16. **Next Steps** — join code, continue deliberating, replicate, validate
