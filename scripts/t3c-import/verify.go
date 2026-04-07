@@ -11,20 +11,20 @@ import (
 )
 
 type verifyResult struct {
-	Total      int
-	Checked    int
-	Downgraded int
-	Threshold  int    // stances at or below this score were downgraded
-	Details    []verifyDetail
-	ScoreDist  [6]int // index 0 unused, 1-5 count stances at each score
+	Total      int            `json:"total"`
+	Checked    int            `json:"checked"`
+	Downgraded int            `json:"downgraded"`
+	Threshold  int            `json:"threshold"`
+	ScoreDist  []int          `json:"score_dist"`
+	Details    []verifyDetail `json:"details,omitempty"`
 }
 
 type verifyDetail struct {
-	Speaker    string
-	Crux       string
-	OrigStance string
-	Score      int
-	Reason     string
+	Speaker    string `json:"speaker"`
+	Crux       string `json:"crux"`
+	OrigStance string `json:"orig_stance"`
+	Score      int    `json:"score"`
+	Reason     string `json:"reason"`
 }
 
 // verifyStances checks agree and disagree stances in the speaker-crux matrix
@@ -70,7 +70,7 @@ func verifyStances(data *ReportData, threshold int) *verifyResult {
 	fmt.Fprintf(os.Stderr, "  verify-stances: scoring %d stances (1-5 scale, threshold ≤%d)...\n", total, threshold)
 
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
-	result := &verifyResult{Total: total, Threshold: threshold}
+	result := &verifyResult{Total: total, Threshold: threshold, ScoreDist: make([]int, 6)}
 
 	for i, speaker := range matrix.Speakers {
 		if i >= len(matrix.Matrix) {
