@@ -23,6 +23,7 @@ type Crux struct {
 	SourceQuotes      []SourceQuote `json:"source_quotes,omitempty"`       // verbatim quotes grounding this crux
 	CruxType          string        `json:"crux_type,omitempty"`           // "factual", "value", "mixed"
 	Resolvability     float64       `json:"resolvability,omitempty"`       // 0-1, how likely evidence could resolve it
+	Degenerate        bool          `json:"degenerate,omitempty"`          // true if one side has no agents after validation
 }
 
 type OpinionCluster struct {
@@ -119,6 +120,7 @@ type AnalysisResult struct {
 	Round               int                  `json:"round_number"`
 	Clusters            []OpinionCluster     `json:"clusters"`
 	Cruxes              []Crux               `json:"cruxes"`
+	DiscardedCruxes     []Crux               `json:"discarded_cruxes,omitempty"` // degenerate cruxes with one empty side
 	ConsensusStatements []ConsensusStatement `json:"consensus_statements"`
 	BridgingStatements  []BridgingStatement  `json:"bridging_statements,omitempty"`
 	TopicSummaries      []TopicSummary       `json:"topic_summaries"`
