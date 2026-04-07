@@ -183,7 +183,7 @@ func CoreExportDeliberation(svc *deliberation.Service, deliberationID, keyID str
 
 	// Include audit log if store is available
 	if len(auditLog) > 0 && auditLog[0] != nil {
-		if ops, err := auditLog[0].GetAuditLog(deliberationID, 500); err == nil {
+		if ops, err := auditLog[0].GetAuditLog(deliberationID, -1); err == nil {
 			export["audit_log"] = ops
 		}
 	}

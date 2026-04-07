@@ -930,13 +930,23 @@ func (s *DB) HasContextAccess(ctx context.Context, deliberationID, agentID strin
 // GetAuditLog returns audit entries for a deliberation.
 // Agents can query this to verify their operations were recorded (mutual verification).
 func (s *DB) GetAuditLog(deliberationID string, limit int) ([]map[string]string, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 50
+	var rows *sql.Rows
+	var err error
+	if limit < 0 {
+		// No limit — return all entries (used by export)
+		rows, err = s.db.Query(
+			`SELECT id, COALESCE(timestamp, NOW()), COALESCE(key_id,''), method, COALESCE(agent_id,'') FROM audit_log WHERE deliberation_id = $1 ORDER BY id ASC`,
+			deliberationID,
+		)
+	} else {
+		if limit == 0 {
+			limit = 50
+		}
+		rows, err = s.db.Query(
+			`SELECT id, COALESCE(timestamp, NOW()), COALESCE(key_id,''), method, COALESCE(agent_id,'') FROM audit_log WHERE deliberation_id = $1 ORDER BY id ASC LIMIT $2`,
+			deliberationID, limit,
+		)
 	}
-	rows, err := s.db.Query(
-		`SELECT id, COALESCE(timestamp, NOW()), COALESCE(key_id,''), method, COALESCE(agent_id,'') FROM audit_log WHERE deliberation_id = $1 ORDER BY id ASC LIMIT $2`,
-		deliberationID, limit,
-	)
 	if err != nil {
 		return nil, err
 	}
