@@ -223,6 +223,10 @@ type Service struct {
 	// Prevents concurrent votes from computing conflicting resolutions.
 	resolutionMu    sync.Mutex
 	resolutionLocks map[string]*sync.Mutex
+
+	// Optional audit logger — set via SetAuditLogger after construction.
+	// Logs all write operations at the service layer so nothing bypasses the audit trail.
+	auditFn func(method, deliberationID, agentID string)
 }
 
 func NewService(store Store, analyzer Analyzer) *Service {
@@ -231,6 +235,17 @@ func NewService(store Store, analyzer Analyzer) *Service {
 		analyzer:        analyzer,
 		activeAnalyses:  make(map[string]context.CancelFunc),
 		resolutionLocks: make(map[string]*sync.Mutex),
+	}
+}
+
+// SetAuditLogger sets a function that logs all service-level write operations.
+func (s *Service) SetAuditLogger(fn func(method, deliberationID, agentID string)) {
+	s.auditFn = fn
+}
+
+func (s *Service) audit(method, deliberationID, agentID string) {
+	if s.auditFn != nil {
+		s.auditFn(method, deliberationID, agentID)
 	}
 }
 
@@ -468,6 +483,7 @@ func (s *Service) CreateDeliberation(topic, description string, opts ...Delibera
 		}
 	}
 
+	s.audit("deliberation:create", d.ID, "")
 	s.emit("deliberation_created", d.ID, "", d.Topic)
 	return d, nil
 }
@@ -544,7 +560,11 @@ func (s *Service) DeleteDeliberation(deliberationID, callerKeyID string, isAdmin
 			return fmt.Errorf("only the deliberation creator or admin can delete")
 		}
 	}
-	return s.store.DeleteDeliberation(context.TODO(), deliberationID)
+	if err := s.store.DeleteDeliberation(context.TODO(), deliberationID); err != nil {
+		return err
+	}
+	s.audit("deliberation:delete", deliberationID, "")
+	return nil
 }
 
 // ReportAbuse files an abuse report for manual review.
@@ -682,6 +702,7 @@ func (s *Service) SubmitPosition(deliberationID, agentID, content string, opts .
 	if err := s.store.CreatePosition(context.TODO(), p); err != nil {
 		return nil, err
 	}
+	s.audit("participate:submit_position", deliberationID, agentID)
 	s.emitWithData("position_submitted", deliberationID, agentID, p.ID, map[string]any{
 		"position_id": p.ID,
 		"content":     p.Content,
@@ -752,6 +773,7 @@ func (s *Service) Vote(deliberationID, agentID, positionID string, value int, cr
 	if err := s.store.CreateVote(context.TODO(), v); err != nil {
 		return err
 	}
+	s.audit("participate:vote", deliberationID, agentID)
 	s.emitWithData("vote_cast", deliberationID, agentID, positionID, map[string]any{
 		"position_id": positionID,
 		"value":       value,
@@ -1606,6 +1628,7 @@ func (s *Service) Commit(deliberationID, agentID, statement, conditional string)
 		c.Status = "active"
 		_ = s.store.UpdateCommitmentStatus(context.TODO(), c.ID, "active")
 	}
+	s.audit("decide:commit", deliberationID, agentID)
 	return c, nil
 }
 
@@ -1614,11 +1637,19 @@ func (s *Service) GetCommitments(deliberationID string) ([]Commitment, error) {
 }
 
 func (s *Service) FulfillCommitment(commitmentID, verifiedBy string) error {
-	return s.store.FulfillCommitment(context.TODO(), commitmentID, verifiedBy)
+	err := s.store.FulfillCommitment(context.TODO(), commitmentID, verifiedBy)
+	if err == nil {
+		s.audit("decide:fulfill", "", verifiedBy)
+	}
+	return err
 }
 
 func (s *Service) BreakCommitment(commitmentID, reason, verifiedBy string) error {
-	return s.store.BreakCommitment(context.TODO(), commitmentID, reason, verifiedBy)
+	err := s.store.BreakCommitment(context.TODO(), commitmentID, reason, verifiedBy)
+	if err == nil {
+		s.audit("decide:break", "", verifiedBy)
+	}
+	return err
 }
 
 func (s *Service) AgentReputation(agentID, groupID string) (ReputationSummary, error) {

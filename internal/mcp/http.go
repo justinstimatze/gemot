@@ -36,6 +36,13 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	}
 
 	gemotDB, _ := store.WrapRawDB(db)
+
+	// Wire service-level audit logging so ALL write operations are tracked,
+	// regardless of whether they come through MCP, A2A, or internal calls (e.g., expert panels).
+	svc.SetAuditLogger(func(method, deliberationID, agentID string) {
+		gemotDB.LogAuditEvent("", "", method, deliberationID, agentID)
+	})
+
 	s := &server{svc: svc, credits: creditStore, db: gemotDB, shutdown: ctx}
 	srv := newServer(s)
 
