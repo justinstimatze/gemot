@@ -61,7 +61,7 @@ func RunAnalysisAsync(svc *deliberation.Service, db *store.DB, credits *payments
 			if r := recover(); r != nil {
 				slog.Error("PANIC in analysis", "deliberation_id", deliberationID, "panic", r)
 				// Reset status so deliberation isn't stuck in "analyzing"
-				svc.ResetAnalyzingStatus(deliberationID)
+				svc.ResetAnalyzingStatus(context.Background(), deliberationID)
 				if apiKey != "" && creditCost > 0 && credits != nil {
 					_, _ = credits.AddCredits(apiKey, creditCost)
 				}
@@ -316,7 +316,7 @@ func (s *server) handleDeliberation(ctx context.Context, _ *sdkmcp.CallToolReque
 		if keyID != "" {
 			dopts = append(dopts, deliberation.WithCreatorKey(keyID))
 		}
-		d, err := s.svc.CreateDeliberation(args.Topic, args.Description, dopts...)
+		d, err := s.svc.CreateDeliberation(ctx, args.Topic, args.Description, dopts...)
 		if err != nil {
 			return errResult(err)
 		}
@@ -327,31 +327,31 @@ func (s *server) handleDeliberation(ctx context.Context, _ *sdkmcp.CallToolReque
 		if args.DeliberationID == "" {
 			return errResult(fmt.Errorf("deliberation_id is required"))
 		}
-		if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
-		d, err := s.svc.GetDeliberation(args.DeliberationID)
+		d, err := s.svc.GetDeliberation(ctx, args.DeliberationID)
 		if err != nil {
 			return errResult(err)
 		}
 		return jsonResult(d)
 
 	case "list":
-		deliberations, err := s.svc.ListDeliberations(args.Limit, args.Offset, keyID)
+		deliberations, err := s.svc.ListDeliberations(ctx, args.Limit, args.Offset, keyID)
 		if err != nil {
 			return errResult(err)
 		}
 		return jsonResult(deliberations)
 
 	case "list_by_group":
-		delibs, err := CoreListByGroup(s.svc, args.GroupID, keyID, isAdmin, args.Limit, args.Offset)
+		delibs, err := CoreListByGroup(ctx, s.svc, args.GroupID, keyID, isAdmin, args.Limit, args.Offset)
 		if err != nil {
 			return errResult(err)
 		}
 		return jsonResult(delibs)
 
 	case "list_by_agent":
-		delibs, err := CoreListByAgent(s.svc, args.AgentID, keyID, isAdmin, args.Limit, args.Offset)
+		delibs, err := CoreListByAgent(ctx, s.svc, args.AgentID, keyID, isAdmin, args.Limit, args.Offset)
 		if err != nil {
 			return errResult(err)
 		}
@@ -361,7 +361,7 @@ func (s *server) handleDeliberation(ctx context.Context, _ *sdkmcp.CallToolReque
 		if args.DeliberationID == "" {
 			return errResult(fmt.Errorf("deliberation_id is required"))
 		}
-		if err := s.svc.DeleteDeliberation(args.DeliberationID, keyID, isAdmin); err != nil {
+		if err := s.svc.DeleteDeliberation(ctx, args.DeliberationID, keyID, isAdmin); err != nil {
 			return errResult(err)
 		}
 		s.audit(ctx, "deliberation:delete", args.DeliberationID, "")
@@ -371,7 +371,7 @@ func (s *server) handleDeliberation(ctx context.Context, _ *sdkmcp.CallToolReque
 		if args.DeliberationID == "" || args.Template == "" {
 			return errResult(fmt.Errorf("deliberation_id and template are required"))
 		}
-		if err := s.svc.SetTemplate(args.DeliberationID, args.Template, keyID); err != nil {
+		if err := s.svc.SetTemplate(ctx, args.DeliberationID, args.Template, keyID); err != nil {
 			return errResult(err)
 		}
 		tmpl, _ := deliberation.GetTemplate(args.Template)
@@ -384,7 +384,7 @@ func (s *server) handleDeliberation(ctx context.Context, _ *sdkmcp.CallToolReque
 		}, "Template updated. The next analysis will use this template's governance model and consensus threshold.")
 
 	case "export":
-		export, err := CoreExportDeliberation(s.svc, args.DeliberationID, keyID, s.db)
+		export, err := CoreExportDeliberation(ctx, s.svc, args.DeliberationID, keyID, s.db)
 		if err != nil {
 			return errResult(err)
 		}
@@ -407,14 +407,14 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 			return errResult(fmt.Errorf("content exceeds maximum length of 65536 bytes"))
 		}
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
-		if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
 		// Check position cost
 		var posCost int
 		var posApiKey string
 		if !args.Draft {
-			if d, err := s.svc.GetDeliberation(args.DeliberationID); err == nil {
+			if d, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err == nil {
 				posCost = deliberation.RuleInt(d, "position_cost", 0)
 				if posCost > 0 {
 					posApiKey, _ = ctx.Value(payments.ContextKeyAPIKey{}).(string)
@@ -452,7 +452,7 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if len(args.Metadata) > 0 {
 			opts = append(opts, deliberation.WithMetadata(args.Metadata))
 		}
-		p, err := s.svc.SubmitPosition(args.DeliberationID, args.AgentID, args.Content, opts...)
+		p, err := s.svc.SubmitPosition(ctx, args.DeliberationID, args.AgentID, args.Content, opts...)
 		if err != nil {
 			return errResult(err)
 		}
@@ -467,13 +467,13 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 			hint = "Draft saved. Next: participate action:publish_position when ready."
 		}
 		// Quorum hint: tell the agent if more participants are needed
-		if err := s.svc.CheckQuorum(args.DeliberationID); err != nil {
+		if err := s.svc.CheckQuorum(ctx, args.DeliberationID); err != nil {
 			hint += " Note: " + err.Error() + "."
 		}
 		return jsonResultWithHints(p, hint)
 
 	case "publish_position":
-		if err := CorePublishPosition(s.svc, args.PositionID, keyID); err != nil {
+		if err := CorePublishPosition(ctx, s.svc, args.PositionID, keyID); err != nil {
 			return errResult(err)
 		}
 		return textResult("position published"), nil, nil
@@ -483,14 +483,14 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 			return errResult(fmt.Errorf("deliberation_id, agent_id, and position_id are required"))
 		}
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
-		if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
 		value, err := coerceVoteValue(args.Value)
 		if err != nil {
 			return errResult(err)
 		}
-		if err := s.svc.Vote(args.DeliberationID, args.AgentID, args.PositionID, value, args.CriterionID); err != nil {
+		if err := s.svc.Vote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.CriterionID); err != nil {
 			return errResult(err)
 		}
 		s.audit(ctx, "participate:vote", args.DeliberationID, args.AgentID)
@@ -500,10 +500,10 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if args.DeliberationID == "" {
 			return errResult(fmt.Errorf("deliberation_id is required"))
 		}
-		if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
-		positions, err := s.svc.GetPositions(args.DeliberationID, args.ExcludeAgentID, args.Round)
+		positions, err := s.svc.GetPositions(ctx, args.DeliberationID, args.ExcludeAgentID, args.Round)
 		if err != nil {
 			return errResult(err)
 		}
@@ -529,11 +529,11 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if args.DeliberationID == "" || args.AgentID == "" {
 			return errResult(fmt.Errorf("deliberation_id and agent_id are required"))
 		}
-		if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
-		actx, err := s.svc.GetContext(args.DeliberationID, args.AgentID)
+		actx, err := s.svc.GetContext(ctx, args.DeliberationID, args.AgentID)
 		if err != nil {
 			return errResult(err)
 		}
@@ -548,7 +548,7 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 			return errResult(fmt.Errorf("deliberation_id and agent_id are required"))
 		}
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
-		if err := CoreWithdraw(s.svc, args.DeliberationID, args.AgentID, keyID); err != nil {
+		if err := CoreWithdraw(ctx, s.svc, args.DeliberationID, args.AgentID, keyID); err != nil {
 			return errResult(err)
 		}
 		s.audit(ctx, "participate:withdraw", args.DeliberationID, args.AgentID)
@@ -574,7 +574,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		if sandbox, _ := ctx.Value(payments.ContextKeySandbox{}).(bool); sandbox {
 			apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
 			if apiKey == "" {
-				existing, _ := s.svc.GetLatestAnalysisResult(args.DeliberationID)
+				existing, _ := s.svc.GetLatestAnalysisResult(ctx, args.DeliberationID)
 				if existing != nil {
 					return errResult(fmt.Errorf("sandbox deliberations get 1 free analysis — get an API key at https://gemot.dev/pricing for more"))
 				}
@@ -589,14 +589,14 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 				return errResult(fmt.Errorf("insufficient credits: have %d, need %d — buy more at https://gemot.dev/pricing", balance, creditCost))
 			}
 		}
-		if _, err := s.svc.GetDeliberation(args.DeliberationID); err != nil {
+		if _, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err != nil {
 			if creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
 			}
 			return errResult(fmt.Errorf("deliberation not found: %w", err))
 		}
 		// Pre-check quorum before launching async analysis — fail fast with a clear message
-		if err := s.svc.CheckQuorum(args.DeliberationID); err != nil {
+		if err := s.svc.CheckQuorum(ctx, args.DeliberationID); err != nil {
 			if creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
 			}
@@ -610,7 +610,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		)), nil, nil
 
 	case "get_result":
-		result, err := CoreGetAnalysisResult(s.svc, args.DeliberationID, keyID, args.Round)
+		result, err := CoreGetAnalysisResult(ctx, s.svc, args.DeliberationID, keyID, args.Round)
 		if err != nil {
 			return errResult(err)
 		}
@@ -623,7 +623,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		if args.DeliberationID == "" {
 			return errResult(fmt.Errorf("deliberation_id is required"))
 		}
-		if err := CoreCancelAnalysis(s.svc, args.DeliberationID, keyID); err != nil {
+		if err := CoreCancelAnalysis(ctx, s.svc, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
 		s.audit(ctx, "analyze:cancel", args.DeliberationID, "")
@@ -663,7 +663,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 
 	case "reframe":
 		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
-		result, err := CoreReframe(s.svc, s.credits, args.DeliberationID, args.PositionID, args.Model, keyID, false, apiKey)
+		result, err := CoreReframe(ctx, s.svc, s.credits, args.DeliberationID, args.PositionID, args.Model, keyID, false, apiKey)
 		if err != nil {
 			return errResult(err)
 		}
@@ -671,7 +671,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 
 	case "challenge":
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
-		result, err := CoreChallengeAnalysis(s.svc, args.DeliberationID, args.AgentID, args.Reason, keyID)
+		result, err := CoreChallengeAnalysis(ctx, s.svc, args.DeliberationID, args.AgentID, args.Reason, keyID)
 		if err != nil {
 			return errResult(err)
 		}
@@ -682,7 +682,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 			return errResult(fmt.Errorf("deliberation_id, agent_id, crux_claim, and correction are required"))
 		}
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
-		d, err := s.svc.DisputeCrux(args.DeliberationID, args.AgentID, args.CruxClaim, args.Correction)
+		d, err := s.svc.DisputeCrux(ctx, args.DeliberationID, args.AgentID, args.CruxClaim, args.Correction)
 		if err != nil {
 			return errResult(err)
 		}
@@ -766,7 +766,7 @@ func (s *server) handleDecide(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 			return errResult(fmt.Errorf("deliberation_id, agent_id, and statement are required"))
 		}
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
-		c, err := s.svc.Commit(args.DeliberationID, args.AgentID, args.Statement, args.Conditional)
+		c, err := s.svc.Commit(ctx, args.DeliberationID, args.AgentID, args.Statement, args.Conditional)
 		if err != nil {
 			return errResult(err)
 		}
@@ -774,7 +774,7 @@ func (s *server) handleDecide(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 		return jsonResult(c)
 
 	case "get_commitments":
-		commitments, err := CoreGetCommitments(s.svc, args.DeliberationID, keyID)
+		commitments, err := CoreGetCommitments(ctx, s.svc, args.DeliberationID, keyID)
 		if err != nil {
 			return errResult(err)
 		}
@@ -785,7 +785,7 @@ func (s *server) handleDecide(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 		if verifiedBy == "" {
 			verifiedBy = keyID
 		}
-		if err := CoreFulfillCommitment(s.svc, args.CommitmentID, verifiedBy); err != nil {
+		if err := CoreFulfillCommitment(ctx, s.svc, args.CommitmentID, verifiedBy); err != nil {
 			return errResult(err)
 		}
 		return textResult("commitment fulfilled"), nil, nil
@@ -795,13 +795,13 @@ func (s *server) handleDecide(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 		if verifiedBy == "" {
 			verifiedBy = keyID
 		}
-		if err := CoreBreakCommitment(s.svc, args.CommitmentID, args.Reason, verifiedBy); err != nil {
+		if err := CoreBreakCommitment(ctx, s.svc, args.CommitmentID, args.Reason, verifiedBy); err != nil {
 			return errResult(err)
 		}
 		return textResult("commitment marked as broken"), nil, nil
 
 	case "reputation":
-		rep, err := CoreAgentReputation(s.svc, args.AgentID, args.GroupID)
+		rep, err := CoreAgentReputation(ctx, s.svc, args.AgentID, args.GroupID)
 		if err != nil {
 			return errResult(err)
 		}
@@ -820,7 +820,7 @@ func (s *server) handleCoordinate(ctx context.Context, _ *sdkmcp.CallToolRequest
 		}
 		args.FromAgent = scopeAgentID(ctx, args.FromAgent)
 		args.ToAgent = scopeAgentID(ctx, args.ToAgent)
-		d, err := s.svc.Delegate(args.DeliberationID, args.FromAgent, args.ToAgent, args.Scope)
+		d, err := s.svc.Delegate(ctx, args.DeliberationID, args.FromAgent, args.ToAgent, args.Scope)
 		if err != nil {
 			return errResult(err)
 		}
@@ -832,7 +832,7 @@ func (s *server) handleCoordinate(ctx context.Context, _ *sdkmcp.CallToolRequest
 			return errResult(fmt.Errorf("deliberation_id, invited_by, invited_agent, and reason are required"))
 		}
 		args.InvitedBy = scopeAgentID(ctx, args.InvitedBy)
-		inv, err := s.svc.InviteAgent(args.DeliberationID, args.InvitedBy, args.InvitedAgent, args.Role, args.Reason)
+		inv, err := s.svc.InviteAgent(ctx, args.DeliberationID, args.InvitedBy, args.InvitedAgent, args.Role, args.Reason)
 		if err != nil {
 			return errResult(err)
 		}
@@ -849,7 +849,7 @@ func (s *server) handleCoordinate(ctx context.Context, _ *sdkmcp.CallToolRequest
 		if ttl > 24*time.Hour {
 			ttl = 24 * time.Hour
 		}
-		jc, err := s.svc.GenerateJoinCode(args.DeliberationID, args.Role, ttl)
+		jc, err := s.svc.GenerateJoinCode(ctx, args.DeliberationID, args.Role, ttl)
 		if err != nil {
 			return errResult(err)
 		}
@@ -859,7 +859,7 @@ func (s *server) handleCoordinate(ctx context.Context, _ *sdkmcp.CallToolRequest
 		if args.Code == "" || args.AgentID == "" {
 			return errResult(fmt.Errorf("code and agent_id are required"))
 		}
-		deliberationID, role, err := s.svc.JoinDeliberation(args.Code, args.AgentID)
+		deliberationID, role, err := s.svc.JoinDeliberation(ctx, args.Code, args.AgentID)
 		if err != nil {
 			return errResult(err)
 		}
@@ -885,7 +885,7 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 		if args.DeliberationID == "" || args.Reason == "" {
 			return errResult(fmt.Errorf("deliberation_id and reason are required"))
 		}
-		if err := s.svc.ReportAbuse(args.DeliberationID, keyID, args.Reason); err != nil {
+		if err := s.svc.ReportAbuse(ctx, args.DeliberationID, keyID, args.Reason); err != nil {
 			return errResult(err)
 		}
 		s.audit(ctx, "admin:report_abuse", args.DeliberationID, "")
@@ -895,7 +895,7 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 		if args.DeliberationID == "" {
 			return errResult(fmt.Errorf("deliberation_id is required"))
 		}
-		if err := s.svc.CheckAccess(args.DeliberationID, keyID); err != nil {
+		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
 		opLog, err := s.db.GetAuditLog(args.DeliberationID, 50)
@@ -915,7 +915,7 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 		return jsonResult(deliberation.ListTemplates())
 
 	case "get_votes":
-		votes, err := CoreGetVotes(s.svc, args.DeliberationID, keyID)
+		votes, err := CoreGetVotes(ctx, s.svc, args.DeliberationID, keyID)
 		if err != nil {
 			return errResult(err)
 		}

@@ -146,7 +146,7 @@ func TestBridgingStatements(t *testing.T) {
 
 	svc := deliberation.NewService(db, analyzer)
 
-	d, err := svc.CreateDeliberation("Bridging test", "")
+	d, err := svc.CreateDeliberation(context.Background(), "Bridging test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestBridgingStatements(t *testing.T) {
 	agents := []string{"alice", "bob", "carol", "dave"}
 	posIDs := make([]string, 4)
 	for i, a := range agents {
-		p, err := svc.SubmitPosition(d.ID, a, "Position from "+a)
+		p, err := svc.SubmitPosition(context.Background(), d.ID, a, "Position from "+a)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -167,18 +167,18 @@ func TestBridgingStatements(t *testing.T) {
 		if voter == "alice" {
 			continue
 		}
-		_ = svc.Vote(d.ID, voter, posIDs[0], 1)
+		_ = svc.Vote(context.Background(), d.ID, voter, posIDs[0], 1)
 	}
 
 	// bob's position: only cluster 0 agrees (not bridging)
-	_ = svc.Vote(d.ID, "alice", posIDs[1], 1)
-	_ = svc.Vote(d.ID, "carol", posIDs[1], -1)
-	_ = svc.Vote(d.ID, "dave", posIDs[1], -1)
+	_ = svc.Vote(context.Background(), d.ID, "alice", posIDs[1], 1)
+	_ = svc.Vote(context.Background(), d.ID, "carol", posIDs[1], -1)
+	_ = svc.Vote(context.Background(), d.ID, "dave", posIDs[1], -1)
 
 	// carol's position: mixed but cross-cluster (bridging)
-	_ = svc.Vote(d.ID, "alice", posIDs[2], 1)
-	_ = svc.Vote(d.ID, "bob", posIDs[2], 0)
-	_ = svc.Vote(d.ID, "dave", posIDs[2], 1)
+	_ = svc.Vote(context.Background(), d.ID, "alice", posIDs[2], 1)
+	_ = svc.Vote(context.Background(), d.ID, "bob", posIDs[2], 0)
+	_ = svc.Vote(context.Background(), d.ID, "dave", posIDs[2], 1)
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -216,9 +216,9 @@ func TestBridgingRequiresTwoClusters(t *testing.T) {
 	// Use mock that returns 2 clusters but we'll only have votes from 1 agent
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Single cluster", "")
-	p, _ := svc.SubmitPosition(d.ID, "alice", "Solo position")
-	_ = svc.Vote(d.ID, "alice", p.ID, 1)
+	d, _ := svc.CreateDeliberation(context.Background(), "Single cluster", "")
+	p, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Solo position")
+	_ = svc.Vote(context.Background(), d.ID, "alice", p.ID, 1)
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -235,11 +235,11 @@ func TestAnalysisProvenance(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &bridgingAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Provenance test", "")
-	p1, _ := svc.SubmitPosition(d.ID, "alice", "Position A")
-	p2, _ := svc.SubmitPosition(d.ID, "bob", "Position B")
-	_ = svc.Vote(d.ID, "alice", p2.ID, -1)
-	_ = svc.Vote(d.ID, "bob", p1.ID, -1)
+	d, _ := svc.CreateDeliberation(context.Background(), "Provenance test", "")
+	p1, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Position A")
+	p2, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "Position B")
+	_ = svc.Vote(context.Background(), d.ID, "alice", p2.ID, -1)
+	_ = svc.Vote(context.Background(), d.ID, "bob", p1.ID, -1)
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -302,12 +302,12 @@ func TestRoundDriftDetection(t *testing.T) {
 	}}
 
 	svc := deliberation.NewService(db, analyzer)
-	d, _ := svc.CreateDeliberation("Drift test", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Drift test", "")
 
 	// Round 1: divergent positions
 	agents := []string{"alice", "bob", "carol", "dave"}
 	for _, a := range agents {
-		svc.SubmitPosition(d.ID, a, "Position from "+a)
+		svc.SubmitPosition(context.Background(), d.ID, a, "Position from "+a)
 	}
 
 	result1, err := svc.Analyze(context.Background(), d.ID)
@@ -320,7 +320,7 @@ func TestRoundDriftDetection(t *testing.T) {
 
 	// Round 2: same agents, converged positions
 	for _, a := range agents {
-		svc.SubmitPosition(d.ID, a, "We all agree now")
+		svc.SubmitPosition(context.Background(), d.ID, a, "We all agree now")
 	}
 
 	result2, err := svc.Analyze(context.Background(), d.ID)

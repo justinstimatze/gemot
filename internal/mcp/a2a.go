@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -119,9 +118,11 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			return
 		}
 
+		ctx := r.Context()
+
 		// Access control helper
 		checkAccess := func(deliberationID string) error {
-			return svc.CheckAccess(deliberationID, keyID)
+			return svc.CheckAccess(ctx, deliberationID, keyID)
 		}
 		// Credit deduction helper for LLM calls
 		deductCredits := func(model string) (int, error) {
@@ -218,7 +219,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				if keyID != "" {
 					dopts = append(dopts, deliberation.WithCreatorKey(keyID))
 				}
-				d, err := svc.CreateDeliberation(str(s, "topic"), str(s, "description"), dopts...)
+				d, err := svc.CreateDeliberation(ctx, str(s, "topic"), str(s, "description"), dopts...)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -230,7 +231,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				d, err := svc.GetDeliberation(str(s, "deliberation_id"))
+				d, err := svc.GetDeliberation(ctx, str(s, "deliberation_id"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32603, sanitizeError(err))
 					return
@@ -245,7 +246,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				if v, ok := s["offset"].(float64); ok {
 					pgOffset = int(v)
 				}
-				delibs, err := svc.ListDeliberations(pgLimit, pgOffset, keyID)
+				delibs, err := svc.ListDeliberations(ctx, pgLimit, pgOffset, keyID)
 				if err != nil {
 					writeA2AError(w, req.ID, -32603, sanitizeError(err))
 					return
@@ -260,7 +261,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				if v, ok := s["offset"].(float64); ok {
 					pgOffset = int(v)
 				}
-				delibs, err := CoreListByGroup(svc, str(s, "group_id"), keyID, isAdmin, pgLimit, pgOffset)
+				delibs, err := CoreListByGroup(ctx, svc, str(s, "group_id"), keyID, isAdmin, pgLimit, pgOffset)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
@@ -275,7 +276,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				if v, ok := s["offset"].(float64); ok {
 					pgOffset = int(v)
 				}
-				delibs, err := CoreListByAgent(svc, str(s, "agent_id"), keyID, isAdmin, pgLimit, pgOffset)
+				delibs, err := CoreListByAgent(ctx, svc, str(s, "agent_id"), keyID, isAdmin, pgLimit, pgOffset)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
@@ -288,7 +289,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32602, "deliberation_id is required")
 					return
 				}
-				if err := svc.DeleteDeliberation(deliberationID, keyID, isAdmin); err != nil {
+				if err := svc.DeleteDeliberation(ctx, deliberationID, keyID, isAdmin); err != nil {
 					writeA2AError(w, req.ID, -32603, sanitizeError(err))
 					return
 				}
@@ -301,7 +302,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32602, "deliberation_id and template are required")
 					return
 				}
-				if err := svc.SetTemplate(deliberationID, template, keyID); err != nil {
+				if err := svc.SetTemplate(ctx, deliberationID, template, keyID); err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
@@ -314,7 +315,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				})
 
 			case "export":
-				export, err := CoreExportDeliberation(svc, str(s, "deliberation_id"), keyID, auditLog)
+				export, err := CoreExportDeliberation(ctx, svc, str(s, "deliberation_id"), keyID, auditLog)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
@@ -332,7 +333,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32602, "deliberation_id and group_id are required")
 					return
 				}
-				if err := svc.SetGroupID(deliberationID, groupID); err != nil {
+				if err := svc.SetGroupID(ctx, deliberationID, groupID); err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
@@ -348,7 +349,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32602, "group_id is required")
 					return
 				}
-				shareToken, err := svc.CreateShareToken(groupID)
+				shareToken, err := svc.CreateShareToken(ctx, groupID)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -364,12 +365,12 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32602, "token is required")
 					return
 				}
-				groupID, err := svc.LookupShareToken(shareToken)
+				groupID, err := svc.LookupShareToken(ctx, shareToken)
 				if err != nil {
 					writeA2AError(w, req.ID, -32603, sanitizeError(err))
 					return
 				}
-				delibs, err := CoreListByGroup(svc, groupID, keyID, isAdmin, 0, 0)
+				delibs, err := CoreListByGroup(ctx, svc, groupID, keyID, isAdmin, 0, 0)
 				if err != nil {
 					writeA2AError(w, req.ID, -32603, sanitizeError(err))
 					return
@@ -436,7 +437,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				}
 				var posCost int
 				if !isDraft && !isAdmin {
-					if dd, err := svc.GetDeliberation(str(s, "deliberation_id")); err == nil {
+					if dd, err := svc.GetDeliberation(ctx, str(s, "deliberation_id")); err == nil {
 						posCost = deliberation.RuleInt(dd, "position_cost", 0)
 						if posCost > 0 && creditStore != nil && token != "" && strings.HasPrefix(token, "gmt_") {
 							balance, _ := creditStore.GetBalance(token)
@@ -447,7 +448,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						}
 					}
 				}
-				p, err := svc.SubmitPosition(str(s, "deliberation_id"), agentID, content, popts...)
+				p, err := svc.SubmitPosition(ctx, str(s, "deliberation_id"), agentID, content, popts...)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -460,7 +461,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AResult(w, req.ID, p)
 
 			case "publish_position":
-				if err := CorePublishPosition(svc, str(s, "position_id"), keyID); err != nil {
+				if err := CorePublishPosition(ctx, svc, str(s, "position_id"), keyID); err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
 				}
@@ -478,7 +479,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						value = int(f)
 					}
 				}
-				err := svc.Vote(str(s, "deliberation_id"), agentID, str(s, "position_id"), value, str(s, "criterion_id"))
+				err := svc.Vote(ctx, str(s, "deliberation_id"), agentID, str(s, "position_id"), value, str(s, "criterion_id"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -501,7 +502,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						round = &r
 					}
 				}
-				positions, err := svc.GetPositions(str(s, "deliberation_id"), excludeAgent, round)
+				positions, err := svc.GetPositions(ctx, str(s, "deliberation_id"), excludeAgent, round)
 				if err != nil {
 					writeA2AError(w, req.ID, -32603, sanitizeError(err))
 					return
@@ -514,7 +515,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					return
 				}
 				agentID := scope(str(s, "agent_id"))
-				actx, err := svc.GetContext(str(s, "deliberation_id"), agentID)
+				actx, err := svc.GetContext(ctx, str(s, "deliberation_id"), agentID)
 				if err != nil {
 					writeA2AError(w, req.ID, -32603, sanitizeError(err))
 					return
@@ -524,7 +525,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			case "withdraw":
 				deliberationID := str(s, "deliberation_id")
 				agentID := scope(str(s, "agent_id"))
-				if err := CoreWithdraw(svc, deliberationID, agentID, keyID); err != nil {
+				if err := CoreWithdraw(ctx, svc, deliberationID, agentID, keyID); err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
 				}
@@ -563,7 +564,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						round = &r
 					}
 				}
-				result, err := CoreGetAnalysisResult(svc, str(s, "deliberation_id"), keyID, round)
+				result, err := CoreGetAnalysisResult(ctx, svc, str(s, "deliberation_id"), keyID, round)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
@@ -572,7 +573,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 
 			case "cancel":
 				deliberationID := str(s, "deliberation_id")
-				if err := CoreCancelAnalysis(svc, deliberationID, keyID); err != nil {
+				if err := CoreCancelAnalysis(ctx, svc, deliberationID, keyID); err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
 				}
@@ -588,7 +589,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				proposal, err := svc.ProposeCompromise(context.Background(), str(s, "deliberation_id"))
+				proposal, err := svc.ProposeCompromise(ctx, str(s, "deliberation_id"))
 				if err != nil {
 					refundCredits(creditCost)
 					writeA2AError(w, req.ID, -32000, err.Error())
@@ -597,7 +598,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AResult(w, req.ID, map[string]string{"compromise_proposal": proposal})
 
 			case "reframe":
-				result, err := CoreReframe(svc, creditStore, str(s, "deliberation_id"), str(s, "position_id"), str(s, "model"), keyID, isAdmin, token)
+				result, err := CoreReframe(ctx, svc, creditStore, str(s, "deliberation_id"), str(s, "position_id"), str(s, "model"), keyID, isAdmin, token)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
@@ -605,7 +606,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AResult(w, req.ID, result)
 
 			case "challenge":
-				result, err := CoreChallengeAnalysis(svc, str(s, "deliberation_id"), scope(str(s, "agent_id")), str(s, "reason"), keyID)
+				result, err := CoreChallengeAnalysis(ctx, svc, str(s, "deliberation_id"), scope(str(s, "agent_id")), str(s, "reason"), keyID)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
@@ -618,7 +619,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					return
 				}
 				agentID := scope(str(s, "agent_id"))
-				d, err := svc.DisputeCrux(str(s, "deliberation_id"), agentID, str(s, "crux_claim"), str(s, "correction"))
+				d, err := svc.DisputeCrux(ctx, str(s, "deliberation_id"), agentID, str(s, "crux_claim"), str(s, "correction"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -632,7 +633,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				result, err := CoreRunExpertPanel(r.Context(), svc, str(s, "document"), str(s, "topic"), str(s, "experts"), str(s, "group_id"), model, keyID, str(s, "source_type"), str(s, "depth"))
+				result, err := CoreRunExpertPanel(ctx, svc, str(s, "document"), str(s, "topic"), str(s, "experts"), str(s, "group_id"), model, keyID, str(s, "source_type"), str(s, "depth"))
 				if err != nil {
 					if creditCost > 0 && creditStore != nil {
 						_, _ = creditStore.AddCredits(keyID, creditCost)
@@ -650,7 +651,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				result, err := CoreFollowUpExpertPanel(r.Context(), svc, str(s, "deliberation_id"), model, keyID)
+				result, err := CoreFollowUpExpertPanel(ctx, svc, str(s, "deliberation_id"), model, keyID)
 				if err != nil {
 					if creditCost > 0 && creditStore != nil {
 						_, _ = creditStore.AddCredits(keyID, creditCost)
@@ -674,7 +675,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					return
 				}
 				agentID := scope(str(s, "agent_id"))
-				c, err := svc.Commit(str(s, "deliberation_id"), agentID, str(s, "statement"), str(s, "conditional"))
+				c, err := svc.Commit(ctx, str(s, "deliberation_id"), agentID, str(s, "statement"), str(s, "conditional"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -682,7 +683,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AResult(w, req.ID, c)
 
 			case "get_commitments":
-				result, err := CoreGetCommitments(svc, str(s, "deliberation_id"), keyID)
+				result, err := CoreGetCommitments(ctx, svc, str(s, "deliberation_id"), keyID)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
@@ -694,7 +695,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				if verifiedBy == "" {
 					verifiedBy = keyID
 				}
-				if err := CoreFulfillCommitment(svc, str(s, "commitment_id"), verifiedBy); err != nil {
+				if err := CoreFulfillCommitment(ctx, svc, str(s, "commitment_id"), verifiedBy); err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
 				}
@@ -705,14 +706,14 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				if verifiedBy == "" {
 					verifiedBy = keyID
 				}
-				if err := CoreBreakCommitment(svc, str(s, "commitment_id"), str(s, "reason"), verifiedBy); err != nil {
+				if err := CoreBreakCommitment(ctx, svc, str(s, "commitment_id"), str(s, "reason"), verifiedBy); err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
 				}
 				writeA2AResult(w, req.ID, map[string]string{"status": "commitment broken"})
 
 			case "reputation":
-				rep, err := CoreAgentReputation(svc, str(s, "agent_id"), str(s, "group_id"))
+				rep, err := CoreAgentReputation(ctx, svc, str(s, "agent_id"), str(s, "group_id"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
@@ -733,7 +734,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				}
 				from := scope(str(s, "from_agent"))
 				to := scope(str(s, "to_agent"))
-				d, err := svc.Delegate(str(s, "deliberation_id"), from, to, str(s, "scope"))
+				d, err := svc.Delegate(ctx, str(s, "deliberation_id"), from, to, str(s, "scope"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -746,7 +747,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					return
 				}
 				invitedBy := scope(str(s, "invited_by"))
-				inv, err := svc.InviteAgent(str(s, "deliberation_id"), invitedBy, str(s, "invited_agent"), str(s, "role"), str(s, "reason"))
+				inv, err := svc.InviteAgent(ctx, str(s, "deliberation_id"), invitedBy, str(s, "invited_agent"), str(s, "role"), str(s, "reason"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -769,7 +770,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						ttl = time.Duration(f) * time.Hour
 					}
 				}
-				jc, err := svc.GenerateJoinCode(deliberationID, role, ttl)
+				jc, err := svc.GenerateJoinCode(ctx, deliberationID, role, ttl)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -789,7 +790,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32602, "code and agent_id are required")
 					return
 				}
-				deliberationID, role, err := svc.JoinDeliberation(code, agentID)
+				deliberationID, role, err := svc.JoinDeliberation(ctx, code, agentID)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -815,7 +816,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32602, "deliberation_id and reason are required")
 					return
 				}
-				if err := svc.ReportAbuse(deliberationID, keyID, reason); err != nil {
+				if err := svc.ReportAbuse(ctx, deliberationID, keyID, reason); err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
@@ -836,7 +837,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					opLog, _ = auditLog.GetAuditLog(deliberationID, 50)
 				}
 				var analysisAudit []deliberation.AuditEntry
-				if result, err := svc.GetLatestAnalysisResult(deliberationID); err == nil && result != nil {
+				if result, err := svc.GetLatestAnalysisResult(ctx, deliberationID); err == nil && result != nil {
 					analysisAudit = result.AuditLog
 				}
 				writeA2AResult(w, req.ID, map[string]any{
@@ -848,7 +849,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				writeA2AResult(w, req.ID, deliberation.ListTemplates())
 
 			case "get_votes":
-				votes, err := CoreGetVotes(svc, str(s, "deliberation_id"), keyID)
+				votes, err := CoreGetVotes(ctx, svc, str(s, "deliberation_id"), keyID)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return

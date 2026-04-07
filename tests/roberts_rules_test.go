@@ -12,7 +12,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	svc, db := newTestService(t)
 
 	// Create deliberation with roberts_rules template
-	d, err := svc.CreateDeliberation("Budget Proposal", "Allocate funds for Q3",
+	d, err := svc.CreateDeliberation(context.Background(), "Budget Proposal", "Allocate funds for Q3",
 		deliberation.WithTemplate("roberts_rules"),
 	)
 	if err != nil {
@@ -26,7 +26,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Submit a motion — should start as draft
-	pos, err := svc.SubmitPosition(d.ID, "agent-proposer", "I move to allocate $50k to research")
+	pos, err := svc.SubmitPosition(context.Background(), d.ID, "agent-proposer", "I move to allocate $50k to research")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Verify the position is not visible in GetPositions (drafts are filtered)
-	positions, err := svc.GetPositions(d.ID, nil, nil)
+	positions, err := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Vote +1 from a different agent — should "second" the motion (publish it)
-	err = svc.Vote(d.ID, "agent-seconder", pos.ID, 1)
+	err = svc.Vote(context.Background(), d.ID, "agent-seconder", pos.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Verify it now appears in GetPositions
-	positions, err = svc.GetPositions(d.ID, nil, nil)
+	positions, err = svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Submit another motion — no second — stays draft
-	pos2, err := svc.SubmitPosition(d.ID, "agent-other", "I move to table the discussion")
+	pos2, err := svc.SubmitPosition(context.Background(), d.ID, "agent-other", "I move to table the discussion")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Only the first (seconded) position should be visible
-	positions, err = svc.GetPositions(d.ID, nil, nil)
+	positions, err = svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Self-second should NOT publish (proposer voting on their own motion)
-	err = svc.Vote(d.ID, "agent-other", pos2.ID, 1)
+	err = svc.Vote(context.Background(), d.ID, "agent-other", pos2.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 func TestRobertsRulesSpeakingLimit(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Speaking Limit Test", "Test character limits",
+	d, err := svc.CreateDeliberation(context.Background(), "Speaking Limit Test", "Test character limits",
 		deliberation.WithTemplate("roberts_rules"),
 	)
 	if err != nil {
@@ -116,7 +116,7 @@ func TestRobertsRulesSpeakingLimit(t *testing.T) {
 
 	// Submit position exceeding the limit
 	longContent := strings.Repeat("x", 501)
-	_, err = svc.SubmitPosition(d.ID, "agent-verbose", longContent)
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent-verbose", longContent)
 	if err == nil {
 		t.Fatal("expected error for content exceeding speaking time limit")
 	}
@@ -126,7 +126,7 @@ func TestRobertsRulesSpeakingLimit(t *testing.T) {
 
 	// Submit position within the limit
 	okContent := strings.Repeat("x", 500)
-	pos, err := svc.SubmitPosition(d.ID, "agent-concise", okContent)
+	pos, err := svc.SubmitPosition(context.Background(), d.ID, "agent-concise", okContent)
 	if err != nil {
 		t.Fatalf("expected success for content within limit, got: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestRobertsRulesSpeakingLimit(t *testing.T) {
 func TestRobertsRulesAmendment(t *testing.T) {
 	svc, db := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Amendment Test", "Test amendments to motions",
+	d, err := svc.CreateDeliberation(context.Background(), "Amendment Test", "Test amendments to motions",
 		deliberation.WithTemplate("roberts_rules"),
 	)
 	if err != nil {
@@ -146,19 +146,19 @@ func TestRobertsRulesAmendment(t *testing.T) {
 	}
 
 	// Submit original motion
-	motion, err := svc.SubmitPosition(d.ID, "agent-proposer", "I move to adopt policy X")
+	motion, err := svc.SubmitPosition(context.Background(), d.ID, "agent-proposer", "I move to adopt policy X")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Second the motion
-	err = svc.Vote(d.ID, "agent-seconder", motion.ID, 1)
+	err = svc.Vote(context.Background(), d.ID, "agent-seconder", motion.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Submit amendment referencing the original motion
-	amendment, err := svc.SubmitPosition(d.ID, "agent-amender",
+	amendment, err := svc.SubmitPosition(context.Background(), d.ID, "agent-amender",
 		"I move to amend: add clause Y to policy X",
 		deliberation.WithParentPosition(motion.ID),
 	)
@@ -177,7 +177,7 @@ func TestRobertsRulesAmendment(t *testing.T) {
 	}
 
 	// Second the amendment
-	err = svc.Vote(d.ID, "agent-seconder", amendment.ID, 1)
+	err = svc.Vote(context.Background(), d.ID, "agent-seconder", amendment.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestRobertsRulesAmendment(t *testing.T) {
 	}
 
 	// Get all visible positions — should be both the motion and its amendment
-	positions, err := svc.GetPositions(d.ID, nil, nil)
+	positions, err := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

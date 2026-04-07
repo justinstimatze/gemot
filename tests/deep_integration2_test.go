@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"testing"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
@@ -65,25 +66,25 @@ func TestMultiCriteriaVoteStorage(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Multi-criteria test", "")
-	p, _ := svc.SubmitPosition(d.ID, "alice", "Proposal A")
+	d, _ := svc.CreateDeliberation(context.Background(), "Multi-criteria test", "")
+	p, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Proposal A")
 
 	// Vote on same position with different criteria
-	err := svc.Vote(d.ID, "bob", p.ID, 1, "feasibility")
+	err := svc.Vote(context.Background(), d.ID, "bob", p.ID, 1, "feasibility")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = svc.Vote(d.ID, "bob", p.ID, -1, "ethics")
+	err = svc.Vote(context.Background(), d.ID, "bob", p.ID, -1, "ethics")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Default vote (no criterion)
-	err = svc.Vote(d.ID, "bob", p.ID, 0)
+	err = svc.Vote(context.Background(), d.ID, "bob", p.ID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	votes, _ := svc.GetVotes(d.ID)
+	votes, _ := svc.GetVotes(context.Background(), d.ID)
 	if len(votes) < 2 {
 		t.Fatalf("expected at least 2 votes (multi-criteria), got %d", len(votes))
 	}

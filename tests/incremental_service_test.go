@@ -103,14 +103,14 @@ func TestMultiRoundPriorClaimsThreading(t *testing.T) {
 	analyzer := &capturingAnalyzer{returnClaims: round1Claims}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, err := svc.CreateDeliberation("Claims threading test", "Verify prior claims flow between rounds")
+	d, err := svc.CreateDeliberation(context.Background(), "Claims threading test", "Verify prior claims flow between rounds")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Submit round 1 positions
-	p1, _ := svc.SubmitPosition(d.ID, "alice", "We need safety above all else")
-	p2, _ := svc.SubmitPosition(d.ID, "bob", "We should move fast and iterate")
+	p1, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "We need safety above all else")
+	p2, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "We should move fast and iterate")
 	if p1 == nil || p2 == nil {
 		t.Fatal("failed to submit positions")
 	}
@@ -127,7 +127,7 @@ func TestMultiRoundPriorClaimsThreading(t *testing.T) {
 	}
 
 	// Verify round 1 result is stored with claims
-	stored1, err := svc.GetAnalysisResult(d.ID, 1)
+	stored1, err := svc.GetAnalysisResult(context.Background(), d.ID, 1)
 	if err != nil {
 		t.Fatalf("getting stored round 1: %v", err)
 	}
@@ -136,13 +136,13 @@ func TestMultiRoundPriorClaimsThreading(t *testing.T) {
 	}
 
 	// Round 2: satisfy forced acknowledgment, then submit new positions
-	svc.GetContext(d.ID, "alice")
-	svc.GetContext(d.ID, "bob")
-	_, err = svc.SubmitPosition(d.ID, "alice", "After reflection, safety with pragmatism")
+	svc.GetContext(context.Background(), d.ID, "alice")
+	svc.GetContext(context.Background(), d.ID, "bob")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "alice", "After reflection, safety with pragmatism")
 	if err != nil {
 		t.Fatalf("round 2 submit alice: %v", err)
 	}
-	_, err = svc.SubmitPosition(d.ID, "bob", "Speed but with guardrails")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "bob", "Speed but with guardrails")
 	if err != nil {
 		t.Fatalf("round 2 submit bob: %v", err)
 	}
@@ -181,9 +181,9 @@ func TestMultiRoundPriorNormsThreading(t *testing.T) {
 	analyzer := &capturingAnalyzer{}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, _ := svc.CreateDeliberation("Norms threading", "")
-	svc.SubmitPosition(d.ID, "alice", "Position A")
-	svc.SubmitPosition(d.ID, "bob", "Position B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Norms threading", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Position A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Position B")
 
 	// Override the analyzer to return norms
 	analyzer.mu.Lock()
@@ -198,7 +198,7 @@ func TestMultiRoundPriorNormsThreading(t *testing.T) {
 	_ = result1
 
 	// Manually update the stored result to have norms (the mock doesn't set them)
-	stored1, _ := svc.GetAnalysisResult(d.ID, 1)
+	stored1, _ := svc.GetAnalysisResult(context.Background(), d.ID, 1)
 	stored1.EmergentNorms = []string{"Agents should provide evidence for claims"}
 	stored1.ConstitutionalRules = []string{"All proposals must consider minority impact"}
 	// Re-save with norms
@@ -208,8 +208,8 @@ func TestMultiRoundPriorNormsThreading(t *testing.T) {
 	}
 
 	// Round 2
-	svc.SubmitPosition(d.ID, "alice", "Updated position")
-	svc.SubmitPosition(d.ID, "bob", "Updated position B")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Updated position")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Updated position B")
 	_, err = svc.Analyze(context.Background(), d.ID)
 	if err != nil {
 		t.Fatalf("round 2: %v", err)
@@ -243,8 +243,8 @@ func TestThinResultSingleAgent(t *testing.T) {
 	analyzer := &capturingAnalyzer{}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, _ := svc.CreateDeliberation("Solo agent", "")
-	svc.SubmitPosition(d.ID, "lonely", "I think X")
+	d, _ := svc.CreateDeliberation(context.Background(), "Solo agent", "")
+	svc.SubmitPosition(context.Background(), d.ID, "lonely", "I think X")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -274,7 +274,7 @@ func TestThinResultSingleAgent(t *testing.T) {
 	}
 
 	// Verify result was saved
-	stored, err := svc.GetAnalysisResult(d.ID, 1)
+	stored, err := svc.GetAnalysisResult(context.Background(), d.ID, 1)
 	if err != nil {
 		t.Fatalf("thin result should be stored: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestThinResultSingleAgent(t *testing.T) {
 	}
 
 	// Verify round advanced
-	d2, _ := svc.GetDeliberation(d.ID)
+	d2, _ := svc.GetDeliberation(context.Background(), d.ID)
 	if d2.Round != 2 {
 		t.Fatalf("round should advance to 2 after thin result, got %d", d2.Round)
 	}
@@ -294,7 +294,7 @@ func TestThinResultZeroPositions(t *testing.T) {
 	analyzer := &capturingAnalyzer{}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, _ := svc.CreateDeliberation("Empty", "No positions")
+	d, _ := svc.CreateDeliberation(context.Background(), "Empty", "No positions")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -316,10 +316,10 @@ func TestThinResultThenRealAnalysis(t *testing.T) {
 	analyzer := &capturingAnalyzer{}
 	svc := deliberation.NewService(db, analyzer)
 
-	d, _ := svc.CreateDeliberation("Grows over time", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Grows over time", "")
 
 	// Round 1: single agent → thin result
-	svc.SubmitPosition(d.ID, "alice", "Just me for now")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Just me for now")
 	r1, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -330,13 +330,13 @@ func TestThinResultThenRealAnalysis(t *testing.T) {
 
 	// Round 2: second agent joins → real analysis
 	// Satisfy forced acknowledgment for all agents (required even for new participants)
-	svc.GetContext(d.ID, "alice")
-	svc.GetContext(d.ID, "bob")
-	_, err = svc.SubmitPosition(d.ID, "alice", "Still here, updated view")
+	svc.GetContext(context.Background(), d.ID, "alice")
+	svc.GetContext(context.Background(), d.ID, "bob")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "alice", "Still here, updated view")
 	if err != nil {
 		t.Fatalf("alice round 2 submit: %v", err)
 	}
-	_, err = svc.SubmitPosition(d.ID, "bob", "I'm here too")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "bob", "I'm here too")
 	if err != nil {
 		t.Fatalf("bob round 2 submit: %v", err)
 	}
@@ -375,12 +375,12 @@ func TestAnalysisStatusTransitions(t *testing.T) {
 	}
 	svc := deliberation.NewService(db, blockingAnalyzer)
 
-	d, _ := svc.CreateDeliberation("Status transitions", "")
-	svc.SubmitPosition(d.ID, "alice", "Position A")
-	svc.SubmitPosition(d.ID, "bob", "Position B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Status transitions", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Position A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Position B")
 
 	// Verify initial status
-	d1, _ := svc.GetDeliberation(d.ID)
+	d1, _ := svc.GetDeliberation(context.Background(), d.ID)
 	if d1.Status != "open" {
 		t.Fatalf("initial status should be 'open', got %q", d1.Status)
 	}
@@ -398,7 +398,7 @@ func TestAnalysisStatusTransitions(t *testing.T) {
 	}
 
 	// Check status is "analyzing"
-	d2, _ := svc.GetDeliberation(d.ID)
+	d2, _ := svc.GetDeliberation(context.Background(), d.ID)
 	if d2.Status != "analyzing" {
 		t.Fatalf("status during analysis should be 'analyzing', got %q", d2.Status)
 	}
@@ -408,7 +408,7 @@ func TestAnalysisStatusTransitions(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Check status returned to "open"
-	d3, _ := svc.GetDeliberation(d.ID)
+	d3, _ := svc.GetDeliberation(context.Background(), d.ID)
 	if d3.Status != "open" {
 		t.Fatalf("status after analysis should be 'open', got %q", d3.Status)
 	}
@@ -419,7 +419,7 @@ func TestAnalysisStatusTransitions(t *testing.T) {
 	}
 
 	// Check results exist
-	result, err := svc.GetAnalysisResult(d.ID, 1)
+	result, err := svc.GetAnalysisResult(context.Background(), d.ID, 1)
 	if err != nil {
 		t.Fatalf("should have analysis result: %v", err)
 	}
@@ -473,9 +473,9 @@ func TestAnalysisCancellation(t *testing.T) {
 	done := make(chan struct{})
 	svc := deliberation.NewService(db, &blockingMockAnalyzer{started: started, done: done})
 
-	d, _ := svc.CreateDeliberation("Cancel test", "")
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Cancel test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -505,7 +505,7 @@ func TestAnalysisCancellation(t *testing.T) {
 	// The stuck analyzing recovery mechanism should handle this.
 	// In production, a background goroutine calls RecoverStuckAnalyzing.
 	// For this test, we verify the analysis returned promptly on cancel.
-	d2, _ := svc.GetDeliberation(d.ID)
+	d2, _ := svc.GetDeliberation(context.Background(), d.ID)
 	// Status may be "open" (if reset succeeded) or "analyzing" (if reset
 	// failed due to cancelled context). The key assertion is that Analyze()
 	// returned promptly, which we already verified above.
@@ -518,7 +518,7 @@ func TestSetTemplateReplacesRules(t *testing.T) {
 	svc := deliberation.NewService(db, analyzer)
 
 	// Create with jury template (min_participants: 6, cooling_period_minutes: 15)
-	d, err := svc.CreateDeliberation("Template switch", "",
+	d, err := svc.CreateDeliberation(context.Background(), "Template switch", "",
 		deliberation.WithTemplate("jury"),
 	)
 	if err != nil {
@@ -526,7 +526,7 @@ func TestSetTemplateReplacesRules(t *testing.T) {
 	}
 
 	// Verify jury rules
-	d1, _ := svc.GetDeliberation(d.ID)
+	d1, _ := svc.GetDeliberation(context.Background(), d.ID)
 	if d1.Rules == nil {
 		t.Fatal("expected rules to be set")
 	}
@@ -536,13 +536,13 @@ func TestSetTemplateReplacesRules(t *testing.T) {
 	}
 
 	// Switch to assembly (min_participants: 3)
-	err = svc.SetTemplate(d.ID, "assembly", "")
+	err = svc.SetTemplate(context.Background(), d.ID, "assembly", "")
 	if err != nil {
 		t.Fatalf("set_template: %v", err)
 	}
 
 	// Verify assembly rules replaced jury's min_participants
-	d2, _ := svc.GetDeliberation(d.ID)
+	d2, _ := svc.GetDeliberation(context.Background(), d.ID)
 	minP2, _ := d2.Rules["min_participants"].(float64)
 	if int(minP2) != 3 {
 		t.Fatalf("after switching to assembly, min_participants should be 3, got %v", d2.Rules["min_participants"])
@@ -580,7 +580,7 @@ func TestExpertPanelCore(t *testing.T) {
 	}
 
 	// Verify positions were submitted (analysis is async, so check via service)
-	positions, err := svc.GetPositions(result.DeliberationID, nil, nil)
+	positions, err := svc.GetPositions(context.Background(), result.DeliberationID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +596,7 @@ func TestExpertPanelCore(t *testing.T) {
 	}
 
 	// Verify the deliberation was created with assembly template
-	d, err := svc.GetDeliberation(result.DeliberationID)
+	d, err := svc.GetDeliberation(context.Background(), result.DeliberationID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -627,7 +627,7 @@ func TestExpertPanelCustomExperts(t *testing.T) {
 		t.Errorf("expected 2 custom experts, got %d", result.ExpertCount)
 	}
 
-	positions, err := svc.GetPositions(result.DeliberationID, nil, nil)
+	positions, err := svc.GetPositions(context.Background(), result.DeliberationID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,7 +656,7 @@ func TestExpertPanelSourceType(t *testing.T) {
 	}
 
 	// Verify code review experts (not research defaults)
-	positions, err := svc.GetPositions(result.DeliberationID, nil, nil)
+	positions, err := svc.GetPositions(context.Background(), result.DeliberationID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -740,7 +740,7 @@ func TestExpertPanelQuickDepth(t *testing.T) {
 		t.Errorf("quick mode should use 3 experts, got %d", result.ExpertCount)
 	}
 
-	positions, err := svc.GetPositions(result.DeliberationID, nil, nil)
+	positions, err := svc.GetPositions(context.Background(), result.DeliberationID, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@ func TestConcurrentToolCalls(t *testing.T) {
 	svc, db := newTestService(t)
 
 	// Create 1 deliberation
-	d, err := svc.CreateDeliberation("Concurrency Test", "Testing concurrent position submissions and votes.")
+	d, err := svc.CreateDeliberation(context.Background(), "Concurrency Test", "Testing concurrent position submissions and votes.")
 	if err != nil {
 		t.Fatalf("creating deliberation: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestConcurrentToolCalls(t *testing.T) {
 			defer wg.Done()
 			agentID := fmt.Sprintf("agent-%d", idx)
 			content := fmt.Sprintf("Position from %s: concurrent submission #%d", agentID, idx)
-			_, errs[idx] = svc.SubmitPosition(d.ID, agentID, content)
+			_, errs[idx] = svc.SubmitPosition(context.Background(), d.ID, agentID, content)
 		}(i)
 	}
 	wg.Wait()
@@ -43,7 +43,7 @@ func TestConcurrentToolCalls(t *testing.T) {
 	}
 
 	// Verify all 20 positions were created
-	positions, err := svc.GetPositions(d.ID, nil, nil)
+	positions, err := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if err != nil {
 		t.Fatalf("GetPositions: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestConcurrentToolCalls(t *testing.T) {
 			targetIdx := rng.Intn(len(posIDs))
 			values := []int{-1, 0, 1}
 			value := values[rng.Intn(3)]
-			voteErrs[idx] = svc.Vote(d.ID, agentID, posIDs[targetIdx], value)
+			voteErrs[idx] = svc.Vote(context.Background(), d.ID, agentID, posIDs[targetIdx], value)
 		}(i)
 	}
 	wg.Wait()
@@ -98,7 +98,7 @@ func TestConcurrentToolCalls(t *testing.T) {
 func TestLargeDeliberation(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Scale Test", "Testing large deliberation with 100 agents.")
+	d, err := svc.CreateDeliberation(context.Background(), "Scale Test", "Testing large deliberation with 100 agents.")
 	if err != nil {
 		t.Fatalf("creating deliberation: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestLargeDeliberation(t *testing.T) {
 	for i := range 100 {
 		agentID := fmt.Sprintf("agent-%d", i)
 		content := fmt.Sprintf("Agent %d's position on governance: approach #%d with varying perspectives on regulation, innovation, and safety.", i, i%7)
-		p, err := svc.SubmitPosition(d.ID, agentID, content)
+		p, err := svc.SubmitPosition(context.Background(), d.ID, agentID, content)
 		if err != nil {
 			t.Fatalf("submit_position agent-%d: %v", i, err)
 		}
@@ -134,7 +134,7 @@ func TestLargeDeliberation(t *testing.T) {
 			voted[target] = true
 			values := []int{-1, 0, 1}
 			value := values[rng.Intn(3)]
-			if err := svc.Vote(d.ID, agentID, posIDs[target], value); err != nil {
+			if err := svc.Vote(context.Background(), d.ID, agentID, posIDs[target], value); err != nil {
 				t.Fatalf("vote agent-%d -> position-%d: %v", i, target, err)
 			}
 			voteCount++

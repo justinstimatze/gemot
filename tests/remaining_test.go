@@ -35,10 +35,10 @@ func TestReservationInAnalysis(t *testing.T) {
 	}}
 
 	svc := deliberation.NewService(db, analyzer)
-	d, _ := svc.CreateDeliberation("BATNA test", "")
-	svc.SubmitPosition(d.ID, "alice", "Strong regulation",
+	d, _ := svc.CreateDeliberation(context.Background(), "BATNA test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Strong regulation",
 		deliberation.WithReservation("Cannot accept voluntary-only approach"))
-	svc.SubmitPosition(d.ID, "bob", "Light regulation")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Light regulation")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -75,12 +75,12 @@ func TestMultiCriteriaVote(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Criteria test", "")
-	svc.SubmitPosition(d.ID, "alice", "Proposal A")
-	p, _ := svc.SubmitPosition(d.ID, "bob", "Proposal B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Criteria test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "Proposal A")
+	p, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "Proposal B")
 
 	// Vote with criterion (stored in DB even if analysis doesn't use it yet)
-	err := svc.Vote(d.ID, "alice", p.ID, 1)
+	err := svc.Vote(context.Background(), d.ID, "alice", p.ID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,9 +125,9 @@ func TestEmergentNorms(t *testing.T) {
 	}}
 
 	svc := deliberation.NewService(db, analyzer)
-	d, _ := svc.CreateDeliberation("Norms test", "")
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Norms test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {

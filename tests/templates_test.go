@@ -52,7 +52,7 @@ func TestGetTemplateNotFound(t *testing.T) {
 func TestCreateDeliberationWithTemplate(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Test", "Testing templates",
+	d, err := svc.CreateDeliberation(context.Background(), "Test", "Testing templates",
 		deliberation.WithTemplate("jury"),
 	)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestCreateDeliberationWithTemplate(t *testing.T) {
 func TestTemplateDefaultsOverriddenByExplicit(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Test", "Testing overrides",
+	d, err := svc.CreateDeliberation(context.Background(), "Test", "Testing overrides",
 		deliberation.WithTemplate("jury"),
 		deliberation.WithMaxParticipants(6),
 		deliberation.WithType("knowledge"),
@@ -95,7 +95,7 @@ func TestTemplateDefaultsOverriddenByExplicit(t *testing.T) {
 func TestCreateDeliberationWithUnknownTemplate(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	_, err := svc.CreateDeliberation("Test", "Bad template",
+	_, err := svc.CreateDeliberation(context.Background(), "Test", "Bad template",
 		deliberation.WithTemplate("nonexistent"),
 	)
 	if err == nil {
@@ -106,18 +106,18 @@ func TestCreateDeliberationWithUnknownTemplate(t *testing.T) {
 func TestSetTemplate(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Test", "Change template")
+	d, err := svc.CreateDeliberation(context.Background(), "Test", "Change template")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Creator can change template (empty keyID since no auth in test)
-	err = svc.SetTemplate(d.ID, "parliament", "")
+	err = svc.SetTemplate(context.Background(), d.ID, "parliament", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	d2, err := svc.GetDeliberation(d.ID)
+	d2, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestSetTemplate(t *testing.T) {
 func TestTemplateRulesApplied(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Test", "Rules from template",
+	d, err := svc.CreateDeliberation(context.Background(), "Test", "Rules from template",
 		deliberation.WithTemplate("parliament"),
 	)
 	if err != nil {
@@ -154,7 +154,7 @@ func TestTemplateRulesApplied(t *testing.T) {
 func TestExplicitRulesOverrideTemplate(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Test", "Override rules",
+	d, err := svc.CreateDeliberation(context.Background(), "Test", "Override rules",
 		deliberation.WithTemplate("parliament"),
 		deliberation.WithRules(map[string]any{"min_participants": 2}),
 	)
@@ -176,14 +176,14 @@ func TestExplicitRulesOverrideTemplate(t *testing.T) {
 func TestTemplatePersistsRoundTrip(t *testing.T) {
 	svc, _ := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Test", "Round trip",
+	d, err := svc.CreateDeliberation(context.Background(), "Test", "Round trip",
 		deliberation.WithTemplate("consensus"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	d2, err := svc.GetDeliberation(d.ID)
+	d2, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestSetTemplateAppliesDefaultRules(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Create with no template
-	d, err := svc.CreateDeliberation("Test", "No template initially")
+	d, err := svc.CreateDeliberation(context.Background(), "Test", "No template initially")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,12 +211,12 @@ func TestSetTemplateAppliesDefaultRules(t *testing.T) {
 	}
 
 	// Apply parliament template
-	if err := svc.SetTemplate(d.ID, "parliament", ""); err != nil {
+	if err := svc.SetTemplate(context.Background(), d.ID, "parliament", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	// Reload and check rules
-	d2, err := svc.GetDeliberation(d.ID)
+	d2, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestSetTemplateReplacesRulesFromOldTemplate(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Create with explicit rule
-	d, err := svc.CreateDeliberation("Test", "Template switch",
+	d, err := svc.CreateDeliberation(context.Background(), "Test", "Template switch",
 		deliberation.WithRules(map[string]any{"min_participants": 2}),
 	)
 	if err != nil {
@@ -245,11 +245,11 @@ func TestSetTemplateReplacesRulesFromOldTemplate(t *testing.T) {
 	}
 
 	// Apply parliament template — should replace ALL rules with parliament's defaults
-	if err := svc.SetTemplate(d.ID, "parliament", ""); err != nil {
+	if err := svc.SetTemplate(context.Background(), d.ID, "parliament", ""); err != nil {
 		t.Fatal(err)
 	}
 
-	d2, err := svc.GetDeliberation(d.ID)
+	d2, err := svc.GetDeliberation(context.Background(), d.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func TestSetTemplateReplacesRulesFromOldTemplate(t *testing.T) {
 func TestCoolingPeriodEnforcement(t *testing.T) {
 	svc, db := newTestService(t)
 
-	d, err := svc.CreateDeliberation("Cooling Test", "Testing cooling period",
+	d, err := svc.CreateDeliberation(context.Background(), "Cooling Test", "Testing cooling period",
 		deliberation.WithRules(map[string]any{
 			"min_participants":       2,
 			"cooling_period_minutes": 60,
@@ -279,13 +279,13 @@ func TestCoolingPeriodEnforcement(t *testing.T) {
 	}
 
 	// Submit positions from 2 agents
-	svc.SubmitPosition(d.ID, "agent1", "Position A")
-	svc.SubmitPosition(d.ID, "agent2", "Position B")
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	svc.SubmitPosition(context.Background(), d.ID, "agent1", "Position A")
+	svc.SubmitPosition(context.Background(), d.ID, "agent2", "Position B")
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	for _, voter := range []string{"agent1", "agent2"} {
 		for _, p := range positions {
 			if p.AgentID != voter {
-				svc.Vote(d.ID, voter, p.ID, 1)
+				svc.Vote(context.Background(), d.ID, voter, p.ID, 1)
 			}
 		}
 	}
@@ -301,8 +301,8 @@ func TestCoolingPeriodEnforcement(t *testing.T) {
 	db.RawDB().Exec(`UPDATE deliberations SET status_changed_at = NOW() - INTERVAL '5 minutes', status = 'open', round_number = 2 WHERE id = $1`, d.ID)
 
 	// Submit more positions for round 2
-	svc.SubmitPosition(d.ID, "agent1", "Position C round 2")
-	svc.SubmitPosition(d.ID, "agent2", "Position D round 2")
+	svc.SubmitPosition(context.Background(), d.ID, "agent1", "Position C round 2")
+	svc.SubmitPosition(context.Background(), d.ID, "agent2", "Position D round 2")
 
 	// Second analysis should be blocked by cooling period
 	_, err = svc.Analyze(context.Background(), d.ID)

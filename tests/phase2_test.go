@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"testing"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
@@ -10,12 +11,12 @@ func TestDelegation(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Delegation test", "")
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Delegation test", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 
 	// Alice delegates to bob
-	del, err := svc.Delegate(d.ID, "alice", "bob", "")
+	del, err := svc.Delegate(context.Background(), d.ID, "alice", "bob", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +25,7 @@ func TestDelegation(t *testing.T) {
 	}
 
 	// Revoke
-	err = svc.RevokeDelegation(d.ID, "alice")
+	err = svc.RevokeDelegation(context.Background(), d.ID, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,19 +35,19 @@ func TestDraftPublish(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Draft test", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Draft test", "")
 
 	// Create draft — should not appear in get_positions
-	draft, _ := svc.SubmitPosition(d.ID, "alice", "Work in progress", deliberation.WithDraft())
+	draft, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Work in progress", deliberation.WithDraft())
 	if !draft.Draft {
 		t.Fatal("expected draft=true")
 	}
 
 	// Published position
-	svc.SubmitPosition(d.ID, "bob", "Final position")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "Final position")
 
 	// get_positions should only return bob's
-	positions, _ := svc.GetPositions(d.ID, nil, nil)
+	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if len(positions) != 1 {
 		t.Fatalf("expected 1 visible position, got %d", len(positions))
 	}
@@ -55,13 +56,13 @@ func TestDraftPublish(t *testing.T) {
 	}
 
 	// Publish the draft
-	err := svc.PublishPosition(draft.ID)
+	err := svc.PublishPosition(context.Background(), draft.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Now both visible
-	positions, _ = svc.GetPositions(d.ID, nil, nil)
+	positions, _ = svc.GetPositions(context.Background(), d.ID, nil, nil)
 	if len(positions) != 2 {
 		t.Fatalf("expected 2 positions after publish, got %d", len(positions))
 	}
@@ -71,15 +72,15 @@ func TestDraftDoesNotCountTowardParticipantCap(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Draft cap test", "", deliberation.WithMaxParticipants(2))
+	d, _ := svc.CreateDeliberation(context.Background(), "Draft cap test", "", deliberation.WithMaxParticipants(2))
 
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 
 	// Draft from carol should... actually drafts are still in the DB.
 	// The max_participants check counts all positions including drafts.
 	// This is correct — drafts still occupy a participant slot.
-	_, err := svc.SubmitPosition(d.ID, "carol", "C draft", deliberation.WithDraft())
+	_, err := svc.SubmitPosition(context.Background(), d.ID, "carol", "C draft", deliberation.WithDraft())
 	if err == nil {
 		t.Fatal("expected error — carol exceeds max_participants even with draft")
 	}
@@ -89,12 +90,12 @@ func TestScopedDelegation(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Scoped delegation", "")
-	svc.SubmitPosition(d.ID, "alice", "A")
-	svc.SubmitPosition(d.ID, "bob", "B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Scoped delegation", "")
+	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
+	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
 
 	// Delegate only for safety topics
-	del, err := svc.Delegate(d.ID, "alice", "bob", "safety")
+	del, err := svc.Delegate(context.Background(), d.ID, "alice", "bob", "safety")
 	if err != nil {
 		t.Fatal(err)
 	}

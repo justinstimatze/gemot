@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -12,12 +13,12 @@ func TestPaginationLimit(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	for i := 0; i < 5; i++ {
-		if _, err := svc.CreateDeliberation(fmt.Sprintf("Topic %d", i), "desc"); err != nil {
+		if _, err := svc.CreateDeliberation(context.Background(), fmt.Sprintf("Topic %d", i), "desc"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	results, err := svc.ListDeliberations(2, 0, "")
+	results, err := svc.ListDeliberations(context.Background(), 2, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,12 +32,12 @@ func TestPaginationOffset(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	for i := 0; i < 5; i++ {
-		if _, err := svc.CreateDeliberation(fmt.Sprintf("Topic %d", i), "desc"); err != nil {
+		if _, err := svc.CreateDeliberation(context.Background(), fmt.Sprintf("Topic %d", i), "desc"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	results, err := svc.ListDeliberations(100, 3, "")
+	results, err := svc.ListDeliberations(context.Background(), 100, 3, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,12 +51,12 @@ func TestPaginationDefaultLimit(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	for i := 0; i < 5; i++ {
-		if _, err := svc.CreateDeliberation(fmt.Sprintf("Topic %d", i), "desc"); err != nil {
+		if _, err := svc.CreateDeliberation(context.Background(), fmt.Sprintf("Topic %d", i), "desc"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	results, err := svc.ListDeliberations(0, 0, "")
+	results, err := svc.ListDeliberations(context.Background(), 0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,7 @@ func TestPaginationListByGroup(t *testing.T) {
 
 	groupID := "test-group-pagination"
 	for i := 0; i < 5; i++ {
-		d, err := svc.CreateDeliberation(fmt.Sprintf("Group topic %d", i), "desc", deliberation.WithGroupID(groupID))
+		d, err := svc.CreateDeliberation(context.Background(), fmt.Sprintf("Group topic %d", i), "desc", deliberation.WithGroupID(groupID))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -78,12 +79,12 @@ func TestPaginationListByGroup(t *testing.T) {
 	}
 
 	// Also create one outside the group
-	if _, err := svc.CreateDeliberation("Other topic", "desc"); err != nil {
+	if _, err := svc.CreateDeliberation(context.Background(), "Other topic", "desc"); err != nil {
 		t.Fatal(err)
 	}
 
 	// All in group
-	all, err := svc.ListByGroup(groupID, 0, 0, "")
+	all, err := svc.ListByGroup(context.Background(), groupID, 0, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestPaginationListByGroup(t *testing.T) {
 	}
 
 	// Paginated
-	page, err := svc.ListByGroup(groupID, 2, 0, "")
+	page, err := svc.ListByGroup(context.Background(), groupID, 2, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +102,7 @@ func TestPaginationListByGroup(t *testing.T) {
 	}
 
 	// Offset past most
-	tail, err := svc.ListByGroup(groupID, 100, 4, "")
+	tail, err := svc.ListByGroup(context.Background(), groupID, 100, 4, "")
 	if err != nil {
 		t.Fatal(err)
 	}

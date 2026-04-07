@@ -29,8 +29,8 @@ func (s *slowAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 
 func TestSingleAgentDeliberation(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Solo", "One agent talking to itself")
-	svc.SubmitPosition(d.ID, "lonely-agent", "I think X is true")
+	d, _ := svc.CreateDeliberation(context.Background(), "Solo", "One agent talking to itself")
+	svc.SubmitPosition(context.Background(), d.ID, "lonely-agent", "I think X is true")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -45,19 +45,19 @@ func TestSingleAgentDeliberation(t *testing.T) {
 
 func TestTotalAgreement(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Agreement", "Everyone agrees")
+	d, _ := svc.CreateDeliberation(context.Background(), "Agreement", "Everyone agrees")
 
 	agents := []string{"a", "b", "c", "d"}
 	var posIDs []string
 	for _, a := range agents {
-		p, _ := svc.SubmitPosition(d.ID, a, "We should do X because it's clearly right")
+		p, _ := svc.SubmitPosition(context.Background(), d.ID, a, "We should do X because it's clearly right")
 		posIDs = append(posIDs, p.ID)
 	}
 	// Everyone agrees with everyone
 	for _, voter := range agents {
 		for i, posID := range posIDs {
 			if agents[i] != voter {
-				svc.Vote(d.ID, voter, posID, 1)
+				svc.Vote(context.Background(), d.ID, voter, posID, 1)
 			}
 		}
 	}
@@ -75,19 +75,19 @@ func TestTotalAgreement(t *testing.T) {
 
 func TestTotalDisagreement(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Disagreement", "Nobody agrees on anything")
+	d, _ := svc.CreateDeliberation(context.Background(), "Disagreement", "Nobody agrees on anything")
 
 	agents := []string{"a", "b", "c", "d"}
 	var posIDs []string
 	for _, a := range agents {
-		p, _ := svc.SubmitPosition(d.ID, a, fmt.Sprintf("Only %s's view is correct", a))
+		p, _ := svc.SubmitPosition(context.Background(), d.ID, a, fmt.Sprintf("Only %s's view is correct", a))
 		posIDs = append(posIDs, p.ID)
 	}
 	// Everyone disagrees with everyone
 	for _, voter := range agents {
 		for i, posID := range posIDs {
 			if agents[i] != voter {
-				svc.Vote(d.ID, voter, posID, -1)
+				svc.Vote(context.Background(), d.ID, voter, posID, -1)
 			}
 		}
 	}
@@ -105,16 +105,16 @@ func TestTotalDisagreement(t *testing.T) {
 
 func TestSparseVoting(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Sparse", "Most agents don't vote")
+	d, _ := svc.CreateDeliberation(context.Background(), "Sparse", "Most agents don't vote")
 
 	var posIDs []string
 	for i := 0; i < 10; i++ {
-		p, _ := svc.SubmitPosition(d.ID, fmt.Sprintf("agent-%d", i), fmt.Sprintf("Position %d", i))
+		p, _ := svc.SubmitPosition(context.Background(), d.ID, fmt.Sprintf("agent-%d", i), fmt.Sprintf("Position %d", i))
 		posIDs = append(posIDs, p.ID)
 	}
 	// Only 2 agents vote on 2 positions
-	svc.Vote(d.ID, "agent-0", posIDs[1], 1)
-	svc.Vote(d.ID, "agent-1", posIDs[0], -1)
+	svc.Vote(context.Background(), d.ID, "agent-0", posIDs[1], 1)
+	svc.Vote(context.Background(), d.ID, "agent-1", posIDs[0], -1)
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -131,36 +131,36 @@ func TestInputLengthLimits(t *testing.T) {
 
 	// Topic too long
 	longTopic := strings.Repeat("x", 501)
-	_, err := svc.CreateDeliberation(longTopic, "")
+	_, err := svc.CreateDeliberation(context.Background(), longTopic, "")
 	if err == nil {
 		t.Error("expected error for topic > 500 chars")
 	}
 
 	// Description too long
 	longDesc := strings.Repeat("x", 5001)
-	_, err = svc.CreateDeliberation("ok", longDesc)
+	_, err = svc.CreateDeliberation(context.Background(), "ok", longDesc)
 	if err == nil {
 		t.Error("expected error for description > 5000 chars")
 	}
 
 	// Content too long
-	d, _ := svc.CreateDeliberation("test", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "test", "")
 	longContent := strings.Repeat("x", 50001)
-	_, err = svc.SubmitPosition(d.ID, "agent", longContent)
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent", longContent)
 	if err == nil {
 		t.Error("expected error for content > 50000 chars")
 	}
 
 	// Agent ID too long
 	longAgent := strings.Repeat("x", 201)
-	_, err = svc.SubmitPosition(d.ID, longAgent, "content")
+	_, err = svc.SubmitPosition(context.Background(), d.ID, longAgent, "content")
 	if err == nil {
 		t.Error("expected error for agent_id > 200 chars")
 	}
 
 	// Valid at the limit
 	okContent := strings.Repeat("x", 10000)
-	_, err = svc.SubmitPosition(d.ID, "agent", okContent)
+	_, err = svc.SubmitPosition(context.Background(), d.ID, "agent", okContent)
 	if err != nil {
 		t.Errorf("expected no error for content at exactly 10000 chars: %v", err)
 	}
@@ -170,13 +170,13 @@ func TestPositionCap(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Cap test", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Cap test", "")
 
 	// The cap is 1000 — we won't actually create 1000 positions in a test,
 	// but verify the check is wired correctly by looking at the error message
 	// after inserting a few and checking the count works.
 	for i := 0; i < 5; i++ {
-		_, err := svc.SubmitPosition(d.ID, fmt.Sprintf("agent-%d", i), "position")
+		_, err := svc.SubmitPosition(context.Background(), d.ID, fmt.Sprintf("agent-%d", i), "position")
 		if err != nil {
 			t.Fatalf("position %d: %v", i, err)
 		}
@@ -193,7 +193,7 @@ func TestPositionCap(t *testing.T) {
 
 func TestUnicodeAndSpecialChars(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Unicode test 日本語", "Description with émojis 🎉")
+	d, _ := svc.CreateDeliberation(context.Background(), "Unicode test 日本語", "Description with émojis 🎉")
 
 	positions := []string{
 		"Position with unicode: こんにちは世界",
@@ -205,12 +205,12 @@ func TestUnicodeAndSpecialChars(t *testing.T) {
 	}
 
 	for i, content := range positions {
-		p, err := svc.SubmitPosition(d.ID, fmt.Sprintf("agent-%d", i), content)
+		p, err := svc.SubmitPosition(context.Background(), d.ID, fmt.Sprintf("agent-%d", i), content)
 		if err != nil {
 			t.Fatalf("position %d failed: %v", i, err)
 		}
 		// Read it back
-		got, err := svc.GetPositions(d.ID, nil, nil)
+		got, err := svc.GetPositions(context.Background(), d.ID, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,9 +237,9 @@ func TestConcurrentAnalyze(t *testing.T) {
 	slowMock := &slowAnalyzer{delay: 50 * time.Millisecond}
 	svc := deliberation.NewService(db, slowMock)
 
-	d, _ := svc.CreateDeliberation("Concurrent", "Race condition test")
-	svc.SubmitPosition(d.ID, "agent-1", "Position 1")
-	svc.SubmitPosition(d.ID, "agent-2", "Position 2")
+	d, _ := svc.CreateDeliberation(context.Background(), "Concurrent", "Race condition test")
+	svc.SubmitPosition(context.Background(), d.ID, "agent-1", "Position 1")
+	svc.SubmitPosition(context.Background(), d.ID, "agent-2", "Position 2")
 
 	// Launch 10 concurrent analyze calls
 	ctx := context.Background()
@@ -520,9 +520,9 @@ func TestCruxFramingAttack(t *testing.T) {
 
 func TestAnalyzeWithNoVotes(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("No votes", "Positions but no votes")
-	svc.SubmitPosition(d.ID, "a", "Position A")
-	svc.SubmitPosition(d.ID, "b", "Position B")
+	d, _ := svc.CreateDeliberation(context.Background(), "No votes", "Positions but no votes")
+	svc.SubmitPosition(context.Background(), d.ID, "a", "Position A")
+	svc.SubmitPosition(context.Background(), d.ID, "b", "Position B")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -538,7 +538,7 @@ func TestAnalyzeWithNoVotes(t *testing.T) {
 
 func TestAnalyzeEmptyDeliberation(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Empty", "No positions at all")
+	d, _ := svc.CreateDeliberation(context.Background(), "Empty", "No positions at all")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -551,11 +551,11 @@ func TestAnalyzeEmptyDeliberation(t *testing.T) {
 
 func TestVoteOnOwnPosition(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Self vote", "")
-	p, _ := svc.SubmitPosition(d.ID, "agent", "My position")
+	d, _ := svc.CreateDeliberation(context.Background(), "Self vote", "")
+	p, _ := svc.SubmitPosition(context.Background(), d.ID, "agent", "My position")
 
 	// Voting on your own position should work (it's not prohibited)
-	err := svc.Vote(d.ID, "agent", p.ID, 1)
+	err := svc.Vote(context.Background(), d.ID, "agent", p.ID, 1)
 	if err != nil {
 		t.Fatalf("expected self-vote to be allowed: %v", err)
 	}
@@ -563,9 +563,9 @@ func TestVoteOnOwnPosition(t *testing.T) {
 
 func TestVoteOnNonexistentPosition(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Bad vote", "")
+	d, _ := svc.CreateDeliberation(context.Background(), "Bad vote", "")
 
-	err := svc.Vote(d.ID, "agent", "nonexistent-position-id", 1)
+	err := svc.Vote(context.Background(), d.ID, "agent", "nonexistent-position-id", 1)
 	if err == nil {
 		t.Error("expected error for vote on nonexistent position")
 	}
@@ -573,12 +573,12 @@ func TestVoteOnNonexistentPosition(t *testing.T) {
 
 func TestCrossDeliberationVote(t *testing.T) {
 	svc, _ := newTestService(t)
-	d1, _ := svc.CreateDeliberation("Delib 1", "")
-	d2, _ := svc.CreateDeliberation("Delib 2", "")
-	p, _ := svc.SubmitPosition(d1.ID, "agent", "Position in delib 1")
+	d1, _ := svc.CreateDeliberation(context.Background(), "Delib 1", "")
+	d2, _ := svc.CreateDeliberation(context.Background(), "Delib 2", "")
+	p, _ := svc.SubmitPosition(context.Background(), d1.ID, "agent", "Position in delib 1")
 
 	// Try to vote on d1's position from d2
-	err := svc.Vote(d2.ID, "agent", p.ID, 1)
+	err := svc.Vote(context.Background(), d2.ID, "agent", p.ID, 1)
 	if err == nil {
 		t.Error("expected error for cross-deliberation vote")
 	}
@@ -586,9 +586,9 @@ func TestCrossDeliberationVote(t *testing.T) {
 
 func TestAnalyzeTwice(t *testing.T) {
 	svc, _ := newTestService(t)
-	d, _ := svc.CreateDeliberation("Twice", "Analyze twice should advance round")
-	svc.SubmitPosition(d.ID, "a", "Position A")
-	svc.SubmitPosition(d.ID, "b", "Position B")
+	d, _ := svc.CreateDeliberation(context.Background(), "Twice", "Analyze twice should advance round")
+	svc.SubmitPosition(context.Background(), d.ID, "a", "Position A")
+	svc.SubmitPosition(context.Background(), d.ID, "b", "Position B")
 
 	r1, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -599,7 +599,7 @@ func TestAnalyzeTwice(t *testing.T) {
 	}
 
 	// Add more positions for round 2
-	svc.SubmitPosition(d.ID, "a", "Refined position A")
+	svc.SubmitPosition(context.Background(), d.ID, "a", "Refined position A")
 
 	r2, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -609,7 +609,7 @@ func TestAnalyzeTwice(t *testing.T) {
 		t.Fatalf("expected round 2, got %d", r2.Round)
 	}
 
-	d2, _ := svc.GetDeliberation(d.ID)
+	d2, _ := svc.GetDeliberation(context.Background(), d.ID)
 	if d2.Round != 3 {
 		t.Fatalf("expected deliberation at round 3, got %d", d2.Round)
 	}
@@ -621,12 +621,12 @@ func TestManyAgentsManyVotes(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
-	d, _ := svc.CreateDeliberation("Scale", "20 agents, lots of votes")
+	d, _ := svc.CreateDeliberation(context.Background(), "Scale", "20 agents, lots of votes")
 
 	// 20 agents, 20 positions
 	var posIDs []string
 	for i := 0; i < 20; i++ {
-		p, err := svc.SubmitPosition(d.ID, fmt.Sprintf("agent-%02d", i), fmt.Sprintf("Position %d: some substantive text", i))
+		p, err := svc.SubmitPosition(context.Background(), d.ID, fmt.Sprintf("agent-%02d", i), fmt.Sprintf("Position %d: some substantive text", i))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -643,7 +643,7 @@ func TestManyAgentsManyVotes(t *testing.T) {
 			if j%3 == 0 {
 				value = -1
 			}
-			if err := svc.Vote(d.ID, voter, posIDs[target], value); err != nil {
+			if err := svc.Vote(context.Background(), d.ID, voter, posIDs[target], value); err != nil {
 				t.Fatal(err)
 			}
 			voteCount++
