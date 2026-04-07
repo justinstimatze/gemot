@@ -10,6 +10,111 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// buildResolutionAgents generates concrete actionable proposals from R2 findings.
+// Each resolution agent champions a specific proposal that existing agents vote on.
+func buildResolutionAgents(r2Analysis *analysisResult, data *ReportData) []agentPlan {
+	apiKey := getAnthropicKey()
+	if apiKey == "" {
+		fmt.Fprintf(os.Stderr, "  R3: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required for resolutions\n")
+		os.Exit(1)
+	}
+	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+
+	// Build context from R2 findings
+	var ctx strings.Builder
+	if len(r2Analysis.Cruxes) > 0 {
+		ctx.WriteString("CRUXES (points of disagreement):\n")
+		for _, c := range r2Analysis.Cruxes[:min(6, len(r2Analysis.Cruxes))] {
+			fmt.Fprintf(&ctx, "- [%.0f%%] %s\n", c.Score*100, c.Claim[:min(150, len(c.Claim))])
+			fmt.Fprintf(&ctx, "  Agree: %s | Disagree: %s\n", strings.Join(c.Agree, ", "), strings.Join(c.Disagree, ", "))
+		}
+		ctx.WriteString("\n")
+	}
+	if len(r2Analysis.ConsensusStatements) > 0 {
+		ctx.WriteString("CONSENSUS:\n")
+		for _, cs := range r2Analysis.ConsensusStatements[:min(4, len(r2Analysis.ConsensusStatements))] {
+			fmt.Fprintf(&ctx, "- %s\n", cs.Content[:min(120, len(cs.Content))])
+		}
+		ctx.WriteString("\n")
+	}
+	if len(r2Analysis.BridgingStatements) > 0 {
+		ctx.WriteString("BRIDGING PROPOSALS:\n")
+		for _, bs := range r2Analysis.BridgingStatements[:min(3, len(r2Analysis.BridgingStatements))] {
+			fmt.Fprintf(&ctx, "- %s\n", bs.Content[:min(120, len(bs.Content))])
+		}
+		ctx.WriteString("\n")
+	}
+
+	findings := ctx.String()
+	if findings == "" {
+		return nil
+	}
+
+	prompt := fmt.Sprintf(
+		"A deliberation about %q produced these findings after 2 rounds:\n\n%s\n"+
+			"Generate 3-4 concrete, actionable resolution proposals that could address the key disagreements. Each proposal should:\n"+
+			"1. Be specific enough to implement (not vague principles)\n"+
+			"2. Build on areas of agreement while addressing contested cruxes\n"+
+			"3. Identify what each side would need to concede\n"+
+			"4. Be honest about tradeoffs — don't pretend there's a costless solution\n\n"+
+			"Format each as:\n"+
+			"RESOLUTION: [title]\n[2-3 sentence proposal]\nREQUIRES: [what each side concedes]\n\n"+
+			"Generate exactly 3-4 resolutions, separated by blank lines.",
+		data.Title, findings,
+	)
+
+	fmt.Fprintf(os.Stderr, "  generating resolution proposals...\n")
+	resp, err := callAnthropic(client, anthropic.MessageNewParams{
+		Model:     "claude-sonnet-4-6",
+		MaxTokens: 1200,
+		System: []anthropic.TextBlockParam{
+			{Text: "You propose concrete, actionable resolutions for deliberation disputes. Be specific and honest about tradeoffs. Each resolution should be implementable, not aspirational."},
+		},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "  resolution generation failed: %v\n", err)
+		return nil
+	}
+
+	text := extractText(resp)
+	if text == "" {
+		return nil
+	}
+
+	// Parse resolutions from response
+	var agents []agentPlan
+	blocks := strings.Split(text, "RESOLUTION:")
+	for i, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block == "" || i == 0 { // skip text before first RESOLUTION:
+			continue
+		}
+
+		agentID := fmt.Sprintf("t3c-resolution-%d", i)
+		lines := strings.SplitN(block, "\n", 2)
+		title := strings.TrimSpace(lines[0])
+		body := block
+		if len(lines) > 1 {
+			body = strings.TrimSpace(lines[1])
+		}
+
+		agents = append(agents, agentPlan{
+			ID:       agentID,
+			Role:     fmt.Sprintf("Resolution: %s", title),
+			Position: fmt.Sprintf("RESOLUTION: %s\n\n%s", title, body),
+			Kind:     "resolution",
+			Round:    3,
+		})
+
+		fmt.Fprintf(os.Stderr, "    resolution %d: %s\n", i, title[:min(60, len(title))])
+	}
+
+	return agents
+}
+
 // buildR3Agents generates revised speaker positions informed by R2 analysis.
 // Only speaker-derived agents (speaker, steelman) get revised — structural agents don't.
 // Returns forked agents with "-r3" suffix.
