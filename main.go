@@ -107,7 +107,7 @@ func cmdServe(httpMode bool, addr string) {
 							fmt.Fprintf(os.Stderr, "gemot: PANIC in janitor (recovered): %v\n", r)
 						}
 					}()
-					if n, err := svc.RecoverStuck(context.Background()); err != nil {
+					if n, err := svc.RecoverStuck(ctx); err != nil {
 						fmt.Fprintf(os.Stderr, "gemot: stuck recovery error: %v\n", err)
 					} else if n > 0 {
 						fmt.Fprintf(os.Stderr, "gemot: recovered %d stuck deliberation(s)\n", n)

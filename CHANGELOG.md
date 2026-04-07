@@ -1,79 +1,81 @@
 # Changelog
 
-## 2026-04-06 (evening)
+All notable changes to gemot are documented here.
 
-### Security Hardening
-
-- **Dev mode rate limiting**: When running without `GEMOT_API_SECRET`, requests are now rate-limited (30/min per IP) and sandboxed. Previously, dev mode had zero rate limiting, allowing unlimited Anthropic API calls.
-- **Export auth fix**: `/export` endpoint no longer accepts arbitrary Bearer tokens when `apiSecret` is unset. Auth is properly skipped in dev mode; when auth is configured, valid admin or customer key required.
-- **Docker Postgres localhost-only**: `docker-compose.yml` binds Postgres to `127.0.0.1` instead of all interfaces.
-- **Rate limit comment correction**: Fixed misleading comment claiming 10 req/min for sandbox (actual: 30 req/min).
-
-### Improvements
-
-- **Parallel topic analysis**: Topics now run in parallel (summaries + crux detection across all topics share a bounded semaphore of 5). Previously, topics ran sequentially — with 3 topics, this could add 3 sequential LLM calls for summaries alone.
-- **SSE reliability**: Expert panel script rewritten with robust reconnect (max 10 retries, 3s backoff, soft-error polling). Server IdleTimeout increased from 120s to 10 minutes.
-- **Local self-hosting**: Added `docker-compose.yml`, expanded README with `DATABASE_URL` setup and privacy section, added "Self-host it" guide to website.
-
-### Documentation
-
-- **FINDINGS.md**: Added v13 live experiment, v14 per-season results, expert panel critique, England structural bias observation, v15 2×2 factorial design.
-- **Experiment script**: Added `--seed` and `--no-incremental` flags to `run_gemot_experiment.sh` for factorial isolation.
-
-## 2026-04-06 (afternoon)
-
-### New Features
-
-- **Expert panel MCP tool**: `analyze action:expert_panel` creates a deliberation, submits expert critiques, and triggers async analysis in a single call. Returns deliberation_id immediately — poll for completion.
-- **Source-type specialization**: `source_type` parameter selects expert panels tuned to the review context: `code_review` (security, API, reliability, maintainability), `architecture` (scalability, security, operations, simplicity), `experiment` (methodology, statistics, validity), `proposal` (feasibility, user value, tech debt, business case). Custom experts via JSON override source_type.
-- **Position metadata**: Positions now support an extensible `metadata` JSON field. Used by the diplomacy script to pass lat/lon coordinates for gemotvis world map rendering.
-
-### Improvements
-
-- **Parallel crux detection**: Subtopic crux detection (dedup + getCrux) now runs 5 concurrent goroutines per topic. Reduces crux detection from ~20 minutes to ~4 minutes for panels with 18+ subtopics. Context cancellation and API rate limits respected.
-- **Graceful deploys**: Switched from bluegreen to rolling deploy strategy with 10-minute drain timeout. In-flight analyses survive deploys instead of being killed mid-analysis. Go HTTP shutdown timeout increased from 5s to 10 minutes.
-- **Position content limit**: Increased from 10K to 50K characters to support larger documents in expert panels and general use.
-- **Diplomacy lat/lon**: Agent positions now include capital city coordinates (Vienna, London, Paris, Berlin, Rome, Moscow, Istanbul) as metadata, enabling automatic world map rendering in gemotvis without manual config.
-- **Expert panel script**: Simplified from manual 5-step orchestration to single `expert_panel` MCP tool call + poll + fetch.
-
-### Bug Fixes
-
-- **Deploy killing in-flight analysis**: Old bluegreen strategy destroyed machines while analysis was running. Rolling deploy with drain timeout preserves in-flight work.
-- **A2A audit trail**: `fulfill` and `break` commitment actions now logged in audit trail.
-
-### Tests
-
-- 4 new expert panel tests: core flow, custom experts, source_type specialization, validation.
-
-## 2026-04-06
+## v0.9.0 (2026-04-06)
 
 ### Breaking Changes
 
-- **`SetTemplate` now replaces all rules** instead of merging with existing rules. Previously, switching templates (e.g., jury to assembly) preserved old template rules like `min_participants: 6` even when the new template defined `min_participants: 3`. Now the new template's defaults fully replace the old rules. If you relied on the merge behavior to preserve custom rules across template switches, set them again after calling `set_template`.
+- **`SetTemplate` now replaces all rules** instead of merging with existing rules. Previously, switching templates preserved old template rules even when the new template defined different defaults. Now the new template's defaults fully replace the old rules.
+
+### Security
+
+- **14 audit findings fixed**: Metrics endpoint method restriction, CSV export quoting, SSE shutdown ordering, webhook idempotency (partial unique index), schema version tracking, A2A job tracking, resolution lock cleanup on delete.
+- **Dev mode hardening**: Rate limiting (30/min per IP) when running without `GEMOT_API_SECRET`. Auth bypass in A2A, SSE, and metrics endpoints for dev mode.
+- **Atomic credit operations**: Replaced mutex + separate SELECT with `UPDATE...RETURNING` for AddCredits, Deduct, AddCreditsByEmail. Eliminates TOCTOU race conditions.
+- **Webhook idempotency**: `AddCreditsByEmail` now rejects duplicate session IDs, preventing double-crediting from webhook retries.
+- **Docker Postgres localhost-only**: `docker-compose.yml` binds Postgres to `127.0.0.1` instead of all interfaces.
 
 ### New Features
 
-- **Incremental crux detection**: Multi-round analysis now skips re-extracting claims from prior rounds. `ExtractedClaims` persisted in `AnalysisResult` so subsequent rounds carry forward prior claims and only process new positions. Reduces analysis time proportionally for long-running deliberations.
-- **Quorum pre-check**: `analyze run` now checks quorum synchronously before launching async analysis. Returns a clear error instead of failing silently in the background.
-- **Quorum hints**: `submit_position` response includes a note when more participants are needed before analysis can run.
-- **Expert panel tool**: New script at `scripts/expert-panel/` for one-command adversarial review of any document. Default 5-expert panel with customizable experts via JSON.
-- **Thin results for < 2 agents**: Single-agent deliberations return a valid `AnalysisResult` with `INSUFFICIENT_AGENTS` warning instead of erroring. Round still advances.
+- **Expert panel tool**: `analyze action:expert_panel` creates a deliberation with domain-specialized expert critiques in a single call. Source types: `code_review`, `architecture`, `experiment`, `proposal`. Custom experts via JSON.
+- **Service-level audit logging**: All write operations (create, submit, vote, commit, delete) logged via `SetAuditLogger` callback. Full audit log included in deliberation exports.
+- **Priority API semaphore**: 7 background + 3 interactive-reserved slots for LLM calls. Expert panels and follow-up analyses get priority access, preventing starvation behind long-running batch jobs.
+- **Incremental crux detection**: Multi-round analysis skips re-extracting claims from prior rounds. Persisted `ExtractedClaims` carry forward, reducing analysis time proportionally.
+- **Commitment accountability**: Conditional commitments, fulfillment tracking, and agent reputation scores.
+- **Position metadata**: Extensible JSON metadata field on positions. Used by diplomacy integration for lat/lon coordinates.
+- **Schema version table**: Warns on startup if database schema is ahead of binary version (downgrade detection).
+
+### Performance
+
+- **Parallel topic analysis**: Topics run in parallel (summaries + crux detection share bounded semaphore of 5). Previously sequential — 3x speedup for multi-topic deliberations.
+- **CheckParticipantCap**: Single `COUNT(DISTINCT agent_id)` query replaces loading all positions into memory for max_participants enforcement.
+- **Resolution deferred to analysis**: Resolution recalculated after analysis completes, not on every vote. Reduces per-vote overhead.
 
 ### Improvements
 
-- **Homepage**: Demo cards now all start collapsed with chevron indicators. New Adversarial Expert Panel demo. Updated Diplomacy demo with v14 per-season experiment results.
-- **Diplomacy script**: Batched V12 LLM calls (14 per-power calls reduced to 2 batched calls). Per-season mode via `--through-phase`. Position dedup prevents re-submission on reruns. Resilient SSE sessions with auto-reconnect. Reduced Stage B inter-position delay from 200ms to 50ms.
-- **Poll loop fix**: Analysis polling now checks deliberation status instead of `get_context`, preventing false reconnects during long analyses.
+- **Context propagation**: All 42 Service methods accept `context.Context`. 90 `context.TODO()` calls eliminated. Request cancellation and deadlines propagate from HTTP handlers through to database queries.
+- **SSE reliability**: Robust reconnect (max 10 retries, 3s backoff), server IdleTimeout increased to 10 minutes.
+- **Graceful deploys**: Rolling strategy with 10-minute drain timeout. SSE clients notified before HTTP server shutdown.
+- **Parallel claim extraction**: 6 concurrent goroutines for claim extraction.
+- **LLM response caching**: 24h TTL, SHA256 keys.
+- **CSV export**: Position IDs and timestamps now quoted to prevent injection.
 
-### Bug Fixes
+### Documentation
 
-- Fixed `SetTemplate` rule merge bug (see Breaking Changes above).
-- Fixed poll loop burning reconnect attempts on normal server error responses.
-- Fixed per-season mode collecting both seasons' messages instead of just the target season.
-- Fixed `--end_at_phase` stopping before the target phase instead of after.
+- **Getting Started tutorial**: End-to-end walkthrough of first deliberation.
+- **Environment variables reference**: All config vars documented in README.
+- **Stale references fixed**: SQLite references updated to Postgres throughout docs.
 
 ### Tests
 
-- 8 new service-level tests: multi-round claims/norms threading, thin results, status transitions, cancellation.
-- 1 new test for `SetTemplate` rule replacement behavior.
-- 1 new test for incremental text analysis.
+- 187 tests (up from 161). New coverage:
+  - Audit logger callback verification
+  - Participant cap enforcement and existing-agent bypass
+  - Concurrent credit deductions (race condition tests)
+  - Webhook idempotency (double-credit prevention)
+  - Resolution update after analysis
+  - Soft-delete and resolution lock cleanup
+
+## v0.8.0 (2026-04-04)
+
+- Grouped MCP tools (6 tools with `action` parameter, down from 30+)
+- Postgres migration (from SQLite via pgx)
+- Resolution layer with template-aware consensus thresholds
+- Governance templates: assembly, sortition, parliament, jury, consensus, negotiation, review
+- Delegation (liquid democracy), withdrawal, deadlines
+- A2A JSON-RPC endpoint with MCP/A2A method parity
+- Structured logging (slog)
+
+## v0.7.0
+
+- Enriched agent context (cluster, allies, disagreements, diversity nudge)
+- Multi-scope deliberations
+- Security hardening
+
+## v0.5.0
+
+- Streamable HTTP transport
+- Multi-use join codes
+- XSS fix
+- Sandbox mode

@@ -11,7 +11,7 @@ go build ./...
 go test ./...
 ```
 
-You'll need Go 1.23+ and an Anthropic API key for the LLM-dependent tests.
+You'll need Go 1.25+, Postgres (see `docker-compose.yml`), and an Anthropic API key for the LLM-dependent tests.
 
 ## Development
 

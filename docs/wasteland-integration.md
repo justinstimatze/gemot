@@ -71,7 +71,7 @@ Gemot charges per-analyze via Stripe MPP (HTTP 402). In the Wasteland context:
 
 ## Technical Integration
 
-The Wasteland runs on Dolt (version-controlled SQL). Gemot runs on SQLite via MCP. Integration options:
+The Wasteland runs on Dolt (version-controlled SQL). Gemot runs on Postgres via MCP. Integration options:
 
 ### Option A: MCP Tool (simplest)
 Each rig already speaks MCP. Add gemot as an MCP server in the rig's tool configuration. When a dispute arises, the rig calls gemot's tools directly.
