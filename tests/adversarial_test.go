@@ -329,7 +329,7 @@ func TestPromptInjectionViaPosition(t *testing.T) {
 	}
 	cfg := config.Load()
 	if cfg.AnthropicKey == "" {
-		t.Skip("GEMOT_ANTHROPIC_KEY not set")
+		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 
 	client := llm.NewClient(cfg.AnthropicKey, cfg.Model)
@@ -383,7 +383,7 @@ func TestTaxonomySilencingAttack(t *testing.T) {
 	}
 	cfg := config.Load()
 	if cfg.AnthropicKey == "" {
-		t.Skip("GEMOT_ANTHROPIC_KEY not set")
+		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 
 	client := llm.NewClient(cfg.AnthropicKey, cfg.Model)
@@ -468,7 +468,7 @@ func TestCruxFramingAttack(t *testing.T) {
 	}
 	cfg := config.Load()
 	if cfg.AnthropicKey == "" {
-		t.Skip("GEMOT_ANTHROPIC_KEY not set")
+		t.Skip("ANTHROPIC_API_KEY not set")
 	}
 
 	client := llm.NewClient(cfg.AnthropicKey, cfg.Model)

@@ -20,7 +20,7 @@ func Load() *Config {
 
 	cfg := &Config{
 		DatabaseURL:  envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
-		AnthropicKey: os.Getenv("GEMOT_ANTHROPIC_KEY"),
+		AnthropicKey: envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
 		Model:        envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
 	}
 
@@ -36,7 +36,7 @@ func Load() *Config {
 
 	// Warn if analysis won't work
 	if cfg.AnthropicKey == "" {
-		fmt.Fprintf(os.Stderr, "gemot: WARNING: GEMOT_ANTHROPIC_KEY not set — analysis and content screening disabled\n")
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: ANTHROPIC_API_KEY not set — analysis and content screening disabled\n")
 	}
 
 	return cfg

@@ -24,7 +24,7 @@ type coverageResult struct {
 func runCoverageAudit(r1Analysis *analysisResult, reportTitle string) *coverageResult {
 	apiKey := getAnthropicKey()
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "  coverage audit: GEMOT_ANTHROPIC_KEY or ANTHROPIC_API_KEY required\n")
+		fmt.Fprintf(os.Stderr, "  coverage audit: ANTHROPIC_API_KEY required\n")
 		os.Exit(1)
 	}
 

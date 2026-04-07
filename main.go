@@ -73,7 +73,7 @@ func cmdServe(httpMode bool, addr string) {
 		synth.SetCache(store.NewLLMCache(db, 24*time.Hour))
 		analyzer = synth
 	} else {
-		fmt.Fprintf(os.Stderr, "Warning: GEMOT_ANTHROPIC_KEY not set, analysis will not be available\n")
+		fmt.Fprintf(os.Stderr, "Warning: ANTHROPIC_API_KEY not set, analysis will not be available\n")
 		analyzer = &noopAnalyzer{}
 	}
 
@@ -156,5 +156,5 @@ func cmdServe(httpMode bool, addr string) {
 type noopAnalyzer struct{}
 
 func (n *noopAnalyzer) Analyze(_ context.Context, positions []deliberation.Position, votes []deliberation.Vote, agents []string) (*deliberation.AnalysisResult, error) {
-	return nil, fmt.Errorf("analysis not available: GEMOT_ANTHROPIC_KEY not configured")
+	return nil, fmt.Errorf("analysis not available: ANTHROPIC_API_KEY not configured")
 }
