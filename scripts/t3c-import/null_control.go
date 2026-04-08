@@ -199,13 +199,6 @@ func buildClaimsPosition(data *ReportData, speakers []string, label string, isSt
 func shuffleClaims(data *ReportData) *ReportData {
 	rng := rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0))
 
-	// Collect all source IDs
-	sourceIDs := make([]string, len(data.Sources))
-	for i, s := range sourceIDs {
-		sourceIDs[i] = s
-	}
-	_ = sourceIDs
-
 	// Deep copy sources with shuffled Interview (speaker name) assignments
 	newSources := make([]Source, len(data.Sources))
 	copy(newSources, data.Sources)
