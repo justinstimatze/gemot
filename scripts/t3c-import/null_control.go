@@ -74,7 +74,8 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 			if assigned[j] >= 0 {
 				continue
 			}
-			if jaccardSubtopics(subtopicSets[speakerNames[i]], subtopicSets[speakerNames[j]]) >= 0.5 {
+			if jaccardSubtopics(subtopicSets[speakerNames[i]], subtopicSets[speakerNames[j]]) >= 0.5 &&
+				sharedClaimCount(data, speakerNames[i], speakerNames[j]) >= 2 {
 				assigned[j] = clusterID
 			}
 		}
