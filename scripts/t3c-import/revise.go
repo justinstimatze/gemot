@@ -231,7 +231,7 @@ func buildR3Agents(r1Agents []agentPlan, r2Analysis *analysisResult, data *Repor
 			)
 
 			checkResp, checkErr := callAnthropic(client, anthropic.MessageNewParams{
-				Model:     "claude-haiku-4-5",
+				Model:     "claude-sonnet-4-6",
 				MaxTokens: 200,
 				System: []anthropic.TextBlockParam{
 					{Text: "You detect sycophantic drift in AI-generated position revisions. A revision has 'drifted' if it softens, hedges, or contradicts what the speaker clearly stated in their source quotes. Deliberation findings can ADD new considerations but cannot ERASE stated positions. Be strict."},
