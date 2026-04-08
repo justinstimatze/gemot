@@ -11,13 +11,13 @@ All API features are shipped and deployed. A sample deliberation with validation
 2. gemotvis MUST NOT reverse-map pseudonyms to real names in its display
 3. If gemotvis stores or caches reports with real names from before this change, **scrub that data and its history**
 4. The `--named` flag exists for internal/authorized use only — gemotvis should never request or display named reports to end users without explicit consent from named individuals
-5. The API returns agent IDs that contain slugified real names (e.g., `t3c-speaker-speaker-x`). gemotvis should apply the same anonymization to agent IDs before display.
+5. Agent IDs are now anonymous (e.g., `t3c-speaker-a`, `t3c-steelman-b`). No anonymization layer needed in gemotvis — the API data is safe to display directly.
 
 **Git history**: The `integrations/t3c/ai-manifestos-report.md` file history has been scrubbed. If gemotvis imported or cached any previous version, delete those cached copies.
 
 ## Live Test Data
 
-**Deliberation**: `6d1bfa77-f472-4b16-8106-75b259d92ab3`
+**Deliberation**: `f2e9b0ae-055f-438f-9991-89e02a26a152`
 - 3 rounds (R1: initial analysis, R2: bridge + empty chair, R3: revised positions + 4 resolution proposals)
 - 7 R1 agents with `metadata.kind` on all positions
 - Verification data stored on R1 analysis result (44 stances checked, 20 downgraded, threshold ≤2)
