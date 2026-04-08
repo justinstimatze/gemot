@@ -98,13 +98,16 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 	})
 
 	// Build speaker/steelman agents from claims + quotes
+	// Agent IDs use anonymous labels (speaker-a, steelman-b) to prevent
+	// real names from entering the database. See Angwin v. Superhuman (2026).
 	for i := range s.clusters {
 		cl := &s.clusters[i]
+		label := string(rune('a' + i))
 		if len(cl.Members) == 1 {
 			name := cl.Members[0]
 			display := displayNames[name]
 			s.agents = append(s.agents, agentPlan{
-				ID: fmt.Sprintf("%sspeaker-%s", prefix, slugify(name)), Role: fmt.Sprintf("Speaker: %s", display),
+				ID: fmt.Sprintf("%sspeaker-%s", prefix, label), Role: fmt.Sprintf("Speaker: %s", display),
 				Position: buildClaimsPosition(data, []string{name}, display, false, s.clusters),
 				Kind: "speaker", Round: 1, Cluster: cl,
 			})
@@ -113,10 +116,10 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 			for j, m := range cl.Members {
 				names[j] = displayNames[m]
 			}
-			label := strings.Join(names, ", ")
+			displayLabel := strings.Join(names, ", ")
 			s.agents = append(s.agents, agentPlan{
-				ID: fmt.Sprintf("%ssteelman-%s", prefix, slugify(cl.Members[0])), Role: fmt.Sprintf("Steelman: %s", label),
-				Position: buildClaimsPosition(data, cl.Members, label, true, s.clusters),
+				ID: fmt.Sprintf("%ssteelman-%s", prefix, label), Role: fmt.Sprintf("Steelman: %s", displayLabel),
+				Position: buildClaimsPosition(data, cl.Members, displayLabel, true, s.clusters),
 				Kind: "steelman", Round: 1, Cluster: cl,
 			})
 		}

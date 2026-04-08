@@ -1120,7 +1120,20 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 				allCruxes = append(allCruxes, cf)
 			}
 		}
-		cruxSCResult = runCruxSpotCheck(allCruxes, data, 0.30)
+		// Build agent ID → speaker name map for spot check (IDs are now anonymous)
+		agentNameMap := map[string]string{}
+		for _, a := range r1Agents {
+			if a.Kind == "speaker" || a.Kind == "steelman" {
+				name := strings.TrimPrefix(a.Role, "Speaker: ")
+				name = strings.TrimPrefix(name, "Steelman: ")
+				// For clusters like "A, B & C", use the first member for quote lookup
+				if idx := strings.Index(name, ","); idx > 0 {
+					name = strings.TrimSpace(name[:idx])
+				}
+				agentNameMap[a.ID] = name
+			}
+		}
+		cruxSCResult = runCruxSpotCheck(allCruxes, data, 0.30, agentNameMap)
 	}
 
 	// Write markdown report if requested

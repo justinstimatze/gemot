@@ -178,7 +178,13 @@ func qualifiedStanceLabel(value int) string {
 // runCruxSpotCheck validates gemot's crux agent assignments against source quotes.
 // This checks the OUTPUT quality (are our crux assignments correct?) rather than
 // the INPUT quality (was the T3C matrix correct?).
-func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float64) *spotCheckResult {
+func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float64, agentNameMap ...map[string]string) *spotCheckResult {
+	// agentNameMap maps agent IDs to speaker names for quote lookup
+	// (needed since agent IDs are now anonymous)
+	var nameMap map[string]string
+	if len(agentNameMap) > 0 {
+		nameMap = agentNameMap[0]
+	}
 	apiKey := getAnthropicKey()
 	if apiKey == "" {
 		fmt.Fprintf(os.Stderr, "  crux-spot-check: ANTHROPIC_API_KEY required\n")
@@ -186,6 +192,21 @@ func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float6
 	}
 
 	// Collect all (speaker, crux_claim, stance) triples
+	// lookupSpeaker resolves agent ID to speaker name via map or slug parsing
+	lookupSpeaker := func(agentID string) string {
+		if nameMap != nil {
+			if name, ok := nameMap[agentID]; ok {
+				return name
+			}
+			// Try stripping -r3 suffix for revised agents
+			base := strings.TrimSuffix(agentID, "-r3")
+			if name, ok := nameMap[base]; ok {
+				return name
+			}
+		}
+		return agentIDToSpeakerName(agentID)
+	}
+
 	var triples []stanceTriple
 	for _, crux := range cruxes {
 		if len(crux.Stances) > 0 {
@@ -194,7 +215,7 @@ func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float6
 				if isStructuralAgent(st.AgentID) {
 					continue
 				}
-				speakerName := agentIDToSpeakerName(st.AgentID)
+				speakerName := lookupSpeaker(st.AgentID)
 				if speakerName == "" {
 					continue
 				}
@@ -222,7 +243,7 @@ func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float6
 				if isStructuralAgent(agent) {
 					continue
 				}
-				speakerName := agentIDToSpeakerName(agent)
+				speakerName := lookupSpeaker(agent)
 				if speakerName == "" {
 					continue
 				}
@@ -244,7 +265,7 @@ func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float6
 				if isStructuralAgent(agent) {
 					continue
 				}
-				speakerName := agentIDToSpeakerName(agent)
+				speakerName := lookupSpeaker(agent)
 				if speakerName == "" {
 					continue
 				}
