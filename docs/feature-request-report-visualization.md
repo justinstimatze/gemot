@@ -2,6 +2,19 @@
 
 All API features are shipped and deployed. A sample deliberation with validation data is live on prod.
 
+## CRITICAL: Speaker Identity Anonymization
+
+**Legal requirement**: Reports MUST NOT attribute AI-synthesized stances to named real individuals without consent. See *Angwin v. Superhuman Platform* (S.D.N.Y. 2026) — right of publicity under CA Civil Code §3344, NY Civil Rights Law §§50-51.
+
+**What this means for gemotvis**:
+1. The gemot pipeline now anonymizes speaker names by default (Speaker A, Speaker B, etc.)
+2. gemotvis MUST NOT reverse-map pseudonyms to real names in its display
+3. If gemotvis stores or caches reports with real names from before this change, **scrub that data and its history**
+4. The `--named` flag exists for internal/authorized use only — gemotvis should never request or display named reports to end users without explicit consent from named individuals
+5. The API returns agent IDs that contain slugified real names (e.g., `t3c-speaker-speaker-x`). gemotvis should apply the same anonymization to agent IDs before display.
+
+**Git history**: The `integrations/t3c/ai-manifestos-report.md` file history has been scrubbed. If gemotvis imported or cached any previous version, delete those cached copies.
+
 ## Live Test Data
 
 **Deliberation**: `5e0c53f0-11fa-4aae-9985-28d8ea0b5cc2`
@@ -10,7 +23,7 @@ All API features are shipped and deployed. A sample deliberation with validation
 - Verification data stored on R1 analysis result (44 stances checked, 20 downgraded, threshold ≤2)
 - Agent kinds: steelman, speaker, probe, bridge, empty-chair, resolution
 
-**Reference report**: `integrations/t3c/ai-manifestos-report.md`
+**Reference report**: `integrations/t3c/ai-manifestos-report.md` (anonymized — Speaker A through Speaker L)
 
 ## Shared Types Package
 
@@ -69,7 +82,7 @@ gemot/participate action:get_positions deliberation_id:5e0c53f0-...
         "crux": "The design of AGI systems inherently encourages power-seeking...",
         "orig_stance": "disagree",
         "score": 2,
-        "reason": "The quotes show Speaker D acknowledges both AI risks and benefits..."
+        "reason": "The quotes show this speaker acknowledges both AI risks and benefits..."
       }
     ]
   },

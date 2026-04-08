@@ -144,8 +144,8 @@ type stanceForCheck struct {
 	Qualifier string
 }
 
-// agentIDToSpeakerName converts an agent ID like "t3c-speaker-speaker-e" or
-// "t3c-steelman-speaker-a" back to a speaker name for quote lookup.
+// agentIDToSpeakerName converts an agent ID like "t3c-speaker-speaker-x" or
+// "t3c-steelman-speaker-x" back to a speaker name for quote lookup.
 func agentIDToSpeakerName(id string) string {
 	// Strip known prefixes
 	for _, prefix := range []string{"t3c-speaker-", "t3c-steelman-"} {
