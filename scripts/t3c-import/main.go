@@ -989,10 +989,12 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 		covResult = runCoverageAudit(&r1Analysis, data.Title)
 	}
 
-	// Run spot-check if requested
+	// Spot-check: verifies T3C matrix stances against source quotes.
+	// In structural mode, the matrix isn't used for agent construction (agents are
+	// built from claims+quotes directly), so this checks input data quality only.
 	var scResult *spotCheckResult
 	if cfg.SpotCheck {
-		fmt.Fprintf(os.Stderr, "\n=== Spot Check ===\n")
+		fmt.Fprintf(os.Stderr, "\n=== Spot Check (T3C input quality) ===\n")
 		scResult = runSpotCheck(data, 0.15)
 	}
 
@@ -1113,6 +1115,26 @@ func seedClaimVotes(session *sdkmcp.ClientSession, data *ReportData, agents []ag
 	return voteCount
 }
 
+// perturbVote returns a deterministic {-1, 0, 1} based on agent ID pair.
+// Used to break vote ties between speakers with identical engagement patterns.
+func perturbVote(voterID, targetID string) int {
+	h := 0
+	for _, c := range voterID {
+		h = h*31 + int(c)
+	}
+	for _, c := range targetID {
+		h = h*17 + int(c)
+	}
+	switch ((h % 3) + 3) % 3 {
+	case 0:
+		return 1
+	case 1:
+		return -1
+	default:
+		return 0
+	}
+}
+
 func deriveClaimVote(data *ReportData, voter, target *agentPlan) int {
 	// Speaker/steelman -> speaker/steelman: claim overlap
 	if (voter.Kind == "speaker" || voter.Kind == "steelman") && (target.Kind == "speaker" || target.Kind == "steelman") {
@@ -1148,7 +1170,9 @@ func deriveClaimVote(data *ReportData, voter, target *agentPlan) int {
 			}
 		}
 		if overlap > 0 {
-			return 0 // same topics, stance unknown
+			// Same topics, stance unknown — perturb deterministically to avoid
+			// identical vote patterns between speakers with similar engagement
+			return perturbVote(voter.ID, target.ID)
 		}
 		return 99 // no basis for comparison, skip
 	}
