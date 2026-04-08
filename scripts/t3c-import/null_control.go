@@ -40,14 +40,16 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 		s.topicCruxes[c.Topic] = append(s.topicCruxes[c.Topic], c)
 	}
 
-	// Collect unique speakers from sources
-	speakerNames := []string{}
+	// Collect unique speakers from sources (preserve original casing for display)
+	speakerNames := []string{}   // lowercased IDs for lookups
+	displayNames := map[string]string{} // id -> original name
 	seen := map[string]bool{}
 	for _, src := range data.Sources {
-		name := parseSpeakerID(src.Interview)
-		if !seen[name] {
-			seen[name] = true
-			speakerNames = append(speakerNames, name)
+		id := parseSpeakerID(src.Interview)
+		if !seen[id] {
+			seen[id] = true
+			speakerNames = append(speakerNames, id)
+			displayNames[id] = parseSpeakerName(src.Interview)
 		}
 	}
 
@@ -99,21 +101,21 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 		cl := &s.clusters[i]
 		if len(cl.Members) == 1 {
 			name := cl.Members[0]
-			displayName := parseSpeakerName(name)
+			display := displayNames[name]
 			s.agents = append(s.agents, agentPlan{
-				ID: fmt.Sprintf("%sspeaker-%s", prefix, slugify(name)), Role: fmt.Sprintf("Speaker: %s", displayName),
-				Position: buildClaimsPosition(data, []string{name}, displayName, false),
+				ID: fmt.Sprintf("%sspeaker-%s", prefix, slugify(name)), Role: fmt.Sprintf("Speaker: %s", display),
+				Position: buildClaimsPosition(data, []string{name}, display, false, s.clusters),
 				Kind: "speaker", Round: 1, Cluster: cl,
 			})
 		} else {
-			displayNames := make([]string, len(cl.Members))
+			names := make([]string, len(cl.Members))
 			for j, m := range cl.Members {
-				displayNames[j] = parseSpeakerName(m)
+				names[j] = displayNames[m]
 			}
-			label := strings.Join(displayNames, ", ")
+			label := strings.Join(names, ", ")
 			s.agents = append(s.agents, agentPlan{
 				ID: fmt.Sprintf("%ssteelman-%s", prefix, slugify(cl.Members[0])), Role: fmt.Sprintf("Steelman: %s", label),
-				Position: buildClaimsPosition(data, cl.Members, label, true),
+				Position: buildClaimsPosition(data, cl.Members, label, true, s.clusters),
 				Kind: "steelman", Round: 1, Cluster: cl,
 			})
 		}
@@ -140,7 +142,7 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 
 // buildClaimsPosition constructs a position from a speaker's claims and quotes.
 // No matrix stances — just what the person actually said.
-func buildClaimsPosition(data *ReportData, speakers []string, label string, isSteelman bool) string {
+func buildClaimsPosition(data *ReportData, speakers []string, label string, isSteelman bool, allClusters []cluster) string {
 	var pos strings.Builder
 	if isSteelman {
 		fmt.Fprintf(&pos, "STEELMAN for %s\n\n", label)
@@ -152,7 +154,7 @@ func buildClaimsPosition(data *ReportData, speakers []string, label string, isSt
 	var claims []string
 	if isSteelman {
 		// For steelmen, prefer distinctive claims (not shared with all clusters)
-		claims = distinctiveClaims(data, speakers, nil, 10)
+		claims = distinctiveClaims(data, speakers, allClusters, 10)
 	} else {
 		claims = findAllClaimsForSpeaker(data, speakers[0])
 		if len(claims) > 10 {
@@ -192,91 +194,36 @@ func buildClaimsPosition(data *ReportData, speakers []string, label string, isSt
 	return pos.String()
 }
 
-// shuffleReport creates a copy of the report data with randomized speaker-crux assignments.
-// Preserves the same claims and marginal distributions but destroys real agreement patterns.
-func shuffleReport(data *ReportData) *ReportData {
-	if data.AddOns == nil || data.AddOns.SpeakerCruxMatrix == nil {
-		return data
-	}
-
-	matrix := data.AddOns.SpeakerCruxMatrix
-	n := len(matrix.Speakers)
-	nCruxes := len(matrix.CruxLabels)
-	if n == 0 || nCruxes == 0 {
-		return data
-	}
-
+// shuffleClaims creates a copy of the report data with randomized claim-to-speaker attribution.
+// Preserves the same claims and topics but destroys which speaker said what.
+func shuffleClaims(data *ReportData) *ReportData {
 	rng := rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0))
 
-	// Deep copy the matrix, then shuffle each crux column independently.
-	// This preserves per-crux marginals (same number of agree/disagree)
-	// while destroying speaker-crux correlations.
-	newMatrix := make([][]string, n)
-	for i := range n {
-		newMatrix[i] = make([]string, nCruxes)
-		if i < len(matrix.Matrix) {
-			copy(newMatrix[i], matrix.Matrix[i])
-		} else {
-			for j := range nCruxes {
-				newMatrix[i][j] = "no_position"
-			}
-		}
+	// Collect all source IDs
+	sourceIDs := make([]string, len(data.Sources))
+	for i, s := range sourceIDs {
+		sourceIDs[i] = s
 	}
-	for col := range nCruxes {
-		vals := make([]string, n)
-		for row := range n {
-			vals[row] = newMatrix[row][col]
-		}
-		rng.Shuffle(len(vals), func(i, j int) {
-			vals[i], vals[j] = vals[j], vals[i]
-		})
-		for row := range n {
-			newMatrix[row][col] = vals[row]
-		}
-	}
+	_ = sourceIDs
 
-	// Rebuild SubtopicCruxes agree/disagree lists from shuffled matrix
-	newCruxes := make([]SubtopicCrux, len(data.AddOns.SubtopicCruxes))
-	for i, crux := range data.AddOns.SubtopicCruxes {
-		newCruxes[i] = crux
-		label := cruxLabel(crux.Topic, crux.Subtopic)
-		cruxIdx := -1
-		for j, l := range matrix.CruxLabels {
-			if normLabel(l) == label {
-				cruxIdx = j
-				break
-			}
-		}
-		if cruxIdx < 0 {
-			continue
-		}
-		var agree, disagree, noPos []string
-		for row, speaker := range matrix.Speakers {
-			if row < n && cruxIdx < len(newMatrix[row]) {
-				switch newMatrix[row][cruxIdx] {
-				case "agree":
-					agree = append(agree, speaker)
-				case "disagree":
-					disagree = append(disagree, speaker)
-				default:
-					noPos = append(noPos, speaker)
-				}
-			}
-		}
-		newCruxes[i].Agree = agree
-		newCruxes[i].Disagree = disagree
-		newCruxes[i].NoPosition = noPos
+	// Deep copy sources with shuffled Interview (speaker name) assignments
+	newSources := make([]Source, len(data.Sources))
+	copy(newSources, data.Sources)
+
+	// Shuffle which speaker name is assigned to which source ID
+	interviews := make([]string, len(data.Sources))
+	for i, s := range data.Sources {
+		interviews[i] = s.Interview
+	}
+	rng.Shuffle(len(interviews), func(i, j int) {
+		interviews[i], interviews[j] = interviews[j], interviews[i]
+	})
+	for i := range newSources {
+		newSources[i].Interview = interviews[i]
 	}
 
 	shuffled := *data
-	newAddOns := *data.AddOns
-	newAddOns.SubtopicCruxes = newCruxes
-	newAddOns.SpeakerCruxMatrix = &SpeakerCruxMatrix{
-		Speakers:   matrix.Speakers,
-		CruxLabels: matrix.CruxLabels,
-		Matrix:     newMatrix,
-	}
-	shuffled.AddOns = &newAddOns
+	shuffled.Sources = newSources
 	return &shuffled
 }
 
@@ -365,7 +312,7 @@ func runNullControl(data *ReportData, realR1JSON string, realClusterCount int, m
 	fmt.Fprintf(os.Stderr, "\n=== Null Control ===\n")
 	fmt.Fprintf(os.Stderr, "  shuffling speaker-crux assignments...\n")
 
-	shuffled := shuffleReport(data)
+	shuffled := shuffleClaims(data)
 	setup := buildR1Setup(shuffled, threshold, "t3c-null-")
 
 	if len(setup.agents) == 0 {
