@@ -247,11 +247,9 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 	voteCount := 0
 
 	// R3 agents vote on all positions.
-	// IMPORTANT: Votes should NOT systematically favor convergence — that would
-	// make R3 always appear to "converge" regardless of revision content. Use
-	// cluster patterns for R1 agents (same as R1 voting) and neutral/skeptical
-	// stances for structural agents. The LLM analysis should discover convergence
-	// from the position TEXT, not from a biased vote matrix.
+	// Revised agents vote +1 on own R1 original, 0 on everything else.
+	// Resolution agents diversify by index. The LLM analysis discovers
+	// convergence from the position TEXT, not from vote patterns.
 	for _, voter := range r3Agents {
 		originalID := r3ToR1[voter.ID]
 		for _, pos := range positions {
