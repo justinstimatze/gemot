@@ -23,7 +23,10 @@ All API features are shipped and deployed. A sample deliberation with validation
 - Verification data stored on R1 analysis result (44 stances checked, 20 downgraded, threshold ≤2)
 - Agent kinds: steelman, speaker, probe, bridge, empty-chair, resolution
 
-**Reference report**: `integrations/t3c/ai-manifestos-report.md` (anonymized — Speaker A through Speaker L)
+**Reference report**: `integrations/t3c/ai-manifestos-report.md` (anonymized markdown)
+**Reference export**: `integrations/t3c/ai-manifestos-report.json` (anonymized structured JSON — all 3 rounds)
+
+**Important**: For T3C deliberations, use the static JSON export instead of querying the API. The database stores anonymized agent IDs (`t3c-speaker-a`) but position/analysis text content still contains real names from LLM generation. The JSON export has all text anonymized. The API is fine for non-T3C deliberations where agents aren't named after real people.
 
 ## Shared Types Package
 
