@@ -861,6 +861,15 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 			fmt.Fprintf(os.Stderr, "  analyzing...\n")
 			call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
 			r2Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 2)
+			if r2Result == "" {
+				fmt.Fprintf(os.Stderr, "  R2 analysis timed out, retrying...\n")
+				session.Close()
+				session, err = connect(cfg.MCPURL, secret)
+				if err == nil {
+					call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
+					r2Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 2)
+				}
+			}
 			if r2Result != "" {
 				fmt.Fprintf(os.Stderr, "  round 2 complete\n")
 				if cfg.ReportPath != "" {
@@ -931,6 +940,15 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 			fmt.Fprintf(os.Stderr, "  analyzing...\n")
 			call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
 			r3Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 3)
+			if r3Result == "" {
+				fmt.Fprintf(os.Stderr, "  R3 analysis timed out, retrying...\n")
+				session.Close()
+				session, err = connect(cfg.MCPURL, secret)
+				if err == nil {
+					call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
+					r3Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 3)
+				}
+			}
 			if r3Result != "" {
 				fmt.Fprintf(os.Stderr, "  round 3 complete\n")
 				if cfg.ReportPath != "" {
@@ -1009,6 +1027,40 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 		scResult = runSpotCheck(data, 0.15)
 	}
 
+	// Crux spot-check: verifies gemot's OUTPUT crux assignments against source quotes.
+	// This validates what the pipeline actually produces rather than its inputs.
+	var cruxSCResult *spotCheckResult
+	if cfg.SpotCheck {
+		fmt.Fprintf(os.Stderr, "\n=== Spot Check (crux assignment quality) ===\n")
+		// Collect cruxes from all rounds
+		var allCruxes []cruxForCheck
+		for _, rJSON := range []string{r1Result, r2Result, r3Result} {
+			if rJSON == "" {
+				continue
+			}
+			var ar analysisResult
+			if err := json.Unmarshal([]byte(rJSON), &ar); err != nil {
+				continue
+			}
+			for _, c := range ar.Cruxes {
+				cf := cruxForCheck{
+					Claim:    c.Claim,
+					Agree:    c.Agree,
+					Disagree: c.Disagree,
+				}
+				for _, st := range c.Stances {
+					cf.Stances = append(cf.Stances, stanceForCheck{
+						AgentID:   st.AgentID,
+						Value:     st.Value,
+						Qualifier: st.Qualifier,
+					})
+				}
+				allCruxes = append(allCruxes, cf)
+			}
+		}
+		cruxSCResult = runCruxSpotCheck(allCruxes, data, 0.15)
+	}
+
 	// Write markdown report if requested
 	if cfg.ReportPath != "" && r1Result != "" {
 		ri := &reportInput{
@@ -1016,7 +1068,8 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 			R1Compromise: r1Compromise, R2Compromise: r2Compromise, R3Compromise: r3Compromise,
 			R1Agents: r1Agents, R2Agents: r2Agents, R3Agents: r3Agents,
 			Template: tmpl, DelibID: delibID, JoinCode: joinCode,
-			NullControl: ncResult, SpotCheck: scResult, Replication: repResult, Coverage: covResult,
+			NullControl: ncResult, SpotCheck: scResult, CruxSpotCheck: cruxSCResult,
+			Replication: repResult, Coverage: covResult,
 		}
 		md := generateReport(ri)
 		if err := os.WriteFile(cfg.ReportPath, []byte(md), 0o644); err != nil {
@@ -1482,6 +1535,9 @@ type analysisResult struct {
 
 func pollAndGetResult(session *sdkmcp.ClientSession, mcpURL, secret, delibID string, round int) string {
 	maxPolls := 180 // 15 min
+	if round >= 3 {
+		maxPolls = 240 // 20 min for later rounds with more agents
+	}
 	reconnects := 0
 	s := session
 

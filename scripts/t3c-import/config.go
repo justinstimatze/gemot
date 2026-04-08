@@ -32,7 +32,8 @@ type reportInput struct {
 	DelibID      string
 	JoinCode     string
 	NullControl  *nullControlResult
-	SpotCheck    *spotCheckResult
-	Replication  *replicationResult
-	Coverage     *coverageResult
+	SpotCheck      *spotCheckResult
+	CruxSpotCheck  *spotCheckResult
+	Replication    *replicationResult
+	Coverage       *coverageResult
 }
