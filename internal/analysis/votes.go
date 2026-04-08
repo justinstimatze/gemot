@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"sort"
-	"strings"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"gonum.org/v1/gonum/mat"
@@ -525,55 +524,7 @@ func computeConsensus(matrix *mat.Dense, labels []int, positions []deliberation.
 	sort.Slice(consensus, func(i, j int) bool {
 		return consensus[i].OverallAgreeRatio > consensus[j].OverallAgreeRatio
 	})
-	return filterPlatitudes(consensus)
-}
-
-// filterPlatitudes removes consensus statements that are too vague to be informative.
-func filterPlatitudes(statements []deliberation.ConsensusStatement) []deliberation.ConsensusStatement {
-	var filtered []deliberation.ConsensusStatement
-	for _, s := range statements {
-		if !isPlatitude(s.Content) {
-			filtered = append(filtered, s)
-		}
-	}
-	return filtered
-}
-
-// isPlatitude detects vague, non-specific statements that trivially achieve consensus.
-func isPlatitude(text string) bool {
-	lower := strings.ToLower(text)
-	markers := []string{
-		"new frameworks are needed",
-		"more research is needed",
-		"a balanced approach",
-		"raises important implications",
-		"it is important to",
-		"there should be a focus on",
-		"stakeholders should be consulted",
-		"further investigation is warranted",
-	}
-	for _, m := range markers {
-		if strings.Contains(lower, m) {
-			return true
-		}
-	}
-	// Very short statements with only vague terms are likely platitudes.
-	// Don't filter short statements that contain specific terms (proper nouns, numbers, etc.)
-	words := strings.Fields(text)
-	if len(words) >= 5 && len(words) < 10 {
-		hasSpecific := false
-		for _, w := range words {
-			// Check for capitalized words (proper nouns) beyond sentence start
-			if len(w) > 3 && w[0] >= 'A' && w[0] <= 'Z' {
-				hasSpecific = true
-				break
-			}
-		}
-		if !hasSpecific {
-			return true
-		}
-	}
-	return false
+	return consensus
 }
 
 func uniqueInts(s []int) []int {

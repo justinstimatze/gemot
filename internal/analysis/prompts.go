@@ -140,6 +140,21 @@ Generate a detailed summary (100-140 words) for the topic "{{TOPIC_NAME}}" that:
 Now here are the positions:
 {{POSITIONS}}`
 
+// platitudeFilterPrompt: batch-classifies consensus statements by specificity
+const platitudeFilterPrompt = `Score each statement below for SPECIFICITY on a 1-5 scale:
+1 = Could apply to any policy domain without modification (e.g., "more research is needed")
+2 = Vaguely relevant to the topic but names no specific mechanism, entity, or action
+3 = References the topic area but remains abstract
+4 = Names a specific mechanism, tradeoff, or actor relevant to this deliberation
+5 = Cites a concrete action, threshold, entity, or measurable outcome
+
+Deliberation topic: "{{TOPIC}}"
+
+Statements:
+{{STATEMENTS}}
+
+Return JSON: {"scores": [{"index": 0, "score": N}, ...]}`
+
 // summaryPromptDelta: used for R2+ when prior round summary exists
 const summaryPromptDelta = `I'm going to give you a single topic from a later round of a deliberation about "{{TOPIC}}" with positions from participants.
 

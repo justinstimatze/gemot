@@ -924,7 +924,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		RuleViolations:       ruleViolations,
 		Cruxes:               cruxes,
 		DiscardedCruxes:      discardedCruxes,
-		ConsensusStatements:  consensus,
+		ConsensusStatements:  a.filterPlatitudes(ctx, deliberationTopic, consensus),
 		BridgingStatements:   bridging,
 		TopicSummaries:       summaries,
 		AgentCount:           len(agents),
@@ -1682,6 +1682,66 @@ func formatClaimsForCrux(claims []claim) string {
 		}
 	}
 	return sb.String()
+}
+
+// filterPlatitudes uses a cheap LLM call to score consensus statements by specificity,
+// keeping only statements that name specific mechanisms, actors, or actions (score >= 4).
+func (a *TextAnalyzer) filterPlatitudes(ctx context.Context, topic string, statements []deliberation.ConsensusStatement) []deliberation.ConsensusStatement {
+	if len(statements) == 0 {
+		return statements
+	}
+
+	var stmtText strings.Builder
+	for i, s := range statements {
+		fmt.Fprintf(&stmtText, "%d. %s\n", i, s.Content)
+	}
+
+	prompt := strings.NewReplacer("{{TOPIC}}", topic, "{{STATEMENTS}}", stmtText.String()).Replace(platitudeFilterPrompt)
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"scores": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"index": map[string]any{"type": "integer"},
+						"score": map[string]any{"type": "integer"},
+					},
+					"required": []string{"index", "score"},
+				},
+			},
+		},
+		"required": []string{"scores"},
+	}
+
+	var result struct {
+		Scores []struct {
+			Index int `json:"index"`
+			Score int `json:"score"`
+		} `json:"scores"`
+	}
+
+	if err := a.structuredOutput(ctx, "You classify statements by specificity. Be strict — vague aspirational language scores low.", prompt, schema, &result); err != nil {
+		slog.Warn("platitude filter failed, keeping all statements", "error", err)
+		return statements
+	}
+
+	scoreMap := map[int]int{}
+	for _, s := range result.Scores {
+		scoreMap[s.Index] = s.Score
+	}
+
+	var filtered []deliberation.ConsensusStatement
+	for i, s := range statements {
+		if score, ok := scoreMap[i]; ok && score >= 4 {
+			filtered = append(filtered, s)
+		} else if !ok {
+			filtered = append(filtered, s) // keep if LLM didn't score it
+		}
+	}
+	return filtered
 }
 
 // extractParticipantIDs extracts unique speaker IDs from claims XML text (speaker="N" attributes).
