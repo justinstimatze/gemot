@@ -323,10 +323,10 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 			case voter.Kind == "dissent":
 				vote = -1 // dissent is skeptical of proposals
 			case voter.Kind == "empty-chair":
-				vote = 0
+				vote = perturbVote(voter.ID, pos.AgentID)
 			default:
-				// Other speakers vote neutrally on R3 agents
-				vote = 0
+				// Voter-specific perturbation avoids sybil from uniform 0s
+				vote = perturbVote(voter.ID, pos.AgentID)
 			}
 
 			call(session, "participate", map[string]any{
