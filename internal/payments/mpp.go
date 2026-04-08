@@ -89,13 +89,8 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 					}
 				}
 				// No auth required in dev mode without bearer secret
-				// Rate limit to prevent abuse, but grant admin access (not sandbox)
+				// No rate limit in dev mode — pipelines send 100+ calls/min
 				if bearerSecret == "" {
-					ip := ClientIP(r)
-					if !limiter.Allow("dev:" + ip) {
-						http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
-						return
-					}
 					ctx := context.WithValue(r.Context(), ContextKeyIsAdmin{}, true)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
