@@ -34,20 +34,31 @@ func getAnthropicKey() string {
 	return ""
 }
 
-// callAnthropic wraps an Anthropic API call with one retry on transient errors.
+// callAnthropic wraps an Anthropic API call with exponential backoff retries on transient errors.
 func callAnthropic(client anthropic.Client, params anthropic.MessageNewParams) (*anthropic.Message, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	resp, err := client.Messages.New(ctx, params)
-	if err != nil {
-		// One retry after a short delay (rate limit, transient 500)
-		time.Sleep(3 * time.Second)
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel2()
-		resp, err = client.Messages.New(ctx2, params)
+	maxRetries := 5
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		resp, err := client.Messages.New(ctx, params)
+		cancel()
+		if err == nil {
+			return resp, nil
+		}
+		errMsg := err.Error()
+		isRetryable := strings.Contains(errMsg, "429") || strings.Contains(errMsg, "529") ||
+			strings.Contains(errMsg, "overloaded") || strings.Contains(errMsg, "rate") ||
+			strings.Contains(errMsg, "capacity")
+		if !isRetryable || attempt == maxRetries {
+			return nil, err
+		}
+		delay := time.Duration(1<<uint(attempt)) * 2 * time.Second // 2s, 4s, 8s, 16s, 32s
+		if delay > 30*time.Second {
+			delay = 30 * time.Second
+		}
+		fmt.Fprintf(os.Stderr, "    retry %d/%d after %v: %v\n", attempt+1, maxRetries, delay, err)
+		time.Sleep(delay)
 	}
-	return resp, err
+	return nil, fmt.Errorf("exhausted retries")
 }
 
 // extractText gets the first text block from an Anthropic response.
@@ -117,6 +128,208 @@ func collectQuotes(c Claim, sourceIDs map[string]bool) []string {
 		quotes = append(quotes, collectQuotes(sc, sourceIDs)...)
 	}
 	return quotes
+}
+
+// cruxForCheck is a simplified crux for spot-checking output quality.
+type cruxForCheck struct {
+	Claim   string
+	Stances []stanceForCheck
+	Agree   []string
+	Disagree []string
+}
+
+type stanceForCheck struct {
+	AgentID   string
+	Value     int
+	Qualifier string
+}
+
+// agentIDToSpeakerName converts an agent ID like "t3c-speaker-speaker-e" or
+// "t3c-steelman-speaker-a" back to a speaker name for quote lookup.
+func agentIDToSpeakerName(id string) string {
+	// Strip known prefixes
+	for _, prefix := range []string{"t3c-speaker-", "t3c-steelman-"} {
+		if strings.HasPrefix(id, prefix) {
+			slug := strings.TrimPrefix(id, prefix)
+			return strings.ReplaceAll(slug, "-", " ")
+		}
+	}
+	return ""
+}
+
+// qualifiedStanceLabel returns a human-readable label for a 5-point stance value.
+func qualifiedStanceLabel(value int) string {
+	switch value {
+	case 2:
+		return "+2 (strongly agree)"
+	case 1:
+		return "+1 (agree with caveats)"
+	case 0:
+		return "0 (neutral)"
+	case -1:
+		return "-1 (disagree with caveats)"
+	case -2:
+		return "-2 (strongly disagree)"
+	default:
+		return fmt.Sprintf("%+d", value)
+	}
+}
+
+// runCruxSpotCheck validates gemot's crux agent assignments against source quotes.
+// This checks the OUTPUT quality (are our crux assignments correct?) rather than
+// the INPUT quality (was the T3C matrix correct?).
+func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float64) *spotCheckResult {
+	apiKey := getAnthropicKey()
+	if apiKey == "" {
+		fmt.Fprintf(os.Stderr, "  crux-spot-check: ANTHROPIC_API_KEY required\n")
+		os.Exit(1)
+	}
+
+	// Collect all (speaker, crux_claim, stance) triples
+	var triples []stanceTriple
+	for _, crux := range cruxes {
+		if len(crux.Stances) > 0 {
+			// 5-point qualified stances
+			for _, st := range crux.Stances {
+				if isStructuralAgent(st.AgentID) {
+					continue
+				}
+				speakerName := agentIDToSpeakerName(st.AgentID)
+				if speakerName == "" {
+					continue
+				}
+				quotes := findAllQuotesForSpeaker(data, speakerName)
+				if len(quotes) == 0 {
+					continue
+				}
+				if len(quotes) > 10 {
+					quotes = quotes[:10]
+				}
+				label := qualifiedStanceLabel(st.Value)
+				if st.Qualifier != "" {
+					label += " — " + st.Qualifier
+				}
+				triples = append(triples, stanceTriple{
+					speaker: speakerName,
+					crux:    crux.Claim,
+					stance:  label,
+					quotes:  quotes,
+				})
+			}
+		} else {
+			// Old-style agree/disagree lists
+			for _, agent := range crux.Agree {
+				if isStructuralAgent(agent) {
+					continue
+				}
+				speakerName := agentIDToSpeakerName(agent)
+				if speakerName == "" {
+					continue
+				}
+				quotes := findAllQuotesForSpeaker(data, speakerName)
+				if len(quotes) == 0 {
+					continue
+				}
+				if len(quotes) > 10 {
+					quotes = quotes[:10]
+				}
+				triples = append(triples, stanceTriple{
+					speaker: speakerName,
+					crux:    crux.Claim,
+					stance:  "agree",
+					quotes:  quotes,
+				})
+			}
+			for _, agent := range crux.Disagree {
+				if isStructuralAgent(agent) {
+					continue
+				}
+				speakerName := agentIDToSpeakerName(agent)
+				if speakerName == "" {
+					continue
+				}
+				quotes := findAllQuotesForSpeaker(data, speakerName)
+				if len(quotes) == 0 {
+					continue
+				}
+				if len(quotes) > 10 {
+					quotes = quotes[:10]
+				}
+				triples = append(triples, stanceTriple{
+					speaker: speakerName,
+					crux:    crux.Claim,
+					stance:  "disagree",
+					quotes:  quotes,
+				})
+			}
+		}
+	}
+
+	if len(triples) == 0 {
+		return nil
+	}
+
+	// Sample
+	nSample := max(1, int(float64(len(triples))*sampleRate))
+	if nSample > len(triples) {
+		nSample = len(triples)
+	}
+	rng := rand.New(rand.NewPCG(uint64(time.Now().UnixNano()), 0))
+	rng.Shuffle(len(triples), func(i, j int) {
+		triples[i], triples[j] = triples[j], triples[i]
+	})
+	sample := triples[:nSample]
+
+	fmt.Fprintf(os.Stderr, "  crux-spot-check: verifying %d/%d crux assignments with Haiku...\n", nSample, len(triples))
+
+	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+	result := &spotCheckResult{Sampled: nSample}
+
+	for _, t := range sample {
+		quotesStr := strings.Join(t.quotes, "\n- ")
+		prompt := fmt.Sprintf(
+			"Speaker: %s\nClassified as: %s\nOn crux claim: \"%s\"\n\nTheir actual quotes:\n- %s\n\nDoes this classification accurately represent their position based on these quotes? Answer YES or NO, then a one-sentence reason.",
+			t.speaker, t.stance, t.crux, quotesStr,
+		)
+
+		resp, err := callAnthropic(client, anthropic.MessageNewParams{
+			Model:     "claude-haiku-4-5",
+			MaxTokens: 150,
+			System: []anthropic.TextBlockParam{
+				{Text: "You verify whether a speaker's quotes support a given stance classification on a crux claim from a deliberation analysis. Be strict: if the quotes don't clearly support the classification, answer NO."},
+			},
+			Messages: []anthropic.MessageParam{
+				anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
+			},
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "    skip %s: %v\n", t.speaker, err)
+			result.Sampled--
+			continue
+		}
+
+		answer := extractText(resp)
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(answer)), "YES") {
+			result.Passed++
+		} else {
+			result.Failed = append(result.Failed, spotCheckFailure{
+				Speaker: t.speaker,
+				Crux:    t.crux[:min(80, len(t.crux))],
+				Stance:  t.stance,
+				Verdict: answer,
+			})
+		}
+	}
+
+	passRate := result.PassRate() * 100
+	fmt.Fprintf(os.Stderr, "  crux-spot-check: %d/%d passed (%.0f%%)\n", result.Passed, result.Sampled, passRate)
+	if len(result.Failed) > 0 {
+		for _, f := range result.Failed {
+			fmt.Fprintf(os.Stderr, "    FAIL: %s (%s) on: %s\n", f.Speaker, f.Stance, f.Crux)
+		}
+	}
+
+	return result
 }
 
 // runSpotCheck samples agent-stance assignments and verifies them against source quotes using Haiku.
