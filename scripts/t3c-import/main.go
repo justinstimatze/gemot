@@ -725,9 +725,13 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	} else {
 		for _, a := range r1Agents {
 			fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
+			content := a.Position
+			if !cfg.Named {
+				content = anonymizeSpeakers(content, r1Agents)
+			}
 			call(session, "participate", map[string]any{
 				"action": "submit_position", "deliberation_id": delibID,
-				"agent_id": a.ID, "content": a.Position,
+				"agent_id": a.ID, "content": content,
 				"metadata": map[string]any{"kind": a.Kind},
 			})
 		}
@@ -889,9 +893,13 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 
 				for _, a := range r2Agents {
 					fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
+					content := a.Position
+					if !cfg.Named {
+						content = anonymizeSpeakers(content, r1Agents)
+					}
 					call(session, "participate", map[string]any{
 						"action": "submit_position", "deliberation_id": delibID,
-						"agent_id": a.ID, "content": a.Position,
+						"agent_id": a.ID, "content": content,
 						"metadata": map[string]any{"kind": a.Kind},
 					})
 				}
@@ -986,9 +994,13 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 
 				for _, a := range r3Agents {
 					fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
+					content := a.Position
+					if !cfg.Named {
+						content = anonymizeSpeakers(content, r1Agents)
+					}
 					call(session, "participate", map[string]any{
 						"action": "submit_position", "deliberation_id": delibID,
-						"agent_id": a.ID, "content": a.Position,
+						"agent_id": a.ID, "content": content,
 						"metadata": map[string]any{"kind": a.Kind},
 					})
 				}
