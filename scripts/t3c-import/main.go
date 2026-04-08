@@ -1155,6 +1155,39 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 		}
 	}
 
+	// Write anonymized JSON export for gemotvis (all rounds, names replaced)
+	if cfg.ReportPath != "" && r1Result != "" && !cfg.Named {
+		exportPath := strings.TrimSuffix(cfg.ReportPath, ".md") + ".json"
+		nRounds := 1
+		if r2Result != "" {
+			nRounds = 2
+		}
+		if r3Result != "" {
+			nRounds = 3
+		}
+		export := map[string]any{
+			"deliberation_id": delibID,
+			"template":        tmpl,
+			"rounds":          nRounds,
+		}
+		// Collect all round results into a single JSON, then anonymize the text
+		rounds := []json.RawMessage{}
+		for _, rJSON := range []string{r1Result, r2Result, r3Result} {
+			if rJSON != "" {
+				rounds = append(rounds, json.RawMessage(rJSON))
+			}
+		}
+		export["analysis_results"] = rounds
+		exportBytes, _ := json.MarshalIndent(export, "", "  ")
+		// Apply same anonymization as the report
+		exportStr := anonymizeSpeakers(string(exportBytes), r1Agents)
+		if err := os.WriteFile(exportPath, []byte(exportStr), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "writing export: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Export: %s\n", exportPath)
+		}
+	}
+
 	// Persist validation results on R1 analysis via update_result
 	if r1Result != "" && (ncResult != nil || repResult != nil || covResult != nil) {
 		fmt.Fprintf(os.Stderr, "\n=== Store Validation ===\n")
