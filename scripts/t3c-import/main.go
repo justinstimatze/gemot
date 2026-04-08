@@ -1116,16 +1116,19 @@ func seedClaimVotes(session *sdkmcp.ClientSession, data *ReportData, agents []ag
 }
 
 // perturbVote returns a deterministic {-1, 0, 1} based on agent ID pair.
-// Used to break vote ties between speakers with identical engagement patterns.
+// Uses FNV-inspired mixing to ensure different pairs produce different results.
 func perturbVote(voterID, targetID string) int {
-	h := 0
-	for _, c := range voterID {
-		h = h*31 + int(c)
+	// Mix both IDs with position-dependent weights for maximum entropy
+	h := uint32(2166136261) // FNV offset basis
+	for i, c := range voterID {
+		h ^= uint32(c) * uint32(i+1)
+		h *= 16777619 // FNV prime
 	}
-	for _, c := range targetID {
-		h = h*17 + int(c)
+	for i, c := range targetID {
+		h ^= uint32(c) * uint32(i+1)
+		h *= 16777619
 	}
-	switch ((h % 3) + 3) % 3 {
+	switch h % 3 {
 	case 0:
 		return 1
 	case 1:
