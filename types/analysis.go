@@ -9,6 +9,12 @@ type SourceQuote struct {
 	ClaimText  string `json:"claim_text"`
 }
 
+type AgentStance struct {
+	AgentID   string `json:"agent_id"`
+	Value     int    `json:"value"`      // -2 to +2
+	Qualifier string `json:"qualifier"`  // one-line reason for this specific stance
+}
+
 type Crux struct {
 	Claim             string        `json:"crux_claim"`
 	Topic             string        `json:"topic"`
@@ -23,6 +29,7 @@ type Crux struct {
 	CruxType          string        `json:"crux_type,omitempty"`
 	Resolvability     float64       `json:"resolvability,omitempty"`
 	Degenerate        bool          `json:"degenerate,omitempty"`
+	Stances           []AgentStance `json:"stances,omitempty"`
 }
 
 type OpinionCluster struct {

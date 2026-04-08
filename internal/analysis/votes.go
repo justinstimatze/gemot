@@ -469,7 +469,7 @@ func computeConsensus(matrix *mat.Dense, labels []int, positions []deliberation.
 			v := matrix.At(i, j)
 			if v != 0 { // count non-pass votes
 				voters++
-				if v == 1 {
+				if v > 0 {
 					agrees++
 				}
 			}
@@ -489,7 +489,7 @@ func computeConsensus(matrix *mat.Dense, labels []int, positions []deliberation.
 					v := matrix.At(i, j)
 					if v != 0 {
 						cVoters++
-						if v == 1 {
+						if v > 0 {
 							cAgrees++
 						}
 					}

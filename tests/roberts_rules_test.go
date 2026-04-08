@@ -44,7 +44,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Vote +1 from a different agent — should "second" the motion (publish it)
-	err = svc.Vote(context.Background(), d.ID, "agent-seconder", pos.ID, 1)
+	err = svc.Vote(context.Background(), d.ID, "agent-seconder", pos.ID, 1, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestRobertsRulesRequireSecond(t *testing.T) {
 	}
 
 	// Self-second should NOT publish (proposer voting on their own motion)
-	err = svc.Vote(context.Background(), d.ID, "agent-other", pos2.ID, 1)
+	err = svc.Vote(context.Background(), d.ID, "agent-other", pos2.ID, 1, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestRobertsRulesAmendment(t *testing.T) {
 	}
 
 	// Second the motion
-	err = svc.Vote(context.Background(), d.ID, "agent-seconder", motion.ID, 1)
+	err = svc.Vote(context.Background(), d.ID, "agent-seconder", motion.ID, 1, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestRobertsRulesAmendment(t *testing.T) {
 	}
 
 	// Second the amendment
-	err = svc.Vote(context.Background(), d.ID, "agent-seconder", amendment.ID, 1)
+	err = svc.Vote(context.Background(), d.ID, "agent-seconder", amendment.ID, 1, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

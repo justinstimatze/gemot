@@ -70,16 +70,16 @@ func TestMultiCriteriaVoteStorage(t *testing.T) {
 	p, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Proposal A")
 
 	// Vote on same position with different criteria
-	err := svc.Vote(context.Background(), d.ID, "bob", p.ID, 1, "feasibility")
+	err := svc.Vote(context.Background(), d.ID, "bob", p.ID, 1, "", "", "feasibility")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = svc.Vote(context.Background(), d.ID, "bob", p.ID, -1, "ethics")
+	err = svc.Vote(context.Background(), d.ID, "bob", p.ID, -1, "", "", "ethics")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Default vote (no criterion)
-	err = svc.Vote(context.Background(), d.ID, "bob", p.ID, 0)
+	err = svc.Vote(context.Background(), d.ID, "bob", p.ID, 0, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

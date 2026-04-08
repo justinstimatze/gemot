@@ -88,13 +88,17 @@ func validateCruxAgents(cruxes []deliberation.Crux, validAgents map[string]bool)
 func validateVoteSimilarity(votes []deliberation.Vote, agents []string) []string {
 	var warnings []string
 
-	// Build vote vectors per agent
-	agentVotes := map[string]map[string]int{} // agent -> position -> value
+	// Build vote fingerprints per agent (value + qualifier for richer comparison)
+	type votePrint struct {
+		Value     int
+		Qualifier string
+	}
+	agentVotes := map[string]map[string]votePrint{} // agent -> position -> fingerprint
 	for _, v := range votes {
 		if _, ok := agentVotes[v.AgentID]; !ok {
-			agentVotes[v.AgentID] = map[string]int{}
+			agentVotes[v.AgentID] = map[string]votePrint{}
 		}
-		agentVotes[v.AgentID][v.PositionID] = v.Value
+		agentVotes[v.AgentID][v.PositionID] = votePrint{Value: v.Value, Qualifier: v.Qualifier}
 	}
 
 	// Check all pairs
@@ -107,10 +111,10 @@ func validateVoteSimilarity(votes []deliberation.Vote, agents []string) []string
 			}
 
 			shared, identical := 0, 0
-			for pos, valA := range va {
-				if valB, ok := vb[pos]; ok {
+			for pos, fpA := range va {
+				if fpB, ok := vb[pos]; ok {
 					shared++
-					if valA == valB {
+					if fpA.Value == fpB.Value && fpA.Qualifier == fpB.Qualifier {
 						identical++
 					}
 				}

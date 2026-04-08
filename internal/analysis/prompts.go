@@ -93,25 +93,35 @@ Now here are the claims to group:
 {{CLAIMS}}`
 
 // cruxPrompt: {{TOPIC}} = deliberation topic, {{TOPIC_NAME}} = topic name, {{SUBTOPIC}} = subtopic name, {{SUBTOPIC_DESC}} = subtopic description, {{CLAIMS}} = claims text
-const cruxPrompt = `I'm going to give you a subtopic from a deliberation about "{{TOPIC}}" with a description and a list of high-level claims about this subtopic made by different participants, identified by numeric IDs (like 0, 1, 2, etc.). Please synthesize these claims into one new, specific, maximally controversial statement called a "cruxClaim". This cruxClaim should divide the participants into "agree" and "disagree" groups or sides, based on all their statements on this subtopic.
+const cruxPrompt = `I'm going to give you a subtopic from a deliberation about "{{TOPIC}}" with a description and a list of high-level claims about this subtopic made by different participants, identified by numeric IDs (like 0, 1, 2, etc.). Please synthesize these claims into one new, specific, maximally controversial statement called a "cruxClaim". This cruxClaim should divide the participants based on all their statements on this subtopic.
 
 Topic: {{TOPIC_NAME}}
 Subtopic: {{SUBTOPIC}}
 Description: {{SUBTOPIC_DESC}}
 
-For each participant who made claims in this subtopic, categorize them as:
-- "agree": Would agree with the cruxClaim based on their statements
-- "disagree": Would disagree with the cruxClaim based on their statements
-- "no_clear_position": Mentioned the topic but didn't take a clear stance on this specific crux
+For each participant who made claims in this subtopic, assign a stance value from -2 to +2:
+  +2: Unequivocal support based on their statements
+  +1: Agrees but with conditions, reservations, or mechanism concerns
+   0: Genuinely torn — sees substantial merit on both sides (NOT abstaining)
+  -1: Disagrees but acknowledges partial validity
+  -2: Unequivocal opposition based on their statements
 
-Please explain your reasoning and assign participants into the three groups. Make the cruxClaim as precise and unique as possible to the given subtopic and claims, and pick a cruxClaim that best balances the "agree" and "disagree" sides, with close to the same number of participants on each side.
+For each, provide a one-line qualifier explaining their specific reason or condition.
+Omit participants who have no basis to judge (don't assign them 0 — just exclude them).
+
+Also populate the agree/disagree/no_clear_position lists for backwards compatibility:
+- "agree": Participants with stance +1 or +2
+- "disagree": Participants with stance -1 or -2
+- "no_clear_position": Participants with stance 0
+
+Please explain your reasoning. Make the cruxClaim as precise and unique as possible to the given subtopic and claims, and pick a cruxClaim that best balances supporters and opponents, with close to the same number of participants on each side.
 
 CRITICAL VALIDITY REQUIREMENTS:
 - The cruxClaim MUST have at least one participant who would agree AND at least one who would disagree based on their actual statements. If you cannot identify clear participants on both sides, do NOT generate the crux — return an empty agree or disagree list and explain why no balanced crux was possible for this subtopic.
 - Avoid absolute deterministic language in the cruxClaim. Use conditional framing ("tends to", "creates strong pressure toward", "significantly increases the risk of") rather than absolutes ("inevitably", "will always", "makes it impossible", "systematically overrides"). The crux should be debatable, not a straw man.
 
 IMPORTANT: Format requirements for your response:
-1. In the agree/disagree/no_clear_position lists, use ONLY the exact numeric IDs from the input (like 0, 1, 2)
+1. In the agree/disagree/no_clear_position lists and stances id fields, use ONLY the exact numeric IDs from the input (like 0, 1, 2)
 2. Do NOT add prefixes like "Person" or "Participant" to these numeric IDs
 3. Claims may include quote="" attributes with verbatim excerpts from original positions. Reference these quotes in your explanation to ground the crux in what participants actually said.
 4. In the explanation field, write in natural, reader-friendly language:
@@ -121,9 +131,11 @@ IMPORTANT: Format requirements for your response:
    - Write as if explaining to a general audience, not developers
 
 The participants who made claims in this subtopic are: {{PARTICIPANT_IDS}}.
-You MUST only assign these exact IDs to agree/disagree/no_clear_position groups. Do not invent participant IDs that are not listed here.
+You MUST only assign these exact IDs to agree/disagree/no_clear_position/stances. Do not invent participant IDs that are not listed here.
 
 Before generating the cruxClaim, first identify the core tension — what is the main thing these specific participants disagree about? Then formulate a cruxClaim that captures that tension.
+
+Return JSON with: {"crux_claim": "...", "stances": [{"id": "0", "value": 1, "qualifier": "supports X but considers Y insufficient"}], "agree": [...], "disagree": [...], "no_clear_position": [...], "explanation": "..."}
 
 Now here are the participant claims:
 {{CLAIMS}}`

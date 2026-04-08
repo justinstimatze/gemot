@@ -1425,10 +1425,16 @@ func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, 
 
 type analysisResult struct {
 	Cruxes []struct {
-		Claim    string   `json:"crux_claim"`
-		Agree    []string `json:"agree_agents"`
-		Disagree []string `json:"disagree_agents"`
-		Score    float64  `json:"controversy_score"`
+		Claim       string   `json:"crux_claim"`
+		Agree       []string `json:"agree_agents"`
+		Disagree    []string `json:"disagree_agents"`
+		Score       float64  `json:"controversy_score"`
+		Explanation string   `json:"explanation"`
+		Stances     []struct {
+			AgentID   string `json:"agent_id"`
+			Value     int    `json:"value"`
+			Qualifier string `json:"qualifier"`
+		} `json:"stances"`
 	} `json:"cruxes"`
 	DiscardedCruxes []struct {
 		Claim       string   `json:"crux_claim"`

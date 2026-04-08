@@ -57,7 +57,7 @@ func TestTotalAgreement(t *testing.T) {
 	for _, voter := range agents {
 		for i, posID := range posIDs {
 			if agents[i] != voter {
-				svc.Vote(context.Background(), d.ID, voter, posID, 1)
+				svc.Vote(context.Background(), d.ID, voter, posID, 1, "", "")
 			}
 		}
 	}
@@ -87,7 +87,7 @@ func TestTotalDisagreement(t *testing.T) {
 	for _, voter := range agents {
 		for i, posID := range posIDs {
 			if agents[i] != voter {
-				svc.Vote(context.Background(), d.ID, voter, posID, -1)
+				svc.Vote(context.Background(), d.ID, voter, posID, -1, "", "")
 			}
 		}
 	}
@@ -113,8 +113,8 @@ func TestSparseVoting(t *testing.T) {
 		posIDs = append(posIDs, p.ID)
 	}
 	// Only 2 agents vote on 2 positions
-	svc.Vote(context.Background(), d.ID, "agent-0", posIDs[1], 1)
-	svc.Vote(context.Background(), d.ID, "agent-1", posIDs[0], -1)
+	svc.Vote(context.Background(), d.ID, "agent-0", posIDs[1], 1, "", "")
+	svc.Vote(context.Background(), d.ID, "agent-1", posIDs[0], -1, "", "")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -565,7 +565,7 @@ func TestVoteOnOwnPosition(t *testing.T) {
 	p, _ := svc.SubmitPosition(context.Background(), d.ID, "agent", "My position")
 
 	// Voting on your own position should work (it's not prohibited)
-	err := svc.Vote(context.Background(), d.ID, "agent", p.ID, 1)
+	err := svc.Vote(context.Background(), d.ID, "agent", p.ID, 1, "", "")
 	if err != nil {
 		t.Fatalf("expected self-vote to be allowed: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestVoteOnNonexistentPosition(t *testing.T) {
 	svc, _ := newTestService(t)
 	d, _ := svc.CreateDeliberation(context.Background(), "Bad vote", "")
 
-	err := svc.Vote(context.Background(), d.ID, "agent", "nonexistent-position-id", 1)
+	err := svc.Vote(context.Background(), d.ID, "agent", "nonexistent-position-id", 1, "", "")
 	if err == nil {
 		t.Error("expected error for vote on nonexistent position")
 	}
@@ -588,7 +588,7 @@ func TestCrossDeliberationVote(t *testing.T) {
 	p, _ := svc.SubmitPosition(context.Background(), d1.ID, "agent", "Position in delib 1")
 
 	// Try to vote on d1's position from d2
-	err := svc.Vote(context.Background(), d2.ID, "agent", p.ID, 1)
+	err := svc.Vote(context.Background(), d2.ID, "agent", p.ID, 1, "", "")
 	if err == nil {
 		t.Error("expected error for cross-deliberation vote")
 	}
@@ -653,7 +653,7 @@ func TestManyAgentsManyVotes(t *testing.T) {
 			if j%3 == 0 {
 				value = -1
 			}
-			if err := svc.Vote(context.Background(), d.ID, voter, posIDs[target], value); err != nil {
+			if err := svc.Vote(context.Background(), d.ID, voter, posIDs[target], value, "", ""); err != nil {
 				t.Fatal(err)
 			}
 			voteCount++

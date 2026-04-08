@@ -80,7 +80,7 @@ func TestMultiCriteriaVote(t *testing.T) {
 	p, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "Proposal B")
 
 	// Vote with criterion (stored in DB even if analysis doesn't use it yet)
-	err := svc.Vote(context.Background(), d.ID, "alice", p.ID, 1)
+	err := svc.Vote(context.Background(), d.ID, "alice", p.ID, 1, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

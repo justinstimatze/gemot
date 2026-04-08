@@ -725,7 +725,7 @@ func (s *Service) GetPositions(ctx context.Context, deliberationID string, exclu
 	return positions, nil
 }
 
-func (s *Service) Vote(ctx context.Context, deliberationID, agentID, positionID string, value int, criterionID ...string) error {
+func (s *Service) Vote(ctx context.Context, deliberationID, agentID, positionID string, value int, qualifier, caveat string, criterionID ...string) error {
 	if len(agentID) > maxAgentIDLen {
 		return fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
 	}
@@ -758,6 +758,8 @@ func (s *Service) Vote(ctx context.Context, deliberationID, agentID, positionID 
 		AgentID:        agentID,
 		PositionID:     positionID,
 		Value:          value,
+		Qualifier:      qualifier,
+		Caveat:         caveat,
 	}
 	if len(criterionID) > 0 && criterionID[0] != "" {
 		v.CriterionID = criterionID[0]

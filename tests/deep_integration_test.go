@@ -45,8 +45,8 @@ func TestDelegatedVotesInAnalysis(t *testing.T) {
 	svc.Delegate(context.Background(), d.ID, "carol", "alice", "")
 
 	// alice votes, bob votes — carol should get alice's votes via delegation
-	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1)
-	svc.Vote(context.Background(), d.ID, "bob", p1.ID, -1)
+	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1, "", "")
+	svc.Vote(context.Background(), d.ID, "bob", p1.ID, -1, "", "")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -78,9 +78,9 @@ func TestDelegationDirectVoteOverride(t *testing.T) {
 	svc.Delegate(context.Background(), d.ID, "carol", "alice", "")
 
 	// alice votes agree on bob's position
-	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1)
+	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1, "", "")
 	// carol votes disagree directly — should override delegation
-	svc.Vote(context.Background(), d.ID, "carol", p2.ID, -1)
+	svc.Vote(context.Background(), d.ID, "carol", p2.ID, -1, "", "")
 
 	result, _ := svc.Analyze(context.Background(), d.ID)
 
@@ -105,7 +105,7 @@ func TestTransitiveDelegation(t *testing.T) {
 	svc.Delegate(context.Background(), d.ID, "carol", "alice", "")
 
 	// Only alice votes
-	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1)
+	svc.Vote(context.Background(), d.ID, "alice", p2.ID, 1, "", "")
 
 	result, _ := svc.Analyze(context.Background(), d.ID)
 

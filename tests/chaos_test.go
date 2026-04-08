@@ -116,10 +116,10 @@ func TestDataPersistsAfterReconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := svc1.Vote(context.Background(), delibID, "alice", p2.ID, 1); err != nil {
+	if err := svc1.Vote(context.Background(), delibID, "alice", p2.ID, 1, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc1.Vote(context.Background(), delibID, "bob", p1.ID, -1); err != nil {
+	if err := svc1.Vote(context.Background(), delibID, "bob", p1.ID, -1, "", ""); err != nil {
 		t.Fatal(err)
 	}
 

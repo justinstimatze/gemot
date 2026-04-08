@@ -49,9 +49,9 @@ func TestAnalysisRefusal(t *testing.T) {
 	// Make sybils vote identically on all positions
 	positions, _ := svc.GetPositions(context.Background(), d.ID, nil, nil)
 	for _, p := range positions {
-		svc.Vote(context.Background(), d.ID, "sybil1", p.ID, 1)
-		svc.Vote(context.Background(), d.ID, "sybil2", p.ID, 1)
-		svc.Vote(context.Background(), d.ID, "honest", p.ID, 0)
+		svc.Vote(context.Background(), d.ID, "sybil1", p.ID, 1, "", "")
+		svc.Vote(context.Background(), d.ID, "sybil2", p.ID, 1, "", "")
+		svc.Vote(context.Background(), d.ID, "honest", p.ID, 0, "", "")
 	}
 
 	// Analysis will proceed (LLM calls will fail without API key, but the
@@ -79,7 +79,7 @@ func TestEpistemicHealthMetrics(t *testing.T) {
 	for _, voter := range []string{"a1", "a2", "a3"} {
 		for _, p := range positions {
 			if p.AgentID != voter {
-				svc.Vote(context.Background(), d.ID, voter, p.ID, 1)
+				svc.Vote(context.Background(), d.ID, voter, p.ID, 1, "", "")
 			}
 		}
 	}
@@ -272,18 +272,18 @@ func TestEnrichedAgentContext(t *testing.T) {
 	}
 
 	// Vote to create clear factions: alice+bob agree with each other, carol+dave agree with each other
-	svc.Vote(context.Background(), d.ID, "alice", positions["bob"], 1)
-	svc.Vote(context.Background(), d.ID, "alice", positions["carol"], -1)
-	svc.Vote(context.Background(), d.ID, "alice", positions["dave"], -1)
-	svc.Vote(context.Background(), d.ID, "bob", positions["alice"], 1)
-	svc.Vote(context.Background(), d.ID, "bob", positions["carol"], -1)
-	svc.Vote(context.Background(), d.ID, "bob", positions["dave"], -1)
-	svc.Vote(context.Background(), d.ID, "carol", positions["alice"], -1)
-	svc.Vote(context.Background(), d.ID, "carol", positions["bob"], -1)
-	svc.Vote(context.Background(), d.ID, "carol", positions["dave"], 1)
-	svc.Vote(context.Background(), d.ID, "dave", positions["alice"], -1)
-	svc.Vote(context.Background(), d.ID, "dave", positions["bob"], -1)
-	svc.Vote(context.Background(), d.ID, "dave", positions["carol"], 1)
+	svc.Vote(context.Background(), d.ID, "alice", positions["bob"], 1, "", "")
+	svc.Vote(context.Background(), d.ID, "alice", positions["carol"], -1, "", "")
+	svc.Vote(context.Background(), d.ID, "alice", positions["dave"], -1, "", "")
+	svc.Vote(context.Background(), d.ID, "bob", positions["alice"], 1, "", "")
+	svc.Vote(context.Background(), d.ID, "bob", positions["carol"], -1, "", "")
+	svc.Vote(context.Background(), d.ID, "bob", positions["dave"], -1, "", "")
+	svc.Vote(context.Background(), d.ID, "carol", positions["alice"], -1, "", "")
+	svc.Vote(context.Background(), d.ID, "carol", positions["bob"], -1, "", "")
+	svc.Vote(context.Background(), d.ID, "carol", positions["dave"], 1, "", "")
+	svc.Vote(context.Background(), d.ID, "dave", positions["alice"], -1, "", "")
+	svc.Vote(context.Background(), d.ID, "dave", positions["bob"], -1, "", "")
+	svc.Vote(context.Background(), d.ID, "dave", positions["carol"], 1, "", "")
 
 	// Run analysis
 	_, err = svc.Analyze(t.Context(), d.ID)
