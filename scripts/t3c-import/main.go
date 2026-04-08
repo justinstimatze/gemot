@@ -466,6 +466,7 @@ func main() {
 	replicate := flag.Int("replicate", 0, "Run N replication runs to test pipeline stability")
 	coverageAudit := flag.Bool("coverage-audit", false, "Detect missing perspectives in unchallenged positions")
 	resumeID := flag.String("resume", "", "Resume from existing deliberation ID (skip creation/submission, re-trigger incomplete analysis)")
+	named := flag.Bool("named", false, "Use real speaker names in report (default: anonymized to prevent false attribution)")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -507,6 +508,7 @@ func main() {
 			ReplicateN:    *replicate,
 			CoverageAudit:  *coverageAudit,
 			ResumeID:      *resumeID,
+			Named:         *named,
 		}
 		runStructuralMode(&data, cfg)
 	default:
@@ -1130,6 +1132,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 			Template: tmpl, DelibID: delibID, JoinCode: joinCode,
 			NullControl: ncResult, SpotCheck: scResult, CruxSpotCheck: cruxSCResult,
 			Replication: repResult, Coverage: covResult,
+			Named: cfg.Named,
 		}
 		md := generateReport(ri)
 		if err := os.WriteFile(cfg.ReportPath, []byte(md), 0o644); err != nil {

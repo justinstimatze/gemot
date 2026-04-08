@@ -15,6 +15,7 @@ type pipelineConfig struct {
 	ReplicateN    int
 	CoverageAudit bool
 	ResumeID      string // deliberation ID to resume (skip creation/submission)
+	Named         bool   // use real speaker names (default: anonymized to prevent false attribution)
 }
 
 // reportInput bundles all data needed to generate a markdown report.
@@ -35,6 +36,7 @@ type reportInput struct {
 	NullControl  *nullControlResult
 	SpotCheck      *spotCheckResult
 	CruxSpotCheck  *spotCheckResult
+	Named          bool
 	Replication    *replicationResult
 	Coverage       *coverageResult
 }
