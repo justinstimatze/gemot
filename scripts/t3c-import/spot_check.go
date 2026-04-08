@@ -314,7 +314,7 @@ func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float6
 		} else {
 			result.Failed = append(result.Failed, spotCheckFailure{
 				Speaker: t.speaker,
-				Crux:    t.crux[:min(80, len(t.crux))],
+				Crux:    t.crux,
 				Stance:  t.stance,
 				Verdict: answer,
 			})
@@ -435,7 +435,7 @@ func runSpotCheck(data *ReportData, sampleRate float64) *spotCheckResult {
 		} else {
 			result.Failed = append(result.Failed, spotCheckFailure{
 				Speaker: t.speaker,
-				Crux:    t.crux[:min(80, len(t.crux))],
+				Crux:    t.crux,
 				Stance:  t.stance,
 				Verdict: answer,
 			})
