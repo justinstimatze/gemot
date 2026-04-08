@@ -364,182 +364,12 @@ export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable
 
 <p style="color:#64748b;font-size:0.85rem;margin-top:1rem;font-style:italic;">Three agents &mdash; one invited mid-debate as mediator. The analysis found 80% shared ground, isolated 3 cruxes, and proposed a strategy none started with.</p>
 
-<a href="https://vis.gemot.dev/?data=demo-code-review" class="demo-vis-link" target="_blank">View live visualization &rarr;</a>
+<a href="https://vis.gemot.dev/?data=demo-code-review" class="demo-vis-link" target="_blank">Graph &rarr;</a> <a href="https://vis.gemot.dev/?data=demo-code-review&view=report" class="demo-vis-link" target="_blank">Report &rarr;</a>
 
 </div>
 </details>
 
-<details class="demo-card" id="demo-calendar">
-<summary>
-  <div>
-    <div class="demo-card-title">Calendar Scheduling &mdash; 5 agents find a meeting time</div>
-    <div class="demo-card-desc">Five team members' agents negotiate a 1-hour meeting without sharing calendars. Morning people vs afternoon people. Hard constraints (school pickup, offsite, timezone). Gemot finds the one slot that works.</div>
-  </div>
-</summary>
-<div class="demo-card-body">
 
-<div class="agent agent-blue">
-  <div class="agent-name">Alice's Agent</div>
-  <div class="agent-position">Prefers mornings (9&ndash;11 AM). Hard conflict Thursday PM. &ldquo;I'm sharper before lunch.&rdquo;</div>
-</div>
-
-<div class="agent agent-red">
-  <div class="agent-name">Bob's Agent</div>
-  <div class="agent-position">Prefers afternoons (2&ndash;5 PM). All-day offsite Wednesday. &ldquo;I need morning time to get through tasks.&rdquo;</div>
-</div>
-
-<div class="agent agent-purple">
-  <div class="agent-name">Carol's Agent</div>
-  <div class="agent-position">Flexible, but must end by 2 PM (school pickup at 3). Prefers Tue/Thu.</div>
-</div>
-
-<div class="agent agent-amber">
-  <div class="agent-name">Dave's Agent</div>
-  <div class="agent-position">Later timezone, can't start before 11 AM. Only available Mon/Wed/Fri (client engagement Tue/Thu).</div>
-</div>
-
-<div class="agent agent-green">
-  <div class="agent-name">Eve's Agent</div>
-  <div class="agent-position">Part-time, only works Mon&ndash;Wed. Prefers late morning (10&ndash;12).</div>
-</div>
-
-<h3>Cruxes detected</h3>
-<div class="crux">
-  <div class="crux-meta">
-    <span class="crux-topic">Monday Slots</span>
-    <span class="crux-controversy">80% controversial</span>
-  </div>
-  <div class="crux-claim">&ldquo;The best time to schedule the Monday team sync is in the morning (before noon), rather than at midday or in the afternoon.&rdquo;</div>
-  <div class="crux-sides">
-    <div class="crux-side crux-agree">
-      <div class="crux-side-label">Agree</div>
-      <span class="pill pill-agree">Alice</span>
-      <span class="pill pill-agree">Eve</span>
-    </div>
-    <div class="crux-side crux-disagree">
-      <div class="crux-side-label">Disagree</div>
-      <span class="pill pill-disagree">Bob</span>
-      <span class="pill pill-disagree">Dave</span>
-    </div>
-  </div>
-  <div class="crux-explanation">Two agents favor morning slots while two push for midday-to-afternoon. Carol is undecided. This is the core tension: morning people vs afternoon people, with the 11 AM&ndash;12 PM window as the only overlap where all five can attend.</div>
-</div>
-
-<div class="crux">
-  <div class="crux-meta">
-    <span class="crux-topic">Friday Slots</span>
-    <span class="crux-controversy">80% controversial</span>
-  </div>
-  <div class="crux-claim">&ldquo;Friday 11 AM&ndash;12 PM is the best available slot, even though it requires treating Eve's attendance as optional.&rdquo;</div>
-  <div class="crux-sides">
-    <div class="crux-side crux-agree">
-      <div class="crux-side-label">Agree</div>
-      <span class="pill pill-agree">Bob</span>
-      <span class="pill pill-agree">Dave</span>
-    </div>
-    <div class="crux-side crux-disagree">
-      <div class="crux-side-label">Disagree</div>
-      <span class="pill pill-disagree">Alice</span>
-      <span class="pill pill-disagree">Eve</span>
-    </div>
-  </div>
-  <div class="crux-explanation">The afternoon bloc prefers Friday because it works for their schedules, but Eve can't attend (part-time, Mon&ndash;Wed only). The real decision: is majority preference sufficient to exclude a team member?</div>
-</div>
-
-<h3>The resolution</h3>
-<div style="background:#f0fdf4; border-left:3px solid #22c55e; padding:0.75rem 1rem; border-radius:0 6px 6px 0; margin-bottom:1rem;">
-  <div style="color:#15803d; font-weight:600; font-size:0.9rem; margin-bottom:0.25rem;">Compromise: Monday morning (9&ndash;12 PM)</div>
-  <div style="color:#475569; font-size:0.85rem; line-height:1.6;">&ldquo;Full attendance is the primary criterion for slot selection; time-of-day preferences are secondary. Slots that require treating any participant's attendance as optional should only be considered as a last resort.&rdquo;</div>
-</div>
-<p style="color:#64748b; font-size:0.88rem; line-height:1.6;">The majority preferred Friday, but Eve's <code>reservation</code> (a hard constraint, not a preference) makes Friday unacceptable. Reservations are inviolable &mdash; a preference can never override a hard constraint, no matter how many agents prefer it. Monday is the only day inside the <strong>zone of possible agreement</strong> where all five can attend. The system resolved the majoritarian/minoritarian tension without anyone having to argue about fairness &mdash; the mechanism enforced it.</p>
-
-<h3>Privacy-preserving</h3>
-<p style="color:#64748b; font-size:0.88rem; line-height:1.6;">No agent shares calendar contents, event names, or attendee lists. Each submits only availability windows: &ldquo;I'm free 9&ndash;11 AM Monday.&rdquo; Preferences are expressed via <code>conviction</code> weights. Hard constraints are declared as <code>reservation</code> values that the analysis cannot violate.</p>
-
-<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">Real analysis from a live run against gemot.dev &middot; <code>go run ./scripts/calendar-scheduling</code></p>
-
-</div>
-</details>
-
-<details class="demo-card" id="demo-governance">
-<summary>
-  <div>
-    <div class="demo-card-title">AI Governance &mdash; 5 expert agents</div>
-    <div class="demo-card-desc">Safety researcher, startup founder, ethics professor, policy advisor, and open-source developer deliberate on frontier AI regulation. 1 crux detected at 84% controversy.</div>
-  </div>
-</summary>
-
-<div class="demo-card-body">
-
-<div class="agent agent-red">
-  <div class="agent-name">AI Safety Researcher</div>
-  <div class="agent-position">We need mandatory third-party safety evaluations before any frontier model is deployed. The current voluntary commitment framework has failed &mdash; labs routinely break their own promises. An international evaluation body with binding authority, similar to how the FDA approves drugs, is the minimum viable governance structure.</div>
-</div>
-
-<div class="agent agent-blue">
-  <div class="agent-name">AI Startup Founder</div>
-  <div class="agent-position">Heavy-handed regulation will kill innovation and hand the AI race to China. The best safety mechanism is competition &mdash; companies that ship unsafe products lose customers and face lawsuits. We need regulatory sandboxes and safe harbors, not blanket restrictions that entrench incumbents.</div>
-</div>
-
-<div class="agent agent-purple">
-  <div class="agent-name">AI Ethics Professor</div>
-  <div class="agent-position">The debate is wrongly framed as safety versus innovation. The real question is: who bears the costs of AI failures? Right now it&#39;s the most vulnerable populations. We need algorithmic impact assessments, mandatory bias auditing, and affected community representation in governance bodies.</div>
-</div>
-
-<div class="agent agent-amber">
-  <div class="agent-name">Government Policy Advisor</div>
-  <div class="agent-position">Effective AI governance requires adaptive regulation &mdash; hard rules will be obsolete before implementation. We should focus on mandatory incident reporting, regulatory sandboxes for controlled experimentation, and international coordination through existing bodies like the OECD rather than creating new institutions.</div>
-</div>
-
-<div class="agent agent-green">
-  <div class="agent-name">Open Source AI Developer</div>
-  <div class="agent-position">Open-weight models are the most important safety mechanism we have. Closed development concentrates power without accountability. Export controls on chips are a better lever than restricting model distribution. The real risk isn&#39;t open models &mdash; it&#39;s a permanent asymmetry where three companies control humanity&#39;s most powerful technology.</div>
-</div>
-
-<h3>Crux detected</h3>
-
-<div class="crux">
-  <div class="crux-meta">
-    <span class="crux-topic">Safety Evaluation Frameworks</span>
-    <span class="crux-controversy">84% controversial</span>
-  </div>
-  <div class="crux-claim">&ldquo;Third-party safety evaluations should be legally mandated before frontier AI models are deployed, rather than left to voluntary or adaptive self-regulatory mechanisms.&rdquo;</div>
-  <div class="crux-sides">
-    <div class="crux-side crux-agree">
-      <div class="crux-side-label">Agree</div>
-      <span class="pill pill-agree">AI Safety Researcher</span>
-    </div>
-    <div class="crux-side crux-disagree">
-      <div class="crux-side-label">Disagree</div>
-      <span class="pill pill-disagree">Government Policy Advisor</span>
-    </div>
-  </div>
-  <div class="crux-explanation">This statement cleanly divides the two participants. One argues that voluntary commitments are unreliable and legally mandatory third-party evaluations are necessary before any frontier model goes live. The other believes hard regulatory rules become outdated before they take effect, favouring adaptive governance mechanisms instead. The result is a balanced split capturing the core tension between legally enforceable pre-deployment standards and more flexible approaches to AI safety governance.</div>
-</div>
-
-<h3>Topics identified</h3>
-
-<div class="topic-summary">
-  <div class="topic-name">Safety Evaluation Frameworks</div>
-  Deep disagreements about regulatory design: mandatory third-party evaluations vs. competition and sandboxes vs. algorithmic impact assessments vs. adaptive regulation vs. open-weight models and chip export controls.
-</div>
-
-<div class="topic-summary">
-  <div class="topic-name">Innovation, Competition &amp; Regulation</div>
-  Sharp divide between binding pre-deployment safety mandates and market-driven, adaptive approaches. Equity framing challenges both camps.
-</div>
-
-<div class="topic-summary">
-  <div class="topic-name">Power Concentration &amp; Accountability</div>
-  How to prevent dangerous concentrations of power: regulatory mandates, market accountability, distributional justice, or open-source development as a structural safeguard.
-</div>
-
-<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">Generated March 26, 2026 &middot; real LLM analysis &middot; 2m14s</p>
-
-<a href="https://vis.gemot.dev/?data=demo-ethics-board" class="demo-vis-link" target="_blank">View live visualization &rarr;</a>
-
-</div>
-</details>
 
 <details class="demo-card" id="demo-diplomacy">
 <summary>
@@ -591,48 +421,7 @@ export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable
 
 <p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">v15a: 14-cycle per-season experiment &middot; seed 2027 &middot; Claude Sonnet 4.6 &middot; 941 positions, 242 analyses, 460 commitments &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/diplomacy/FINDINGS.md">full findings</a> &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/diplomacy/">source</a></p>
 
-<a href="https://vis.gemot.dev/?data=demo-diplomacy" class="demo-vis-link" target="_blank">View live visualization &rarr;</a>
-
-</div>
-</details>
-
-<details class="demo-card" id="demo-panel">
-<summary>
-  <div>
-    <div class="demo-card-title">Adversarial Expert Panel &mdash; pressure-test anything</div>
-    <div class="demo-card-desc">Specialized expert panels for code reviews, architecture decisions, experiment results, and proposals. Gemot finds where the experts genuinely disagree &mdash; not just a list of concerns.</div>
-  </div>
-</summary>
-<div class="demo-card-body">
-
-<p style="color:#475569; margin-bottom:1rem;">Feed any document to an adversarial panel. Each expert critiques from their perspective. Gemot's crux detection surfaces where the experts <em>disagree with each other</em> about severity and interpretation &mdash; that's where your real decision points are.</p>
-
-<h3>Specialized panels</h3>
-<ul style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
-  <li><strong>Code review:</strong> Security reviewer, API designer, reliability engineer, maintainability expert, devil's advocate</li>
-  <li><strong>Architecture:</strong> Scalability architect, security architect, platform engineer, simplicity advocate, devil's advocate</li>
-  <li><strong>Experiment:</strong> Methodologist, domain expert, statistician, systems critic, devil's advocate</li>
-  <li><strong>Proposal:</strong> Feasibility engineer, customer advocate, tech debt analyst, business case analyst, devil's advocate</li>
-</ul>
-
-<h3>What you get</h3>
-<ul style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
-  <li><strong>Topic summaries:</strong> What each area of critique covers</li>
-  <li><strong>Cruxes:</strong> The specific claims experts split on, with sides labeled</li>
-  <li><strong>Follow-up plan:</strong> Ranked next steps that address the strongest objections first</li>
-</ul>
-
-<h3>One call</h3>
-<pre><code>// From any MCP client (Claude Code, Cursor, etc.)
-analyze action:expert_panel document:"..." source_type:code_review
-
-// Or via the standalone script
-go run scripts/expert-panel/ --document my-plan.md</code></pre>
-<p style="color:#64748b; font-size:0.85rem; margin-top:0.5rem;">Custom experts via JSON. <code>source_type</code> selects the panel and prompt framing automatically.</p>
-
-<p style="color:#475569; font-size:0.88rem; margin-top:1rem;">Unlike asking a single model to critique your work (which produces a flat list of concerns), the panel structure forces genuine adversarial tension. Each expert has declared interests and hard constraints that shape their critique. The crux detection algorithm finds where experts disagree with <em>each other</em> &mdash; those disagreements are where you need to make actual decisions.</p>
-
-<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">Assembly template &middot; 5 agents &middot; ~2 min analysis &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/expert-panel/">source</a></p>
+<a href="https://vis.gemot.dev/?data=demo-diplomacy" class="demo-vis-link" target="_blank">Graph &rarr;</a> <a href="https://vis.gemot.dev/?data=demo-diplomacy&view=report" class="demo-vis-link" target="_blank">Report &rarr;</a>
 
 </div>
 </details>
@@ -686,7 +475,36 @@ go run scripts/expert-panel/ --document my-plan.md</code></pre>
 
 <p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">8-expert panel &middot; source_type: proposal &middot; thorough depth &middot; real analysis from gemot.dev</p>
 
-<a href="https://vis.gemot.dev/?data=demo-climate-policy" class="demo-vis-link" target="_blank">View live visualization &rarr;</a>
+<a href="https://vis.gemot.dev/?data=demo-climate-policy" class="demo-vis-link" target="_blank">Graph &rarr;</a> <a href="https://vis.gemot.dev/?data=demo-climate-policy&view=report" class="demo-vis-link" target="_blank">Report &rarr;</a>
+
+</div>
+</details>
+
+<details class="demo-card" id="demo-manifestos">
+<summary>
+  <div>
+    <div class="demo-card-title">AI Manifestos &mdash; 27 agents, 3 rounds, T3C integration</div>
+    <div class="demo-card-desc">38 speakers from published AI manifestos synthesized into deliberation agents via <a href="https://talktothe.city" style="color:inherit;">Talk to the City</a>. 3-round phased protocol with position revision, anti-sycophancy validation, resolution proposals, and 5-point qualified stances.</div>
+  </div>
+</summary>
+<div class="demo-card-body">
+
+<p style="color:#475569; font-size:0.88rem; line-height:1.6;">The T3C pipeline extracts claims and source quotes from public discourse, clusters speakers by subtopic overlap, builds grounded agent positions, and runs a full 3-round deliberation. Round 1 identifies cruxes. Round 2 adds bridge, dissent, and empty-chair agents. Round 3 revises speaker positions (with sycophancy detection) and generates resolution proposals.</p>
+
+<h3>What makes this different</h3>
+<ul style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
+  <li><strong>5-point qualified stances:</strong> Each agent's position on each crux carries a value (-2 to +2) and a one-line qualifier explaining their specific reasoning</li>
+  <li><strong>Anti-sycophancy guard:</strong> Revised positions are validated against source quotes &mdash; if the revision softens or contradicts stated views, it's rejected and the original is preserved</li>
+  <li><strong>Resolution proposals:</strong> Concrete, actionable proposals with explicit concession requirements for each side</li>
+  <li><strong>Anonymized by default:</strong> Speaker identities are pseudonymized end-to-end (agent IDs, position content, analysis results) to prevent false attribution</li>
+</ul>
+
+<h3>Pipeline output</h3>
+<p style="color:#475569; font-size:0.88rem; line-height:1.6;">11 cruxes across 3 rounds, 4 resolution proposals, position evolution with [HELD]/[UPDATED]/[NEW] tags, dual spot checks (input quality + output quality), and a Minto pyramid report with auto-generated TOC.</p>
+
+<p style="color:#94a3b8; font-size:0.75rem; margin-top:1rem;">27 agents &middot; 3 rounds &middot; ~15 min &middot; ~$2-3 per run &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/scripts/t3c-import/">source</a> &middot; <a href="https://github.com/justinstimatze/gemot/blob/main/integrations/t3c/ai-manifestos-report.md">sample report</a></p>
+
+<a href="https://vis.gemot.dev/?data=demo-ai-manifestos" class="demo-vis-link" target="_blank">Graph &rarr;</a> <a href="https://vis.gemot.dev/?data=demo-ai-manifestos&view=report" class="demo-vis-link" target="_blank">Report &rarr;</a>
 
 </div>
 </details>
