@@ -1111,14 +1111,15 @@ func seedClaimVotes(session *sdkmcp.ClientSession, data *ReportData, agents []ag
 				continue
 			}
 
-			vote := deriveClaimVote(data, voter, target)
-			if vote == 99 {
+			qv := deriveClaimVote(data, voter, target)
+			if qv.Skip {
 				continue
 			}
 
 			call(session, "participate", map[string]any{
 				"action": "vote", "deliberation_id": delibID,
-				"agent_id": voter.ID, "position_id": pos.ID, "value": vote,
+				"agent_id": voter.ID, "position_id": pos.ID, "value": qv.Value,
+				"qualifier": qv.Qualifier, "caveat": qv.Caveat,
 			})
 			voteCount++
 		}
@@ -1149,11 +1150,21 @@ func perturbVote(voterID, targetID string) int {
 	}
 }
 
-func deriveClaimVote(data *ReportData, voter, target *agentPlan) int {
+// qualifiedVote carries stance, qualifier, and caveat for the 5-point scale.
+type qualifiedVote struct {
+	Value     int
+	Qualifier string
+	Caveat    string
+	Skip      bool // true = no basis for comparison, don't submit
+}
+
+func skipVote() qualifiedVote { return qualifiedVote{Skip: true} }
+
+func deriveClaimVote(data *ReportData, voter, target *agentPlan) qualifiedVote {
 	// Speaker/steelman -> speaker/steelman: claim overlap
 	if (voter.Kind == "speaker" || voter.Kind == "steelman") && (target.Kind == "speaker" || target.Kind == "steelman") {
 		if voter.Cluster == nil || target.Cluster == nil {
-			return 99
+			return skipVote()
 		}
 		// Count shared claims between the two clusters' members
 		shared := 0
@@ -1182,10 +1193,10 @@ func deriveClaimVote(data *ReportData, voter, target *agentPlan) int {
 		agreementThresh := 2 + (voterHash % 2) // 2 or 3 depending on voter
 
 		if shared >= agreementThresh {
-			return 1
+			return qualifiedVote{Value: 2, Qualifier: fmt.Sprintf("high claim overlap (%d shared)", shared)}
 		}
 		if shared > 0 {
-			return perturbVote(voter.ID, target.ID)
+			return qualifiedVote{Value: 1, Qualifier: "partial claim overlap"}
 		}
 		// Check subtopic overlap (engaging with same issues)
 		overlap := 0
@@ -1195,65 +1206,65 @@ func deriveClaimVote(data *ReportData, voter, target *agentPlan) int {
 			}
 		}
 		if overlap > 0 {
-			return perturbVote(voter.ID, target.ID)
+			return qualifiedVote{Value: perturbVote(voter.ID, target.ID), Qualifier: "same topics but different claims"}
 		}
-		return 99 // no basis for comparison, skip
+		return skipVote()
 	}
 
 	// Speaker/steelman -> probe: does speaker have claims in probe's topic?
 	if (voter.Kind == "speaker" || voter.Kind == "steelman") && target.Kind == "probe" {
 		if voter.Cluster == nil {
-			return 0
+			return qualifiedVote{Value: 0, Qualifier: "no cluster data"}
 		}
 		totalClaims := 0
 		for _, m := range voter.Cluster.Members {
 			totalClaims += len(findClaimsForSpeaker(data, m, target.Topic, ""))
 		}
 		if totalClaims >= 5 {
-			return 1
+			return qualifiedVote{Value: 2, Qualifier: fmt.Sprintf("deep engagement with topic (%d claims)", totalClaims)}
 		}
 		if totalClaims >= 2 {
-			return perturbVote(voter.ID, target.ID)
+			return qualifiedVote{Value: 1, Qualifier: "moderate engagement"}
 		}
 		if totalClaims == 0 {
-			return 99
+			return skipVote()
 		}
-		return 0
+		return qualifiedVote{Value: 0, Qualifier: "minimal engagement"}
 	}
 
 	// Probe -> speaker/steelman: does the speaker engage with this probe's topic?
 	if voter.Kind == "probe" && (target.Kind == "speaker" || target.Kind == "steelman") {
 		if target.Cluster == nil {
-			return 0
+			return qualifiedVote{Value: 0, Qualifier: "no cluster data"}
 		}
 		totalClaims := 0
 		for _, m := range target.Cluster.Members {
 			totalClaims += len(findClaimsForSpeaker(data, m, voter.Topic, ""))
 		}
 		if totalClaims >= 5 {
-			return 1
+			return qualifiedVote{Value: 2, Qualifier: fmt.Sprintf("deep engagement (%d claims)", totalClaims)}
 		}
 		if totalClaims >= 2 {
-			return perturbVote(voter.ID, target.ID)
+			return qualifiedVote{Value: 1, Qualifier: "moderate engagement"}
 		}
 		if totalClaims == 0 {
-			return -1
+			return qualifiedVote{Value: -2, Qualifier: "no engagement with topic"}
 		}
-		return 0
+		return qualifiedVote{Value: 0, Qualifier: "minimal engagement"}
 	}
 
 	// Probe -> probe: diversify by topic relationship
 	if voter.Kind == "probe" && target.Kind == "probe" {
 		if voter.Topic == target.Topic {
-			return 1
+			return qualifiedVote{Value: 2, Qualifier: "same topic"}
 		}
 		if voter.Topic < target.Topic {
-			return 1
+			return qualifiedVote{Value: 1, Qualifier: "related topic"}
 		}
-		return -1
+		return qualifiedVote{Value: -1, Qualifier: "different topic"}
 	}
 
-	return 0
+	return qualifiedVote{Value: 0}
 }
 
 func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, r1Analysis *analysisResult, delibID string) int {
@@ -1310,15 +1321,18 @@ func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, 
 				continue
 			}
 			// R1 agents vary votes on R2 positions:
-			// Consensus agents → -1 on dissent (they'd disagree with the challenge)
+			// Consensus agents → -2 on dissent (they'd strongly disagree with the challenge)
 			// Non-consensus → perturbVote for voter-specific diversity (avoids sybil from uniform 0s)
 			vote := perturbVote(voter.ID, pos.AgentID)
+			qualifier := ""
 			if strings.HasPrefix(pos.AgentID, "t3c-dissent") && consensusAgents[voter.ID] {
-				vote = -1
+				vote = -2
+				qualifier = "consensus holder rejects dissent challenge"
 			}
 			call(session, "participate", map[string]any{
 				"action": "vote", "deliberation_id": delibID,
 				"agent_id": voter.ID, "position_id": pos.ID, "value": vote,
+				"qualifier": qualifier,
 			})
 			voteCount++
 		}
@@ -1336,20 +1350,25 @@ func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, 
 			}
 
 			vote := 0
+			qualifier := ""
 			switch voter.Kind {
 			case "bridge":
 				// Bridge agrees with positions that appear on both sides of cruxes (bridging potential)
 				if agreeAgents[pos.AgentID] && disagreeAgents[pos.AgentID] {
-					vote = 1 // agent takes varied stances — bridging potential
+					vote = 2
+					qualifier = "bridging potential — takes varied stances"
 				} else {
-					vote = 1 // bridge is generally agreeable
+					vote = 1
+					qualifier = "bridge is generally agreeable"
 				}
 			case "dissent":
 				// Dissent disagrees with positions that only appear in consensus, agrees with controversial ones
 				if disagreeAgents[pos.AgentID] {
-					vote = 1 // controversial = good, dissent likes it
+					vote = 1
+					qualifier = "controversial stance — dissent approves"
 				} else if agreeAgents[pos.AgentID] && !disagreeAgents[pos.AgentID] {
-					vote = -1 // always agreeing = suspicious, challenge it
+					vote = -2
+					qualifier = "unchallenged consensus — dissent challenges"
 				}
 			case "empty-chair":
 				// Empty chair votes based on which side of its specific crux the R1 agent is on
@@ -1360,9 +1379,11 @@ func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, 
 					for _, a := range crux.Agree {
 						if a == pos.AgentID {
 							if ec.minoritySide == "agree" {
-								vote = 1
+								vote = 2
+								qualifier = "amplifies minority perspective"
 							} else {
 								vote = -1
+								qualifier = "opposes majority side"
 							}
 							break
 						}
@@ -1370,9 +1391,11 @@ func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, 
 					for _, a := range crux.Disagree {
 						if a == pos.AgentID {
 							if ec.minoritySide == "disagree" {
-								vote = 1
+								vote = 2
+								qualifier = "amplifies minority perspective"
 							} else {
 								vote = -1
+								qualifier = "opposes majority side"
 							}
 							break
 						}
@@ -1383,6 +1406,7 @@ func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, 
 			call(session, "participate", map[string]any{
 				"action": "vote", "deliberation_id": delibID,
 				"agent_id": voter.ID, "position_id": pos.ID, "value": vote,
+				"qualifier": qualifier,
 			})
 			voteCount++
 		}
