@@ -28,7 +28,7 @@ func TestInviteAgent(t *testing.T) {
 	}
 
 	// Expert sees the invitation in their context (need analysis first)
-	svc.Vote(context.Background(), d.ID, "alice", "pos1", 1) // need some votes for analysis
+	svc.Vote(context.Background(), d.ID, "alice", "pos1", 1, "", "") // need some votes for analysis
 	svc.Analyze(context.Background(), d.ID)
 
 	ctx, err := svc.GetContext(context.Background(), d.ID, "expert-agent")
@@ -119,7 +119,7 @@ func TestProposeCompromiseRequiresGenerator(t *testing.T) {
 	d, _ := svc.CreateDeliberation(context.Background(), "No generator", "")
 	svc.SubmitPosition(context.Background(), d.ID, "alice", "A")
 	svc.SubmitPosition(context.Background(), d.ID, "bob", "B")
-	svc.Vote(context.Background(), d.ID, "alice", "bogus", 1) // ignored but needed
+	svc.Vote(context.Background(), d.ID, "alice", "bogus", 1, "", "") // ignored but needed
 	svc.Analyze(context.Background(), d.ID)
 
 	_, err := svc.ProposeCompromise(context.Background(), d.ID)

@@ -4,6 +4,7 @@ import "github.com/justinstimatze/gemot/types"
 
 // Type aliases — canonical definitions are in types/ package.
 
+type AgentStance = types.AgentStance
 type SourceQuote = types.SourceQuote
 type Crux = types.Crux
 type OpinionCluster = types.OpinionCluster

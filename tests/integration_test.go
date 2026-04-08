@@ -122,17 +122,17 @@ func TestFullDeliberationLoop(t *testing.T) {
 
 	// Step 4: Vote
 	// Alice agrees with Bob, disagrees with Dave
-	if err := svc.Vote(context.Background(), d.ID, "alice", positionIDs[1], 1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "alice", positionIDs[1], 1, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Vote(context.Background(), d.ID, "alice", positionIDs[3], -1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "alice", positionIDs[3], -1, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	// Bob agrees with Dave, disagrees with Carol
-	if err := svc.Vote(context.Background(), d.ID, "bob", positionIDs[3], 1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "bob", positionIDs[3], 1, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Vote(context.Background(), d.ID, "bob", positionIDs[2], -1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "bob", positionIDs[2], -1, "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,18 +192,18 @@ func TestVoteValidation(t *testing.T) {
 	p, _ := svc.SubmitPosition(context.Background(), d.ID, "agent-1", "A position")
 
 	// Invalid vote value
-	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 5); err == nil {
+	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 5, "", ""); err == nil {
 		t.Fatal("expected error for invalid vote value")
 	}
 
 	// Valid votes
-	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 1, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 0); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, 0, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, -1); err != nil {
+	if err := svc.Vote(context.Background(), d.ID, "agent-2", p.ID, -1, "", ""); err != nil {
 		t.Fatal(err)
 	}
 }

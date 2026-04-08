@@ -473,13 +473,12 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					return
 				}
 				agentID := scope(str(s, "agent_id"))
-				value := 0
-				if v, ok := s["value"]; ok {
-					if f, ok := v.(float64); ok {
-						value = int(f)
-					}
+				value, err := coerceVoteValue(s["value"])
+				if err != nil {
+					writeA2AError(w, req.ID, -32000, err.Error())
+					return
 				}
-				err := svc.Vote(ctx, str(s, "deliberation_id"), agentID, str(s, "position_id"), value, str(s, "criterion_id"))
+				err = svc.Vote(ctx, str(s, "deliberation_id"), agentID, str(s, "position_id"), value, str(s, "qualifier"), str(s, "caveat"), str(s, "criterion_id"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return

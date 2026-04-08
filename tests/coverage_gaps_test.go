@@ -44,7 +44,7 @@ func TestAuditLoggerCalledOnWriteOperations(t *testing.T) {
 	}
 
 	// Vote
-	err = svc.Vote(ctx, d.ID, "alice", p2.ID, 1)
+	err = svc.Vote(ctx, d.ID, "alice", p2.ID, 1, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestResolutionUpdatedAfterAnalysis(t *testing.T) {
 	// All agents vote agree on all positions (should trigger consensus)
 	for _, agent := range agents {
 		for _, pid := range posIDs {
-			if err := svc.Vote(ctx, d.ID, agent, pid, 1); err != nil {
+			if err := svc.Vote(ctx, d.ID, agent, pid, 1, "", ""); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -325,8 +325,8 @@ func TestDeleteCleansResolutionLocks(t *testing.T) {
 	// Submit and vote to trigger resolution lock creation
 	p1, _ := svc.SubmitPosition(ctx, d.ID, "alice", "Position")
 	p2, _ := svc.SubmitPosition(ctx, d.ID, "bob", "Position")
-	_ = svc.Vote(ctx, d.ID, "alice", p2.ID, 1)
-	_ = svc.Vote(ctx, d.ID, "bob", p1.ID, 1)
+	_ = svc.Vote(ctx, d.ID, "alice", p2.ID, 1, "", "")
+	_ = svc.Vote(ctx, d.ID, "bob", p1.ID, 1, "", "")
 
 	// Delete — should not leak the resolution lock
 	err = svc.DeleteDeliberation(ctx, d.ID, "", true)

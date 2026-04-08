@@ -167,18 +167,18 @@ func TestBridgingStatements(t *testing.T) {
 		if voter == "alice" {
 			continue
 		}
-		_ = svc.Vote(context.Background(), d.ID, voter, posIDs[0], 1)
+		_ = svc.Vote(context.Background(), d.ID, voter, posIDs[0], 1, "", "")
 	}
 
 	// bob's position: only cluster 0 agrees (not bridging)
-	_ = svc.Vote(context.Background(), d.ID, "alice", posIDs[1], 1)
-	_ = svc.Vote(context.Background(), d.ID, "carol", posIDs[1], -1)
-	_ = svc.Vote(context.Background(), d.ID, "dave", posIDs[1], -1)
+	_ = svc.Vote(context.Background(), d.ID, "alice", posIDs[1], 1, "", "")
+	_ = svc.Vote(context.Background(), d.ID, "carol", posIDs[1], -1, "", "")
+	_ = svc.Vote(context.Background(), d.ID, "dave", posIDs[1], -1, "", "")
 
 	// carol's position: mixed but cross-cluster (bridging)
-	_ = svc.Vote(context.Background(), d.ID, "alice", posIDs[2], 1)
-	_ = svc.Vote(context.Background(), d.ID, "bob", posIDs[2], 0)
-	_ = svc.Vote(context.Background(), d.ID, "dave", posIDs[2], 1)
+	_ = svc.Vote(context.Background(), d.ID, "alice", posIDs[2], 1, "", "")
+	_ = svc.Vote(context.Background(), d.ID, "bob", posIDs[2], 0, "", "")
+	_ = svc.Vote(context.Background(), d.ID, "dave", posIDs[2], 1, "", "")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -218,7 +218,7 @@ func TestBridgingRequiresTwoClusters(t *testing.T) {
 
 	d, _ := svc.CreateDeliberation(context.Background(), "Single cluster", "")
 	p, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Solo position")
-	_ = svc.Vote(context.Background(), d.ID, "alice", p.ID, 1)
+	_ = svc.Vote(context.Background(), d.ID, "alice", p.ID, 1, "", "")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {
@@ -238,8 +238,8 @@ func TestAnalysisProvenance(t *testing.T) {
 	d, _ := svc.CreateDeliberation(context.Background(), "Provenance test", "")
 	p1, _ := svc.SubmitPosition(context.Background(), d.ID, "alice", "Position A")
 	p2, _ := svc.SubmitPosition(context.Background(), d.ID, "bob", "Position B")
-	_ = svc.Vote(context.Background(), d.ID, "alice", p2.ID, -1)
-	_ = svc.Vote(context.Background(), d.ID, "bob", p1.ID, -1)
+	_ = svc.Vote(context.Background(), d.ID, "alice", p2.ID, -1, "", "")
+	_ = svc.Vote(context.Background(), d.ID, "bob", p1.ID, -1, "", "")
 
 	result, err := svc.Analyze(context.Background(), d.ID)
 	if err != nil {

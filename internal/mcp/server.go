@@ -129,7 +129,7 @@ func newServer(s *server) *sdkmcp.Server {
 		Description: `Participate in a deliberation. Actions:
 - submit_position: Submit your position (deliberation_id, agent_id, content; optional: model_family, group, conviction, reservation, on_behalf_of, interests, draft, metadata)
 - publish_position: Publish a draft position (position_id)
-- vote: Vote on a position — 1=agree, 0=pass, -1=disagree (deliberation_id, agent_id, position_id, value)
+- vote: Vote on a position — value: -2=strongly_disagree, -1=disagree_with_caveats, 0=mixed, 1=agree_with_caveats, 2=strongly_agree (deliberation_id, agent_id, position_id, value; optional: qualifier, caveat, criterion_id)
 - get_positions: Get all positions (deliberation_id; optional: round, exclude_agent_id, group, shuffle)
 - get_context: Get your personal context — cluster, allies, cruxes (deliberation_id, agent_id)
 - withdraw: Withdraw from a deliberation (deliberation_id, agent_id)`,
@@ -221,6 +221,8 @@ type participateParams struct {
 	Metadata       map[string]any `json:"metadata,omitempty"`
 	PositionID     string         `json:"position_id,omitempty"`
 	Value          any            `json:"value,omitempty"`
+	Qualifier      string         `json:"qualifier,omitempty"`
+	Caveat         string         `json:"caveat,omitempty"`
 	CriterionID    string         `json:"criterion_id,omitempty"`
 	ExcludeAgentID *string        `json:"exclude_agent_id,omitempty"`
 	Round          *int           `json:"round,omitempty"`
@@ -491,7 +493,7 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if err != nil {
 			return errResult(err)
 		}
-		if err := s.svc.Vote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.CriterionID); err != nil {
+		if err := s.svc.Vote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID); err != nil {
 			return errResult(err)
 		}
 		s.audit(ctx, "participate:vote", args.DeliberationID, args.AgentID)
@@ -971,14 +973,18 @@ func coerceVoteValue(v any) (int, error) {
 		return val, nil
 	case string:
 		switch val {
-		case "1", "+1":
+		case "strongly_agree", "+2", "2":
+			return 2, nil
+		case "agree_with_caveats", "agree", "1", "+1":
 			return 1, nil
-		case "0":
+		case "mixed", "0":
 			return 0, nil
-		case "-1":
+		case "disagree_with_caveats", "disagree", "-1":
 			return -1, nil
+		case "strongly_disagree", "-2":
+			return -2, nil
 		default:
-			return 0, fmt.Errorf("invalid vote value %q: must be -1, 0, or 1", val)
+			return 0, fmt.Errorf("invalid vote value %q: must be -2..2 or a stance string (strongly_agree, agree_with_caveats, mixed, disagree_with_caveats, strongly_disagree)", val)
 		}
 	case nil:
 		return 0, nil

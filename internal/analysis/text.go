@@ -166,12 +166,19 @@ type claimGroup struct {
 	OriginalClaimIDs []int  `json:"original_claim_ids"`
 }
 
+type stanceResult struct {
+	ID        string `json:"id"`
+	Value     int    `json:"value"`
+	Qualifier string `json:"qualifier"`
+}
+
 type cruxResult struct {
-	CruxClaim       string   `json:"crux_claim"`
-	Agree           []string `json:"agree"`
-	Disagree        []string `json:"disagree"`
-	NoClearPosition []string `json:"no_clear_position"`
-	Explanation     string   `json:"explanation"`
+	CruxClaim       string         `json:"crux_claim"`
+	Agree           []string       `json:"agree"`
+	Disagree        []string       `json:"disagree"`
+	NoClearPosition []string       `json:"no_clear_position"`
+	Explanation     string         `json:"explanation"`
+	Stances         []stanceResult `json:"stances"`
 }
 
 type summaryResult struct {
@@ -1251,8 +1258,20 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 			"disagree":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"no_clear_position": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			"explanation":       map[string]any{"type": "string"},
+			"stances": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"id":        map[string]any{"type": "string"},
+						"value":     map[string]any{"type": "integer"},
+						"qualifier": map[string]any{"type": "string"},
+					},
+					"required": []string{"id", "value", "qualifier"},
+				},
+			},
 		},
-		"required": []string{"crux_claim", "agree", "disagree", "no_clear_position", "explanation"},
+		"required": []string{"crux_claim", "agree", "disagree", "no_clear_position", "explanation", "stances"},
 	}
 
 	// Extract unique participant IDs from claims text (speaker="N" attributes)
@@ -1287,6 +1306,34 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 			DisagreeAgents:  deAnonymize(result.Disagree, numToAgent),
 			NoClearPosition: deAnonymize(result.NoClearPosition, numToAgent),
 			Explanation:     result.Explanation,
+		}
+
+		// Populate qualified stances if provided
+		if len(result.Stances) > 0 {
+			for _, s := range result.Stances {
+				agentID := s.ID
+				if mapped, ok := numToAgent[s.ID]; ok {
+					agentID = mapped
+				}
+				crux.Stances = append(crux.Stances, deliberation.AgentStance{
+					AgentID:   agentID,
+					Value:     s.Value,
+					Qualifier: s.Qualifier,
+				})
+			}
+			// Derive AgreeAgents/DisagreeAgents from stances for backwards compat
+			// (only if the LLM didn't populate them separately)
+			if len(crux.AgreeAgents) == 0 && len(crux.DisagreeAgents) == 0 {
+				for _, st := range crux.Stances {
+					if st.Value > 0 {
+						crux.AgreeAgents = append(crux.AgreeAgents, st.AgentID)
+					} else if st.Value < 0 {
+						crux.DisagreeAgents = append(crux.DisagreeAgents, st.AgentID)
+					} else {
+						crux.NoClearPosition = append(crux.NoClearPosition, st.AgentID)
+					}
+				}
+			}
 		}
 
 		// Balance score: min(agree, disagree) * 2 / total (0=unanimous, 1.0=50/50)
@@ -1993,7 +2040,7 @@ func findConsensus(ctx context.Context, positions []deliberation.Position, votes
 		for agent, v := range agentVotes {
 			aw := w(agent)
 			weightedTotal += aw
-			if v == 1 {
+			if v > 0 {
 				weightedAgrees += aw
 			}
 		}
@@ -2009,7 +2056,7 @@ func findConsensus(ctx context.Context, positions []deliberation.Position, votes
 			cid := agentCluster[agent]
 			aw := w(agent)
 			clusterTotal[cid] += aw
-			if v == 1 {
+			if v > 0 {
 				clusterAgrees[cid] += aw
 			}
 		}
@@ -2082,7 +2129,7 @@ func findBridging(positions []deliberation.Position, votes []deliberation.Vote, 
 		for agent, v := range agentVotes {
 			aw := w(agent)
 			weightedTotal += aw
-			if v == 1 {
+			if v > 0 {
 				weightedAgrees += aw
 			}
 		}
@@ -2097,7 +2144,7 @@ func findBridging(positions []deliberation.Position, votes []deliberation.Vote, 
 			cid := agentCluster[agent]
 			aw := w(agent)
 			clusterTotal[cid] += aw
-			if v == 1 {
+			if v > 0 {
 				clusterAgrees[cid] += aw
 			}
 		}

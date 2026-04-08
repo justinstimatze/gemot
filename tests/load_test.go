@@ -70,7 +70,7 @@ func TestConcurrentToolCalls(t *testing.T) {
 			targetIdx := rng.Intn(len(posIDs))
 			values := []int{-1, 0, 1}
 			value := values[rng.Intn(3)]
-			voteErrs[idx] = svc.Vote(context.Background(), d.ID, agentID, posIDs[targetIdx], value)
+			voteErrs[idx] = svc.Vote(context.Background(), d.ID, agentID, posIDs[targetIdx], value, "", "")
 		}(i)
 	}
 	wg.Wait()
@@ -134,7 +134,7 @@ func TestLargeDeliberation(t *testing.T) {
 			voted[target] = true
 			values := []int{-1, 0, 1}
 			value := values[rng.Intn(3)]
-			if err := svc.Vote(context.Background(), d.ID, agentID, posIDs[target], value); err != nil {
+			if err := svc.Vote(context.Background(), d.ID, agentID, posIDs[target], value, "", ""); err != nil {
 				t.Fatalf("vote agent-%d -> position-%d: %v", i, target, err)
 			}
 			voteCount++

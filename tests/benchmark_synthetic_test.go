@@ -110,7 +110,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 	}
 
 	for _, v := range voteMatrix {
-		if err := svc.Vote(context.Background(), delib.ID, v.voter, positionIDs[v.target], v.value); err != nil {
+		if err := svc.Vote(context.Background(), delib.ID, v.voter, positionIDs[v.target], v.value, "", ""); err != nil {
 			t.Fatalf("vote %s->%s: %v", v.voter, v.target, err)
 		}
 	}

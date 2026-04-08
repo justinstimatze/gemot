@@ -282,7 +282,7 @@ func TestQuorumEnforcement(t *testing.T) {
 	for _, voter := range []string{"agent1", "agent2", "agent3"} {
 		for _, p := range positions {
 			if p.AgentID != voter {
-				svc.Vote(context.Background(), d.ID, voter, p.ID, 1)
+				svc.Vote(context.Background(), d.ID, voter, p.ID, 1, "", "")
 			}
 		}
 	}
