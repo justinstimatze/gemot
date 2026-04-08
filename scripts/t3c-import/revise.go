@@ -182,22 +182,26 @@ func buildR3Agents(r1Agents []agentPlan, r2Analysis *analysisResult, data *Repor
 		prompt := fmt.Sprintf(
 			"You are revising a speaker's position in a deliberation after seeing the results of two rounds of analysis.\n\n"+
 				"ORIGINAL POSITION:\n%s\n\n"+
-				"DELIBERATION FINDINGS (from Rounds 1-2):\n%s\n"+
 				"%s\n"+
+				"DELIBERATION FINDINGS (from Rounds 1-2):\n%s\n"+
+				"IMPORTANT: If the speaker's source quotes clearly state X, do NOT generate a revision that contradicts X. "+
+				"Deliberation findings do not override what the speaker actually said.\n\n"+
 				"Generate a REVISED position for this speaker that:\n"+
 				"1. Accounts for the deliberation findings — where would this speaker likely update, concede, or dig in?\n"+
 				"2. Stays grounded in the speaker's actual views and source quotes — do NOT generate positions they never expressed\n"+
 				"3. Shows evolution: what shifted, what held firm, what new questions arise\n"+
 				"4. Is honest about remaining disagreements — don't force false consensus\n\n"+
+				"For each bullet, mark it [HELD] (unchanged from original), [UPDATED] (shifted based on evidence), or [NEW] (not in original). "+
+				"Generate at most 1-2 [NEW] points.\n\n"+
 				"Write the revised position directly (no preamble). Keep it concise — 5-10 bullet points max.",
-			agent.Position, findingsText, quotesText,
+			agent.Position, quotesText, findingsText,
 		)
 
 		resp, err := callAnthropic(client, anthropic.MessageNewParams{
 			Model:     "claude-sonnet-4-6",
 			MaxTokens: 800,
 			System: []anthropic.TextBlockParam{
-				{Text: "You simulate how a real speaker would revise their position after seeing deliberation results. Be faithful to their stated views — revise where the evidence warrants, but don't manufacture consensus."},
+				{Text: "You simulate how a real speaker would revise their position after seeing deliberation results. Be faithful to their stated views — revise where the evidence warrants, but don't manufacture consensus. When source quotes clearly establish a speaker's position, that position must survive into the revision. Softening a strong position without evidence from the speaker's own words is sycophantic drift, not legitimate revision."},
 			},
 			Messages: []anthropic.MessageParam{
 				anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
@@ -211,6 +215,42 @@ func buildR3Agents(r1Agents []agentPlan, r2Analysis *analysisResult, data *Repor
 		revised := extractText(resp)
 		if revised == "" {
 			continue
+		}
+
+		// Sycophancy check: validate revised position against source quotes
+		if len(quotes) > 0 && revised != "" {
+			checkPrompt := fmt.Sprintf(
+				"Given these source quotes from this speaker:\n- %s\n\n"+
+					"And this REVISED position after deliberation:\n%s\n\n"+
+					"Does the revised position contradict or significantly soften any core claim from the source quotes? "+
+					"A position is 'softened' if the speaker expressed certainty or strong conviction in the quotes but the revision hedges, qualifies, or retreats from that conviction without new evidence from the speaker.\n\n"+
+					"Answer FAITHFUL or DRIFTED, then a one-sentence explanation.\n"+
+					"If DRIFTED, identify which source claim was contradicted or softened.",
+				strings.Join(quotes, "\n- "),
+				revised,
+			)
+
+			checkResp, checkErr := callAnthropic(client, anthropic.MessageNewParams{
+				Model:     "claude-haiku-4-5",
+				MaxTokens: 200,
+				System: []anthropic.TextBlockParam{
+					{Text: "You detect sycophantic drift in AI-generated position revisions. A revision has 'drifted' if it softens, hedges, or contradicts what the speaker clearly stated in their source quotes. Deliberation findings can ADD new considerations but cannot ERASE stated positions. Be strict."},
+				},
+				Messages: []anthropic.MessageParam{
+					anthropic.NewUserMessage(anthropic.NewTextBlock(checkPrompt)),
+				},
+			})
+			if checkErr == nil {
+				verdict := extractText(checkResp)
+				if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(verdict)), "DRIFTED") {
+					fmt.Fprintf(os.Stderr, "    SYCOPHANCY DETECTED for %s: %s\n", agent.ID, strings.TrimSpace(verdict))
+					revised = agent.Position + "\n\n[Note: R3 revision rejected by sycophancy check — original position preserved]"
+				} else {
+					fmt.Fprintf(os.Stderr, "    sycophancy check: %s\n", strings.TrimSpace(verdict))
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "    sycophancy check failed for %s: %v\n", agent.ID, checkErr)
+			}
 		}
 
 		r3Agents = append(r3Agents, agentPlan{

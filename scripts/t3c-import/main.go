@@ -1084,7 +1084,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	var scResult *spotCheckResult
 	if cfg.SpotCheck {
 		fmt.Fprintf(os.Stderr, "\n=== Spot Check (T3C input quality) ===\n")
-		scResult = runSpotCheck(data, 0.15)
+		scResult = runSpotCheck(data, 0.30)
 	}
 
 	// Crux spot-check: verifies gemot's OUTPUT crux assignments against source quotes.
@@ -1118,7 +1118,7 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 				allCruxes = append(allCruxes, cf)
 			}
 		}
-		cruxSCResult = runCruxSpotCheck(allCruxes, data, 0.15)
+		cruxSCResult = runCruxSpotCheck(allCruxes, data, 0.30)
 	}
 
 	// Write markdown report if requested
