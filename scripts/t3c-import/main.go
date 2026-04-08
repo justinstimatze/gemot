@@ -12,10 +12,21 @@
 //
 //	go run scripts/t3c-import/ report.json
 //	go run scripts/t3c-import/ report.json --mode structural
-//	go run scripts/t3c-import/ report.json --mode structural --rounds 1
-//	go run scripts/t3c-import/ report.json --mode structural --report report.md
+//	go run scripts/t3c-import/ report.json --mode structural --rounds 3 --spot-check --report report.md
+//	go run scripts/t3c-import/ report.json --mode structural --dry-run
 //	go run scripts/t3c-import/ report.json --template auto --threshold 0.3
-//	go run scripts/t3c-import/ report.json --dry-run
+//
+// Flags:
+//
+//	--mode structural    Topology-derived agents (recommended)
+//	--rounds N           1=single-shot, 2=phased (default), 3=position revision + resolutions
+//	--report FILE        Write markdown report to file
+//	--spot-check         Verify T3C input quality with Haiku
+//	--null-control       Run shuffled null control for signal validation
+//	--replicate N        Run N replications for stability testing
+//	--dry-run            Print agents without creating deliberation
+//	--threshold F        Jaccard clustering threshold (default 0.5)
+//	--template NAME      Deliberation template (default: assembly)
 package main
 
 import (
@@ -1298,10 +1309,10 @@ func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, 
 			if pos.AgentID == voter.ID || !r2IDs[pos.AgentID] {
 				continue
 			}
-			// R1 agents vote 0 on bridge, but vary on dissent/empty-chair:
-			// If this R1 agent appears in consensus → -1 on dissent (they'd disagree with the challenge)
-			// Else → 0
-			vote := 0
+			// R1 agents vary votes on R2 positions:
+			// Consensus agents → -1 on dissent (they'd disagree with the challenge)
+			// Non-consensus → perturbVote for voter-specific diversity (avoids sybil from uniform 0s)
+			vote := perturbVote(voter.ID, pos.AgentID)
 			if strings.HasPrefix(pos.AgentID, "t3c-dissent") && consensusAgents[voter.ID] {
 				vote = -1
 			}
