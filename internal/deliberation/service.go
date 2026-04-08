@@ -749,8 +749,8 @@ func (s *Service) Vote(ctx context.Context, deliberationID, agentID, positionID 
 		return fmt.Errorf("position does not belong to this deliberation")
 	}
 
-	if value < -1 || value > 1 {
-		return fmt.Errorf("vote value must be -1, 0, or 1")
+	if value < -2 || value > 2 {
+		return fmt.Errorf("vote value must be between -2 and 2")
 	}
 
 	v := &Vote{

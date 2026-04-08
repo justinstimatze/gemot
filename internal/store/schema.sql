@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS votes (
     deliberation_id TEXT NOT NULL REFERENCES deliberations(id),
     agent_id TEXT NOT NULL,
     position_id TEXT NOT NULL REFERENCES positions(id),
-    value INTEGER NOT NULL CHECK (value IN (-1, 0, 1)),
+    value INTEGER NOT NULL CHECK (value BETWEEN -2 AND 2),
     criterion_id TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(deliberation_id, agent_id, position_id, criterion_id)
@@ -217,6 +217,15 @@ ALTER TABLE positions ADD COLUMN IF NOT EXISTS parent_position_id TEXT DEFAULT '
 
 -- Migration: position metadata (JSON map for agent coordinates, labels, etc.)
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS metadata TEXT DEFAULT '{}';
+
+-- Qualified votes: expand value range from {-1,0,1} to [-2,+2] and add reasoning fields
+DO $$ BEGIN
+    ALTER TABLE votes DROP CONSTRAINT IF EXISTS votes_value_check;
+EXCEPTION WHEN undefined_object THEN NULL;
+END $$;
+ALTER TABLE votes DROP CONSTRAINT IF EXISTS votes_check;
+ALTER TABLE votes ADD COLUMN IF NOT EXISTS qualifier TEXT DEFAULT '';
+ALTER TABLE votes ADD COLUMN IF NOT EXISTS caveat TEXT DEFAULT '';
 
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
