@@ -258,43 +258,46 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 			}
 
 			vote := 0
+			qualifier := ""
 			if voter.Kind == "resolution" {
 				// Resolution agents vote based on index parity to diversify patterns.
-				// Odd-numbered resolutions lean toward safety-focused positions,
-				// even-numbered lean toward progress-focused. This ensures each
-				// resolution has a distinct vote pattern (avoiding sybil detection)
-				// while still being meaningful.
 				resIdx := 0
 				fmt.Sscanf(voter.ID, "t3c-resolution-%d", &resIdx)
 				for _, other := range r1Agents {
 					if other.ID == pos.AgentID {
 						if other.Kind == "probe" {
-							// Resolutions vary on probes by index
 							if resIdx%2 == 0 {
 								vote = 1
+								qualifier = "resolution engages with probe topic"
 							} else {
 								vote = -1
+								qualifier = "resolution diverges from probe framing"
 							}
 						} else if other.Kind == "speaker" || other.Kind == "steelman" {
-							// Alternate agreement pattern by resolution index
-							vote = []int{1, -1, 0, 1}[resIdx%4]
+							vote = []int{2, -1, 0, 1}[resIdx%4]
+							qualifiers := []string{
+								"resolution strongly aligns with speaker",
+								"resolution challenges speaker stance",
+								"resolution neutral on speaker position",
+								"resolution partially aligns with speaker",
+							}
+							qualifier = qualifiers[resIdx%4]
 						}
 						break
 					}
 				}
 			} else {
-				// Revised agents: only vote +1 on own R1 original, 0 on everything else.
-				// DO NOT use cluster patterns — they're identical to the original's,
-				// which triggers SYBIL_SIGNAL. The analysis discovers R3 alignment
-				// from the revised position text, not from vote patterns.
+				// Revised agents: only vote +2 on own R1 original, 0 on everything else.
 				if pos.AgentID == originalID {
-					vote = 1
+					vote = 2
+					qualifier = "revised version of own position"
 				}
 			}
 
 			call(session, "participate", map[string]any{
 				"action": "vote", "deliberation_id": delibID,
 				"agent_id": voter.ID, "position_id": pos.ID, "value": vote,
+				"qualifier": qualifier,
 			})
 			voteCount++
 		}
@@ -312,26 +315,29 @@ func seedR3Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents, r3Agents []a
 			}
 
 			vote := 0
+			qualifier := ""
 			r3Original := r3ToR1[pos.AgentID]
 
 			switch {
 			case voter.ID == r3Original:
-				// Original speaker partially agrees with their revised version
-				vote = 1
+				vote = 2
+				qualifier = "own revised position"
 			case voter.Kind == "bridge":
-				vote = 1 // bridge is favorable toward proposals
+				vote = 1
+				qualifier = "bridge favors R3 proposals"
 			case voter.Kind == "dissent":
-				vote = -1 // dissent is skeptical of proposals
+				vote = -1
+				qualifier = "dissent skeptical of R3 proposals"
 			case voter.Kind == "empty-chair":
 				vote = perturbVote(voter.ID, pos.AgentID)
 			default:
-				// Voter-specific perturbation avoids sybil from uniform 0s
 				vote = perturbVote(voter.ID, pos.AgentID)
 			}
 
 			call(session, "participate", map[string]any{
 				"action": "vote", "deliberation_id": delibID,
 				"agent_id": voter.ID, "position_id": pos.ID, "value": vote,
+				"qualifier": qualifier,
 			})
 			voteCount++
 		}
