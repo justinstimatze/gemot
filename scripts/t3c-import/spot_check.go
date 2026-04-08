@@ -270,7 +270,7 @@ func runCruxSpotCheck(cruxes []cruxForCheck, data *ReportData, sampleRate float6
 	}
 
 	// Sample
-	nSample := max(1, int(float64(len(triples))*sampleRate))
+	nSample := max(5, int(float64(len(triples))*sampleRate))
 	if nSample > len(triples) {
 		nSample = len(triples)
 	}
@@ -390,7 +390,7 @@ func runSpotCheck(data *ReportData, sampleRate float64) *spotCheckResult {
 	}
 
 	// Sample
-	nSample := max(1, int(float64(len(triples))*sampleRate))
+	nSample := max(5, int(float64(len(triples))*sampleRate))
 	if nSample > len(triples) {
 		nSample = len(triples)
 	}
