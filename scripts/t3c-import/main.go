@@ -465,6 +465,7 @@ func main() {
 	spotCheck := flag.Bool("spot-check", false, "LLM-verify 15% of stance assignments against source quotes")
 	replicate := flag.Int("replicate", 0, "Run N replication runs to test pipeline stability")
 	coverageAudit := flag.Bool("coverage-audit", false, "Detect missing perspectives in unchallenged positions")
+	resumeID := flag.String("resume", "", "Resume from existing deliberation ID (skip creation/submission, re-trigger incomplete analysis)")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -505,6 +506,7 @@ func main() {
 			SpotCheck:     *spotCheck,
 			ReplicateN:    *replicate,
 			CoverageAudit:  *coverageAudit,
+			ResumeID:      *resumeID,
 		}
 		runStructuralMode(&data, cfg)
 	default:
@@ -681,56 +683,81 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 	}
 	defer session.Close()
 
-	// --- Create deliberation ---
-	topic := fmt.Sprintf("[T3C structural · AI-synthesized agents] %s", data.Title)
-	if data.Description != "" {
-		topic += " — " + data.Description
-	}
-	if len(topic) > 300 {
-		topic = topic[:300]
-	}
+	// --- Create or resume deliberation ---
+	var delibID string
+	resuming := cfg.ResumeID != ""
 
-	createJSON := call(session, "deliberation", map[string]any{
-		"action": "create", "topic": topic, "template": tmpl,
-		"type": "reasoning", "group_id": cfg.GroupID,
-	})
-	var created struct {
-		DeliberationID string `json:"deliberation_id"`
+	if resuming {
+		delibID = cfg.ResumeID
+		fmt.Fprintf(os.Stderr, "\nResuming deliberation: %s\n", delibID)
+	} else {
+		topic := fmt.Sprintf("[T3C structural · AI-synthesized agents] %s", data.Title)
+		if data.Description != "" {
+			topic += " — " + data.Description
+		}
+		if len(topic) > 300 {
+			topic = topic[:300]
+		}
+
+		createJSON := call(session, "deliberation", map[string]any{
+			"action": "create", "topic": topic, "template": tmpl,
+			"type": "reasoning", "group_id": cfg.GroupID,
+		})
+		var created struct {
+			DeliberationID string `json:"deliberation_id"`
+		}
+		json.Unmarshal([]byte(createJSON), &created)
+		if created.DeliberationID == "" {
+			fmt.Fprintf(os.Stderr, "failed to create deliberation\n")
+			os.Exit(1)
+		}
+		delibID = created.DeliberationID
+		fmt.Fprintf(os.Stderr, "\nDeliberation: %s\n", delibID)
 	}
-	json.Unmarshal([]byte(createJSON), &created)
-	if created.DeliberationID == "" {
-		fmt.Fprintf(os.Stderr, "failed to create deliberation\n")
-		os.Exit(1)
-	}
-	delibID := created.DeliberationID
-	fmt.Fprintf(os.Stderr, "\nDeliberation: %s\n", delibID)
 
 	// --- Round 1: submit + vote + analyze ---
 	fmt.Fprintf(os.Stderr, "\n=== Round 1 ===\n")
-	for _, a := range r1Agents {
-		fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
-		call(session, "participate", map[string]any{
-			"action": "submit_position", "deliberation_id": delibID,
-			"agent_id": a.ID, "content": a.Position,
-			"metadata": map[string]any{"kind": a.Kind},
+	voteCount := 0
+	if resuming {
+		fmt.Fprintf(os.Stderr, "  (resume) skipping submission, fetching existing result...\n")
+	} else {
+		for _, a := range r1Agents {
+			fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
+			call(session, "participate", map[string]any{
+				"action": "submit_position", "deliberation_id": delibID,
+				"agent_id": a.ID, "content": a.Position,
+				"metadata": map[string]any{"kind": a.Kind},
+			})
+		}
+
+		// Seed votes
+		voteCount = seedClaimVotes(session, data, r1Agents, delibID)
+		fmt.Fprintf(os.Stderr, "  %d votes seeded\n", voteCount)
+
+		// Trigger analysis
+		fmt.Fprintf(os.Stderr, "  analyzing...\n")
+		call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
+	}
+
+	// Get R1 result
+	var r1Result string
+	if resuming {
+		r1Result = callSoft(session, "analyze", map[string]any{
+			"action": "get_result", "deliberation_id": delibID, "round": 1,
 		})
+		if r1Result == "" {
+			fmt.Fprintf(os.Stderr, "  no R1 result found — cannot resume\n")
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "  fetched existing R1 result\n")
+	} else {
+		r1Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 1)
+		if r1Result == "" {
+			fmt.Fprintf(os.Stderr, "  round 1 analysis did not complete\n")
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "  round 1 complete\n")
 	}
-
-	// Seed votes
-	voteCount := seedClaimVotes(session, data, r1Agents, delibID)
-	fmt.Fprintf(os.Stderr, "  %d votes seeded\n", voteCount)
-
-	// Trigger analysis
-	fmt.Fprintf(os.Stderr, "  analyzing...\n")
-	call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
-
-	// Poll for completion
-	r1Result := pollAndGetResult(session, cfg.MCPURL, secret, delibID, 1)
-	if r1Result == "" {
-		fmt.Fprintf(os.Stderr, "  round 1 analysis did not complete\n")
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stderr, "  round 1 complete\n")
 
 	// Generate compromise proposal for R1
 	r1Compromise := ""
@@ -837,37 +864,52 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 		}
 
 		if len(r2Agents) > 0 {
-			// Get context for each R2 agent (required for round 2 access)
-			for _, a := range r2Agents {
-				callSoft(session, "participate", map[string]any{
-					"action": "get_context", "deliberation_id": delibID, "agent_id": a.ID,
+			if resuming {
+				fmt.Fprintf(os.Stderr, "  (resume) skipping submission, fetching existing R2 result...\n")
+				r2Result = callSoft(session, "analyze", map[string]any{
+					"action": "get_result", "deliberation_id": delibID, "round": 2,
 				})
-			}
-
-			for _, a := range r2Agents {
-				fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
-				call(session, "participate", map[string]any{
-					"action": "submit_position", "deliberation_id": delibID,
-					"agent_id": a.ID, "content": a.Position,
-					"metadata": map[string]any{"kind": a.Kind},
-				})
-			}
-
-			// Seed votes for R2 agents
-			r2Votes := seedR2Votes(session, r1Agents, r2Agents, &r1Analysis, delibID)
-			fmt.Fprintf(os.Stderr, "  %d R2 votes seeded\n", r2Votes)
-
-			// Trigger R2 analysis
-			fmt.Fprintf(os.Stderr, "  analyzing...\n")
-			call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
-			r2Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 2)
-			if r2Result == "" {
-				fmt.Fprintf(os.Stderr, "  R2 analysis timed out, retrying...\n")
-				session.Close()
-				session, err = connect(cfg.MCPURL, secret)
-				if err == nil {
+				if r2Result == "" {
+					// R2 may not have completed — re-trigger
+					fmt.Fprintf(os.Stderr, "  no R2 result, re-triggering analysis...\n")
 					call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
 					r2Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 2)
+				} else {
+					fmt.Fprintf(os.Stderr, "  fetched existing R2 result\n")
+				}
+			} else {
+				// Get context for each R2 agent (required for round 2 access)
+				for _, a := range r2Agents {
+					callSoft(session, "participate", map[string]any{
+						"action": "get_context", "deliberation_id": delibID, "agent_id": a.ID,
+					})
+				}
+
+				for _, a := range r2Agents {
+					fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
+					call(session, "participate", map[string]any{
+						"action": "submit_position", "deliberation_id": delibID,
+						"agent_id": a.ID, "content": a.Position,
+						"metadata": map[string]any{"kind": a.Kind},
+					})
+				}
+
+				// Seed votes for R2 agents
+				r2Votes := seedR2Votes(session, r1Agents, r2Agents, &r1Analysis, delibID)
+				fmt.Fprintf(os.Stderr, "  %d R2 votes seeded\n", r2Votes)
+
+				// Trigger R2 analysis
+				fmt.Fprintf(os.Stderr, "  analyzing...\n")
+				call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
+				r2Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 2)
+				if r2Result == "" {
+					fmt.Fprintf(os.Stderr, "  R2 analysis timed out, retrying...\n")
+					session.Close()
+					session, err = connect(cfg.MCPURL, secret)
+					if err == nil {
+						call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
+						r2Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 2)
+					}
 				}
 			}
 			if r2Result != "" {
@@ -916,37 +958,55 @@ func runStructuralMode(data *ReportData, cfg *pipelineConfig) {
 		r3Agents = append(r3Agents, resolutionAgents...)
 
 		if len(r3Agents) > 0 {
-			// Get context for each R3 agent
-			for _, a := range r3Agents {
-				callSoft(session, "participate", map[string]any{
-					"action": "get_context", "deliberation_id": delibID, "agent_id": a.ID,
+			if resuming {
+				fmt.Fprintf(os.Stderr, "  (resume) skipping submission, fetching existing R3 result...\n")
+				r3Result = callSoft(session, "analyze", map[string]any{
+					"action": "get_result", "deliberation_id": delibID, "round": 3,
 				})
-			}
-
-			for _, a := range r3Agents {
-				fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
-				call(session, "participate", map[string]any{
-					"action": "submit_position", "deliberation_id": delibID,
-					"agent_id": a.ID, "content": a.Position,
-					"metadata": map[string]any{"kind": a.Kind},
-				})
-			}
-
-			// Seed R3 votes
-			r3Votes := seedR3Votes(session, r1Agents, r2Agents, r3Agents, delibID)
-			fmt.Fprintf(os.Stderr, "  %d R3 votes seeded\n", r3Votes)
-
-			// Trigger R3 analysis
-			fmt.Fprintf(os.Stderr, "  analyzing...\n")
-			call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
-			r3Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 3)
-			if r3Result == "" {
-				fmt.Fprintf(os.Stderr, "  R3 analysis timed out, retrying...\n")
-				session.Close()
-				session, err = connect(cfg.MCPURL, secret)
-				if err == nil {
+				if r3Result == "" {
+					// R3 didn't complete — this is the main resume use case
+					fmt.Fprintf(os.Stderr, "  no R3 result, re-triggering analysis...\n")
 					call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
 					r3Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 3)
+					if r3Result == "" {
+						fmt.Fprintf(os.Stderr, "  R3 analysis timed out on retry\n")
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "  fetched existing R3 result\n")
+				}
+			} else {
+				// Get context for each R3 agent
+				for _, a := range r3Agents {
+					callSoft(session, "participate", map[string]any{
+						"action": "get_context", "deliberation_id": delibID, "agent_id": a.ID,
+					})
+				}
+
+				for _, a := range r3Agents {
+					fmt.Fprintf(os.Stderr, "  submit: %s\n", a.ID)
+					call(session, "participate", map[string]any{
+						"action": "submit_position", "deliberation_id": delibID,
+						"agent_id": a.ID, "content": a.Position,
+						"metadata": map[string]any{"kind": a.Kind},
+					})
+				}
+
+				// Seed R3 votes
+				r3Votes := seedR3Votes(session, r1Agents, r2Agents, r3Agents, delibID)
+				fmt.Fprintf(os.Stderr, "  %d R3 votes seeded\n", r3Votes)
+
+				// Trigger R3 analysis
+				fmt.Fprintf(os.Stderr, "  analyzing...\n")
+				call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
+				r3Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 3)
+				if r3Result == "" {
+					fmt.Fprintf(os.Stderr, "  R3 analysis timed out, retrying...\n")
+					session.Close()
+					session, err = connect(cfg.MCPURL, secret)
+					if err == nil {
+						call(session, "analyze", map[string]any{"action": "run", "deliberation_id": delibID})
+						r3Result = pollAndGetResult(session, cfg.MCPURL, secret, delibID, 3)
+					}
 				}
 			}
 			if r3Result != "" {

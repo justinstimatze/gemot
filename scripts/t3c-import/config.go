@@ -14,6 +14,7 @@ type pipelineConfig struct {
 	SpotCheck     bool
 	ReplicateN    int
 	CoverageAudit bool
+	ResumeID      string // deliberation ID to resume (skip creation/submission)
 }
 
 // reportInput bundles all data needed to generate a markdown report.
