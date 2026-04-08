@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -515,7 +516,16 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 				return
 			}
 			topicPositions := formatPositions(positions, agentToNum)
-			summary, err := a.getSummary(ctx, deliberationTopic, topic.TopicName, topicPositions)
+			var priorSummary string
+			if ps, ok := ctx.Value(deliberation.ContextKeyPriorSummaries{}).([]deliberation.TopicSummary); ok {
+				for _, s := range ps {
+					if s.Topic == topic.TopicName {
+						priorSummary = s.Summary
+						break
+					}
+				}
+			}
+			summary, err := a.getSummary(ctx, deliberationTopic, topic.TopicName, topicPositions, priorSummary)
 			<-cruxSem
 			if err != nil {
 				slog.Warn("summary generation failed", "topic", topic.TopicName, "error", err)
@@ -1245,6 +1255,9 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 		"required": []string{"crux_claim", "agree", "disagree", "no_clear_position", "explanation"},
 	}
 
+	// Extract unique participant IDs from claims text (speaker="N" attributes)
+	participantIDs := extractParticipantIDs(claimsText)
+
 	// Multi-candidate crux generation: generate 3 candidates, pick the most balanced
 	type candidate struct {
 		crux    *deliberation.Crux
@@ -1255,10 +1268,14 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 	for attempt := 1; attempt <= 3; attempt++ {
 		differentiation := ""
 		if attempt > 1 {
-			differentiation = fmt.Sprintf("\nCandidate %d of 3: try to find a DIFFERENT crux than previous attempts. Look for an alternative dividing line among these participants.\n\n", attempt)
+			prevClaim := ""
+			if len(candidates) > 0 {
+				prevClaim = candidates[len(candidates)-1].crux.Claim
+			}
+			differentiation = fmt.Sprintf("\nCandidate %d of 3: previous crux was %q. Find a DIFFERENT dividing line among these participants.\n\n", attempt, prevClaim)
 		}
 
-		prompt := differentiation + strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{TOPIC_NAME}}", topicName, "{{SUBTOPIC}}", subtopicName, "{{SUBTOPIC_DESC}}", subtopicDesc, "{{CLAIMS}}", claimsText).Replace(cruxPrompt)
+		prompt := differentiation + strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{TOPIC_NAME}}", topicName, "{{SUBTOPIC}}", subtopicName, "{{SUBTOPIC_DESC}}", subtopicDesc, "{{CLAIMS}}", claimsText, "{{PARTICIPANT_IDS}}", participantIDs).Replace(cruxPrompt)
 		var result cruxResult
 		if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
 			continue
@@ -1308,7 +1325,7 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 	return best.crux, nil
 }
 
-func (a *TextAnalyzer) getSummary(ctx context.Context, deliberationTopic, topicName, positions string) (string, error) {
+func (a *TextAnalyzer) getSummary(ctx context.Context, deliberationTopic, topicName, positions, priorSummary string) (string, error) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -1317,7 +1334,11 @@ func (a *TextAnalyzer) getSummary(ctx context.Context, deliberationTopic, topicN
 		"required": []string{"summary"},
 	}
 
-	prompt := strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{TOPIC_NAME}}", topicName, "{{POSITIONS}}", positions).Replace(summaryPrompt)
+	tmpl := summaryPrompt
+	if priorSummary != "" {
+		tmpl = summaryPromptDelta
+	}
+	prompt := strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{TOPIC_NAME}}", topicName, "{{POSITIONS}}", positions, "{{PRIOR_SUMMARY}}", priorSummary).Replace(tmpl)
 	var result summaryResult
 	if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
 		return "", err
@@ -1661,6 +1682,19 @@ func formatClaimsForCrux(claims []claim) string {
 		}
 	}
 	return sb.String()
+}
+
+// extractParticipantIDs extracts unique speaker IDs from claims XML text (speaker="N" attributes).
+func extractParticipantIDs(claimsText string) string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, match := range regexp.MustCompile(`speaker="(\d+)"`).FindAllStringSubmatch(claimsText, -1) {
+		if !seen[match[1]] {
+			seen[match[1]] = true
+			ids = append(ids, match[1])
+		}
+	}
+	return strings.Join(ids, ", ")
 }
 
 func deAnonymize(nums []string, numToAgent map[string]string) []string {

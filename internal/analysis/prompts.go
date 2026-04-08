@@ -120,6 +120,11 @@ IMPORTANT: Format requirements for your response:
    - Avoid programming conventions like "no_clear_position" - use "didn't take a clear stance"
    - Write as if explaining to a general audience, not developers
 
+The participants who made claims in this subtopic are: {{PARTICIPANT_IDS}}.
+You MUST only assign these exact IDs to agree/disagree/no_clear_position groups. Do not invent participant IDs that are not listed here.
+
+Before generating the cruxClaim, first identify the core tension — what is the main thing these specific participants disagree about? Then formulate a cruxClaim that captures that tension.
+
 Now here are the participant claims:
 {{CLAIMS}}`
 
@@ -133,6 +138,21 @@ Generate a detailed summary (100-140 words) for the topic "{{TOPIC_NAME}}" that:
 - Is comprehensive yet concise
 
 Now here are the positions:
+{{POSITIONS}}`
+
+// summaryPromptDelta: used for R2+ when prior round summary exists
+const summaryPromptDelta = `I'm going to give you a single topic from a later round of a deliberation about "{{TOPIC}}" with positions from participants.
+
+The PREVIOUS round's summary for "{{TOPIC_NAME}}" was:
+{{PRIOR_SUMMARY}}
+
+Generate an UPDATED summary (100-140 words) for "{{TOPIC_NAME}}" that:
+- Focuses on what CHANGED since the prior round: new arguments, shifted positions, resolved disagreements
+- Notes any positions that strengthened, weakened, or were abandoned
+- Highlights any new consensus or new disagreements that emerged
+- Does NOT repeat content already covered in the prior summary — assume the reader has read it
+
+Now here are the current round's positions:
 {{POSITIONS}}`
 
 // compromisePrompt: {{TOPIC}} = deliberation topic, {{CRUXES}} = cruxes text, {{BRIDGING}} = bridging text, {{CLUSTERS}} = cluster descriptions
