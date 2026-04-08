@@ -363,16 +363,16 @@ func (s *DB) CreateVote(ctx context.Context, v *deliberation.Vote) error {
 	v.ID = uuid.New().String()
 	v.CreatedAt = time.Now().UTC()
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO votes (id, deliberation_id, agent_id, position_id, value, criterion_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT (deliberation_id, agent_id, position_id, criterion_id) DO UPDATE SET id = $1, value = $5, created_at = $7`,
-		v.ID, v.DeliberationID, v.AgentID, v.PositionID, v.Value, v.CriterionID, v.CreatedAt,
+		`INSERT INTO votes (id, deliberation_id, agent_id, position_id, value, criterion_id, qualifier, caveat, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT (deliberation_id, agent_id, position_id, criterion_id) DO UPDATE SET id = $1, value = $5, qualifier = $7, caveat = $8, created_at = $9`,
+		v.ID, v.DeliberationID, v.AgentID, v.PositionID, v.Value, v.CriterionID, v.Qualifier, v.Caveat, v.CreatedAt,
 	)
 	return err
 }
 
 func (s *DB) GetVotes(ctx context.Context, deliberationID string) ([]deliberation.Vote, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, deliberation_id, agent_id, position_id, value, COALESCE(criterion_id, ''), created_at FROM votes WHERE deliberation_id = $1 ORDER BY created_at`,
+		`SELECT id, deliberation_id, agent_id, position_id, value, COALESCE(criterion_id, ''), COALESCE(qualifier, ''), COALESCE(caveat, ''), created_at FROM votes WHERE deliberation_id = $1 ORDER BY created_at`,
 		deliberationID,
 	)
 	if err != nil {
@@ -384,7 +384,7 @@ func (s *DB) GetVotes(ctx context.Context, deliberationID string) ([]deliberatio
 	for rows.Next() {
 		var v deliberation.Vote
 		var createdAt time.Time
-		if err := rows.Scan(&v.ID, &v.DeliberationID, &v.AgentID, &v.PositionID, &v.Value, &v.CriterionID, &createdAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.DeliberationID, &v.AgentID, &v.PositionID, &v.Value, &v.CriterionID, &v.Qualifier, &v.Caveat, &createdAt); err != nil {
 			return nil, err
 		}
 		v.CreatedAt = createdAt
@@ -396,7 +396,7 @@ func (s *DB) GetVotes(ctx context.Context, deliberationID string) ([]deliberatio
 // GetVotesByRound returns votes on positions from a specific round.
 func (s *DB) GetVotesByRound(ctx context.Context, deliberationID string, round int) ([]deliberation.Vote, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT v.id, v.deliberation_id, v.agent_id, v.position_id, v.value, COALESCE(v.criterion_id, ''), v.created_at
+		`SELECT v.id, v.deliberation_id, v.agent_id, v.position_id, v.value, COALESCE(v.criterion_id, ''), COALESCE(v.qualifier, ''), COALESCE(v.caveat, ''), v.created_at
 		 FROM votes v JOIN positions p ON v.position_id = p.id
 		 WHERE v.deliberation_id = $1 AND p.round_number = $2
 		 ORDER BY v.created_at`,
@@ -411,7 +411,7 @@ func (s *DB) GetVotesByRound(ctx context.Context, deliberationID string, round i
 	for rows.Next() {
 		var v deliberation.Vote
 		var createdAt time.Time
-		if err := rows.Scan(&v.ID, &v.DeliberationID, &v.AgentID, &v.PositionID, &v.Value, &v.CriterionID, &createdAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.DeliberationID, &v.AgentID, &v.PositionID, &v.Value, &v.CriterionID, &v.Qualifier, &v.Caveat, &createdAt); err != nil {
 			return nil, err
 		}
 		v.CreatedAt = createdAt
