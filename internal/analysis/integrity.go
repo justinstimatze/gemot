@@ -116,7 +116,7 @@ func validateVoteSimilarity(votes []deliberation.Vote, agents []string) []string
 				}
 			}
 
-			if shared >= 3 && identical == shared {
+			if shared >= 5 && identical == shared {
 				warnings = append(warnings, fmt.Sprintf(
 					"SYBIL_SIGNAL: agents %q and %q have identical votes across all %d shared positions",
 					a, b, shared,

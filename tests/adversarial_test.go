@@ -276,15 +276,16 @@ func TestSybilVoteDetection(t *testing.T) {
 	// Test that identical voting patterns trigger integrity warnings
 	analyzer := analysis.NewTextAnalyzerWithFunc(mockLLM())
 
-	agents := []string{"real-agent", "sybil-1", "sybil-2", "sybil-3"}
+	agents := []string{"real-agent", "real-agent-2", "sybil-1", "sybil-2", "sybil-3"}
 	positions := []deliberation.Position{
 		{ID: "p1", DeliberationID: "Sybil Test", AgentID: "real-agent", Content: "A genuine position", Round: 1},
-		{ID: "p2", DeliberationID: "Sybil Test", AgentID: "sybil-1", Content: "Sybil position 1", Round: 1},
-		{ID: "p3", DeliberationID: "Sybil Test", AgentID: "sybil-2", Content: "Sybil position 2", Round: 1},
-		{ID: "p4", DeliberationID: "Sybil Test", AgentID: "sybil-3", Content: "Sybil position 3", Round: 1},
+		{ID: "p2", DeliberationID: "Sybil Test", AgentID: "real-agent-2", Content: "Another genuine position", Round: 1},
+		{ID: "p3", DeliberationID: "Sybil Test", AgentID: "sybil-1", Content: "Sybil position 1", Round: 1},
+		{ID: "p4", DeliberationID: "Sybil Test", AgentID: "sybil-2", Content: "Sybil position 2", Round: 1},
+		{ID: "p5", DeliberationID: "Sybil Test", AgentID: "sybil-3", Content: "Sybil position 3", Round: 1},
 	}
 
-	// Sybil agents all vote identically
+	// Sybil agents all vote identically on 5 shared positions
 	votes := []deliberation.Vote{
 		{ID: "v1", DeliberationID: "test", AgentID: "sybil-1", PositionID: "p1", Value: -1},
 		{ID: "v2", DeliberationID: "test", AgentID: "sybil-2", PositionID: "p1", Value: -1},
@@ -295,9 +296,18 @@ func TestSybilVoteDetection(t *testing.T) {
 		{ID: "v7", DeliberationID: "test", AgentID: "sybil-1", PositionID: "p3", Value: 1},
 		{ID: "v8", DeliberationID: "test", AgentID: "sybil-2", PositionID: "p3", Value: 1},
 		{ID: "v9", DeliberationID: "test", AgentID: "sybil-3", PositionID: "p3", Value: 1},
-		{ID: "v10", DeliberationID: "test", AgentID: "real-agent", PositionID: "p2", Value: 1},
-		{ID: "v11", DeliberationID: "test", AgentID: "real-agent", PositionID: "p3", Value: -1},
-		{ID: "v12", DeliberationID: "test", AgentID: "real-agent", PositionID: "p4", Value: 1},
+		{ID: "v10", DeliberationID: "test", AgentID: "sybil-1", PositionID: "p4", Value: -1},
+		{ID: "v11", DeliberationID: "test", AgentID: "sybil-2", PositionID: "p4", Value: -1},
+		{ID: "v12", DeliberationID: "test", AgentID: "sybil-3", PositionID: "p4", Value: -1},
+		{ID: "v13", DeliberationID: "test", AgentID: "sybil-1", PositionID: "p5", Value: 0},
+		{ID: "v14", DeliberationID: "test", AgentID: "sybil-2", PositionID: "p5", Value: 0},
+		{ID: "v15", DeliberationID: "test", AgentID: "sybil-3", PositionID: "p5", Value: 0},
+		{ID: "v16", DeliberationID: "test", AgentID: "real-agent", PositionID: "p3", Value: 1},
+		{ID: "v17", DeliberationID: "test", AgentID: "real-agent", PositionID: "p4", Value: -1},
+		{ID: "v18", DeliberationID: "test", AgentID: "real-agent", PositionID: "p5", Value: 1},
+		{ID: "v19", DeliberationID: "test", AgentID: "real-agent-2", PositionID: "p3", Value: -1},
+		{ID: "v20", DeliberationID: "test", AgentID: "real-agent-2", PositionID: "p4", Value: 1},
+		{ID: "v21", DeliberationID: "test", AgentID: "real-agent-2", PositionID: "p5", Value: -1},
 	}
 
 	result, err := analyzer.Analyze(context.Background(), positions, votes, agents)
