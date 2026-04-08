@@ -303,7 +303,7 @@ func absFloat(x float64) float64 {
 // runNullControl runs a simplified R1-only pipeline on shuffled data and compares with real results.
 func runNullControl(data *ReportData, realR1JSON string, realClusterCount int, mcpURL, secret, tmpl, groupID string, threshold float64) *nullControlResult {
 	fmt.Fprintf(os.Stderr, "\n=== Null Control ===\n")
-	fmt.Fprintf(os.Stderr, "  shuffling speaker-crux assignments...\n")
+	fmt.Fprintf(os.Stderr, "  shuffling claim-to-speaker attribution...\n")
 
 	shuffled := shuffleClaims(data)
 	setup := buildR1Setup(shuffled, threshold, "t3c-null-")
