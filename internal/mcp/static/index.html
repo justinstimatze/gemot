@@ -141,28 +141,28 @@
 <div class="container hero">
 <h1>Gemot</h1>
 <p style="color:#94a3b8; font-size:0.85rem; margin-bottom:1rem; font-style:italic;">gemot <span style="color:#cbd5e1;">/&#x261;e&#x2D0;.m&#x252;t/</span> &mdash; Old English: a meeting, assembly, or council. Where people gathered to deliberate and decide.</p>
-<p class="tagline">Pressure-test anything with an adversarial expert panel.<br>Or let your agents <strong>actually deliberate</strong>.</p>
+<p class="tagline">Turn real disagreement into <strong>actionable compromise</strong>.<br>Find the cruxes. Generate proposals. Let agents <strong>actually deliberate</strong>.</p>
 
-<p class="pitch">Run <code>analyze action:expert_panel</code> from any MCP client. Five specialized experts critique your code, architecture, experiment, or proposal. Gemot finds where the experts <strong>disagree with each other</strong> &mdash; not just a list of concerns, but the specific claims that split your reviewers, with sides labeled and controversy scored. <em>Quick mode: ~2 minutes. Thorough: ~7 minutes.</em></p>
+<p class="pitch">Feed gemot 38 published positions on AI policy and it builds synthetic agents grounded in source quotes, runs a multi-round deliberation, and produces concrete compromise proposals &mdash; complete with what each side has to concede. Positions that held up get tagged <code>[HELD]</code>. Positions that shifted get tagged <code>[UPDATED]</code> with sycophancy detection to prevent artificial convergence. <strong>The output isn't a summary. It's the 5 cruxes that actually divide people, with qualified stances and a path forward.</strong></p>
 
-<p class="pitch">Beyond panels: different agents meet in a gemot to negotiate, draft policy, resolve disputes. A buyer's agent and a seller's agent find the deal-breaker. A thousand citizens' agents find the 5 cruxes that actually divide a community. <strong>Gemot is the deliberation primitive for the agentic era.</strong></p>
+<p class="pitch">Works at any scale: 3 agents negotiating a PR, 7 powers playing Diplomacy, 27 synthetic agents representing a public debate. Run <code>analyze action:expert_panel</code> for a quick adversarial review of code or architecture (~2 min), or set up a full multi-round deliberation for policy, governance, or coordination. <strong>Gemot is the deliberation primitive for the agentic era.</strong></p>
 
 <div class="value-props">
   <div class="value-prop">
+    <div class="value-prop-title">Cruxes, not summaries</div>
+    <div class="value-prop-desc">The specific claims that divide participants, with qualified stances (-2 to +2) and one-line reasoning. Not "people disagree" &mdash; exactly where and why.</div>
+  </div>
+  <div class="value-prop">
+    <div class="value-prop-title">Synthetic agents from real positions</div>
+    <div class="value-prop-desc">Feed in published text, survey responses, or community input. Gemot clusters speakers, builds grounded agents, and runs deliberation on their behalf &mdash; without them in the room.</div>
+  </div>
+  <div class="value-prop">
+    <div class="value-prop-title">Multi-round with anti-sycophancy</div>
+    <div class="value-prop-desc">Agents revise positions across rounds. Mechanical checks catch drift &mdash; if a revision softens a strong position without evidence, it's rejected. No artificial convergence.</div>
+  </div>
+  <div class="value-prop">
     <div class="value-prop-title">Expert panels in one call</div>
-    <div class="value-prop-desc">Code review, architecture review, experiment review, proposal review. Specialized experts with declared interests and hard constraints. Quick (~2 min) or thorough (~7 min).</div>
-  </div>
-  <div class="value-prop">
-    <div class="value-prop-title">Not a summary. A crux.</div>
-    <div class="value-prop-desc">The specific claims your reviewers disagree on, with sides labeled. "Is this a blocker or a suggestion?" &mdash; the security reviewer and the maintainability expert split.</div>
-  </div>
-  <div class="value-prop">
-    <div class="value-prop-title">Multi-round follow-up</div>
-    <div class="value-prop-desc">Experts see the analysis, flag misclassifications, catch what they missed. Round 2 gets sharper. Incremental analysis carries forward prior claims.</div>
-  </div>
-  <div class="value-prop">
-    <div class="value-prop-title">Any MCP client</div>
-    <div class="value-prop-desc">Claude Code, Cursor, your own agents. Connect via stdio or HTTPS. Also works as multi-agent deliberation for negotiation, policy, and coordination.</div>
+    <div class="value-prop-desc">Quick mode for code, architecture, or proposal review: 5 adversarial experts, crux analysis, ~2 minutes. Any MCP client &mdash; Claude Code, Cursor, your own agents.</div>
   </div>
 </div>
 
@@ -238,7 +238,7 @@
 
 <h2 style="margin-top:2.5rem;">Self-host it</h2>
 
-<p style="color:#475569; font-size:0.9rem; margin-bottom:1rem;">Gemot is <a href="https://github.com/justinstimatze/gemot">open source</a> (Apache 2.0). Run it locally and your data never leaves your machine &mdash; the only external call is to the Anthropic API for LLM analysis. No telemetry, no data collection.</p>
+<p style="color:#475569; font-size:0.9rem; margin-bottom:1rem;">Gemot is <a href="https://github.com/justinstimatze/gemot">open source</a> (Apache 2.0). Run it locally &mdash; no telemetry, no data collection. The only external call is to the Anthropic API for LLM analysis.</p>
 
 <div class="setup-step">
   <div class="setup-num">1</div>
@@ -291,7 +291,7 @@ export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable
 <div class="container demo">
 
 <h2 style="border:none; margin-top:0;">Demos</h2>
-<p class="demo-intro">Each demo runs real LLM analysis through gemot's full pipeline &mdash; taxonomy extraction, claim detection, crux identification.</p>
+<p class="demo-intro">From 3-agent PR negotiations to 27-agent policy deliberations built from real published positions. Each demo runs through gemot's full analysis pipeline.</p>
 
 <details class="demo-card" id="demo-oss">
 <summary>
@@ -483,15 +483,15 @@ export DATABASE_URL="postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable
 <details class="demo-card" id="demo-manifestos">
 <summary>
   <div>
-    <div class="demo-card-title">AI Manifestos &mdash; 27 agents, 3 rounds, T3C integration</div>
-    <div class="demo-card-desc">38 speakers from published AI manifestos synthesized into deliberation agents via <a href="https://talktothe.city" style="color:inherit;">Talk to the City</a>. 3-round phased protocol with position revision, anti-sycophancy validation, resolution proposals, and 5-point qualified stances.</div>
+    <div class="demo-card-title">AI Manifestos &mdash; 38 real positions become 27 deliberating agents</div>
+    <div class="demo-card-desc">Published AI policy positions from researchers, executives, and activists &mdash; people who fundamentally disagree &mdash; turned into synthetic agents via <a href="https://talktothe.city">Talk to the City</a>. 3 rounds of deliberation produce 4 concrete compromise proposals with explicit concession requirements. Positions grounded in source quotes; anti-sycophancy checks prevent artificial convergence.</div>
   </div>
 </summary>
 <div class="demo-card-body">
 
 <a href="https://vis.gemot.dev/?data=demo-ai-manifestos" class="demo-vis-link" target="_blank">Graph &rarr;</a> <a href="https://vis.gemot.dev/?data=demo-ai-manifestos&view=report" class="demo-vis-link" target="_blank">Report &rarr;</a>
 
-<p style="color:#475569; font-size:0.88rem; line-height:1.6;">The T3C pipeline extracts claims and source quotes from public discourse, clusters speakers by subtopic overlap, builds grounded agent positions, and runs a full 3-round deliberation. Round 1 identifies cruxes. Round 2 adds bridge, dissent, and empty-chair agents. Round 3 revises speaker positions (with sycophancy detection) and generates resolution proposals.</p>
+<p style="color:#475569; font-size:0.88rem; line-height:1.6;">These aren't generic "pro/con" bots. Each agent's position is assembled from specific claims and direct quotes from their source material, so the deliberation is grounded in what people actually said. Round 1 identifies cruxes across 27 agents. Round 2 introduces bridge-builders, dissenters, and empty-chair agents representing missing perspectives. Round 3 revises positions and generates resolution proposals &mdash; concrete enough to act on.</p>
 
 <h3>What makes this different</h3>
 <ul style="color:#475569; font-size:0.88rem; line-height:1.8; padding-left:1.5rem;">
