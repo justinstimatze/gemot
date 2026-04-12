@@ -140,7 +140,7 @@ type Vote struct {
 	DeliberationID string    `json:"deliberation_id"`
 	AgentID        string    `json:"agent_id"`
 	PositionID     string    `json:"position_id"`
-	Value          int       `json:"value"`           // -2 (strongly disagree) to +2 (strongly agree)
+	Value          int       `json:"value"` // -2 (strongly disagree) to +2 (strongly agree)
 	CriterionID    string    `json:"criterion_id,omitempty"`
 	Qualifier      string    `json:"qualifier,omitempty"` // brief reason for this stance
 	Caveat         string    `json:"caveat,omitempty"`    // specific condition or objection

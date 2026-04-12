@@ -11,8 +11,8 @@ type SourceQuote struct {
 
 type AgentStance struct {
 	AgentID   string `json:"agent_id"`
-	Value     int    `json:"value"`      // -2 to +2
-	Qualifier string `json:"qualifier"`  // one-line reason for this specific stance
+	Value     int    `json:"value"`     // -2 to +2
+	Qualifier string `json:"qualifier"` // one-line reason for this specific stance
 }
 
 type Crux struct {
