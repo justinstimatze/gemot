@@ -36,8 +36,12 @@ type TextAnalyzer struct {
 	cache            ClaimCache
 
 	// StabilityCheckSamples enables multi-candidate crux regeneration (0 = off).
-	// When > 1, validateCruxStability runs over the final crux set. Each sampled
-	// crux incurs N additional LLM calls, so this is opt-in.
+	// When > 1, getCrux issues N extra same-prompt LLM calls after the primary
+	// 3-candidate balance selection, then a semantic judge decides whether each
+	// re-sample names the same dividing line. A crux is flagged CRUX_INSTABILITY
+	// when fewer than 2/3 of samples semantically agree. Each sampled crux costs
+	// N additional LLM calls, so this is opt-in (enable via a.StabilityCheckSamples
+	// from the CLI/flag layer).
 	StabilityCheckSamples int
 }
 
@@ -556,7 +560,8 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 
 			// Parallelize subtopic crux detection within this topic
 			type cruxResult struct {
-				crux *deliberation.Crux
+				crux     *deliberation.Crux
+				warnings []string
 			}
 			var subtopicMu sync.Mutex
 			var subtopicCruxes []cruxResult
@@ -588,7 +593,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 					}
 
 					claimsText := formatClaimsForCrux(deduped)
-					crux, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, st.SubtopicName, st.SubtopicDescription, claimsText, numToAgent)
+					crux, cruxWarnings, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, st.SubtopicName, st.SubtopicDescription, claimsText, numToAgent)
 					if err != nil {
 						return
 					}
@@ -598,7 +603,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 					crux.SourceQuotes = collectSourceQuotes(claims)
 
 					subtopicMu.Lock()
-					subtopicCruxes = append(subtopicCruxes, cruxResult{crux: crux})
+					subtopicCruxes = append(subtopicCruxes, cruxResult{crux: crux, warnings: cruxWarnings})
 					subtopicMu.Unlock()
 				}(subtopic, subtopicClaims)
 			}
@@ -607,6 +612,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 			foundSubtopicCrux := len(subtopicCruxes) > 0
 			for _, sr := range subtopicCruxes {
 				tr.cruxes = append(tr.cruxes, *sr.crux)
+				tr.warnings = append(tr.warnings, sr.warnings...)
 			}
 
 			// Fallback: run topic-level crux detection if orphaned claims exist.
@@ -620,7 +626,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 						return
 					}
 					claimsText := formatClaimsForCrux(topicClaims)
-					crux, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, topic.TopicName, topic.TopicDescription, claimsText, numToAgent)
+					crux, cruxWarnings, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, topic.TopicName, topic.TopicDescription, claimsText, numToAgent)
 					<-cruxSem
 					if err == nil {
 						crux.Topic = topic.TopicName
@@ -628,6 +634,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 						crux.SourcePositionIDs = collectPositionIDs(topicClaims)
 						crux.SourceQuotes = collectSourceQuotes(topicClaims)
 						tr.cruxes = append(tr.cruxes, *crux)
+						tr.warnings = append(tr.warnings, cruxWarnings...)
 					}
 				} else {
 					// Some subtopic cruxes exist, but single-speaker subtopics were skipped.
@@ -646,7 +653,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 							return
 						}
 						claimsText := formatClaimsForCrux(orphanedClaims)
-						crux, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, "(orphaned subtopics)", topic.TopicDescription, claimsText, numToAgent)
+						crux, cruxWarnings, err := a.getCrux(ctx, deliberationTopic, topic.TopicName, "(orphaned subtopics)", topic.TopicDescription, claimsText, numToAgent)
 						<-cruxSem
 						if err == nil {
 							crux.Topic = topic.TopicName
@@ -654,6 +661,7 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 							crux.SourcePositionIDs = collectPositionIDs(orphanedClaims)
 							crux.SourceQuotes = collectSourceQuotes(orphanedClaims)
 							tr.cruxes = append(tr.cruxes, *crux)
+							tr.warnings = append(tr.warnings, cruxWarnings...)
 						}
 					}
 				}
@@ -686,11 +694,9 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	// Integrity: provenance — flag cruxes backed by too few positions or quotes.
 	warnings = append(warnings, validateCruxProvenance(cruxes)...)
 
-	// Integrity: crux-stability check (opt-in — StabilityCheckSamples > 1).
-	// The candidate generator and semantic judge are left unwired until the
-	// Track-1 LLM defenses land; the call stays in place so the hook point is
-	// visible and the warning taxonomy is stable.
-	warnings = append(warnings, validateCruxStability(cruxes, a.StabilityCheckSamples, nil, nil)...)
+	// Integrity: crux-stability warnings are emitted inline during getCrux
+	// when TextAnalyzer.StabilityCheckSamples > 1 (see cruxStabilityWarning),
+	// so each warning can be attributed to the subtopic that generated it.
 
 	// Integrity: cross-model consistency check — stub until secondary-family
 	// client is wired (Track 1 / DARPA-PS-26-09 LLM defenses).
@@ -1271,7 +1277,7 @@ func (a *TextAnalyzer) deduplicateClaims(ctx context.Context, deliberationTopic,
 	return deduped, nil
 }
 
-func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName, subtopicName, subtopicDesc, claimsText string, numToAgent map[string]string) (*deliberation.Crux, error) {
+func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName, subtopicName, subtopicDesc, claimsText string, numToAgent map[string]string) (*deliberation.Crux, []string, error) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -1380,7 +1386,7 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 	}
 
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("all 3 crux candidates failed")
+		return nil, nil, fmt.Errorf("all 3 crux candidates failed")
 	}
 
 	// Return the candidate with the highest balance score
@@ -1391,7 +1397,92 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 		}
 	}
 
-	return best.crux, nil
+	// Integrity: stability re-sampling. When StabilityCheckSamples > 1, generate
+	// N additional candidates with the SAME prompt (no differentiation prefix),
+	// then semantically judge each against the chosen claim. The differentiation
+	// loop above is designed to produce divergent framings for balance selection,
+	// so it cannot double as a stability signal — a fresh, undifferentiated pass
+	// is required. See validateCruxStability / integrity.go for the threshold.
+	var warnings []string
+	if a.StabilityCheckSamples > 1 {
+		plainPrompt := strings.NewReplacer("{{TOPIC}}", deliberationTopic, "{{TOPIC_NAME}}", topicName, "{{SUBTOPIC}}", subtopicName, "{{SUBTOPIC_DESC}}", subtopicDesc, "{{CLAIMS}}", claimsText, "{{PARTICIPANT_IDS}}", participantIDs).Replace(cruxPrompt)
+		samples := a.sampleCruxStabilityCandidates(ctx, plainPrompt, schema, a.StabilityCheckSamples)
+		if w := a.cruxStabilityWarning(ctx, best.crux.Claim, samples); w != "" {
+			warnings = append(warnings, w)
+		}
+	}
+
+	return best.crux, warnings, nil
+}
+
+// sampleCruxStabilityCandidates issues n independent same-prompt crux calls and
+// returns the crux_claim strings from each successful response. Failed calls are
+// silently skipped — stability is judged over whatever samples come back.
+func (a *TextAnalyzer) sampleCruxStabilityCandidates(ctx context.Context, prompt string, schema map[string]any, n int) []string {
+	claims := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		var result cruxResult
+		if err := a.structuredOutput(ctx, systemPrompt, prompt, schema, &result); err != nil {
+			continue
+		}
+		if result.CruxClaim != "" {
+			claims = append(claims, result.CruxClaim)
+		}
+	}
+	return claims
+}
+
+// cruxStabilityWarning judges each sample against the chosen crux claim via
+// a lightweight semantic-equality LLM call and returns a CRUX_INSTABILITY
+// warning if fewer than 2/3 samples agree. Returns "" on stable cruxes or when
+// fewer than 2 samples were collected (insufficient signal).
+func (a *TextAnalyzer) cruxStabilityWarning(ctx context.Context, chosenClaim string, samples []string) string {
+	if len(samples) < 2 {
+		return ""
+	}
+	agree := 0
+	for _, s := range samples {
+		same, err := a.judgeCruxSame(ctx, chosenClaim, s)
+		if err != nil {
+			continue
+		}
+		if same {
+			agree++
+		}
+	}
+	if float64(agree)/float64(len(samples)) < 2.0/3.0 {
+		return fmt.Sprintf(
+			"CRUX_INSTABILITY: crux %q disagreed with %d/%d regenerated candidates — framing may be adversarially shaped or under-specified",
+			truncateClaim(chosenClaim, 60), len(samples)-agree, len(samples),
+		)
+	}
+	return ""
+}
+
+// judgeCruxSame asks the LLM whether two crux claims identify the same dividing
+// line among participants (minor rewording = same, different axes = different).
+// Used by cruxStabilityWarning to compare a chosen crux to re-sampled alternatives.
+func (a *TextAnalyzer) judgeCruxSame(ctx context.Context, a1, a2 string) (bool, error) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"same":   map[string]any{"type": "boolean"},
+			"reason": map[string]any{"type": "string"},
+		},
+		"required": []string{"same", "reason"},
+	}
+	prompt := fmt.Sprintf(
+		"Do these two crux claims identify the SAME dividing line among the participants of a deliberation?\n\nClaim A: %s\nClaim B: %s\n\nReturn true only if they name the same axis of disagreement. Minor rewording or more/less specificity → true. Different axes, different scope, or contradictory framing → false. Provide a short reason.",
+		a1, a2,
+	)
+	var out struct {
+		Same   bool   `json:"same"`
+		Reason string `json:"reason"`
+	}
+	if err := a.structuredOutput(ctx, "You compare two crux claims for semantic equivalence.", prompt, schema, &out); err != nil {
+		return false, err
+	}
+	return out.Same, nil
 }
 
 func (a *TextAnalyzer) getSummary(ctx context.Context, deliberationTopic, topicName, positions, priorSummary string) (string, error) {

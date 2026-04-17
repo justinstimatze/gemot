@@ -28,6 +28,14 @@ func (s *Synthesizer) SetCache(c ClaimCache) {
 	s.text.SetCache(c)
 }
 
+// SetStabilityCheckSamples enables opt-in crux-stability re-sampling. 0 or 1
+// disables the check; 2+ triggers N extra LLM calls per generated crux plus a
+// semantic-judge call per sample. See TextAnalyzer.StabilityCheckSamples for
+// the cost and semantics.
+func (s *Synthesizer) SetStabilityCheckSamples(n int) {
+	s.text.StabilityCheckSamples = n
+}
+
 // GenerateCompromise produces a compromise statement from analysis results.
 func (s *Synthesizer) GenerateCompromise(ctx context.Context, topic string, result *deliberation.AnalysisResult) (string, error) {
 	return s.text.GenerateCompromise(ctx, topic, result)

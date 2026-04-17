@@ -654,6 +654,19 @@ func (s *Service) SetGroupID(ctx context.Context, deliberationID, groupID string
 }
 
 func (s *Service) SubmitPosition(ctx context.Context, deliberationID, agentID, content string, opts ...PositionOption) (*Position, error) {
+	return s.SubmitPositionWithSigningID(ctx, deliberationID, agentID, agentID, content, opts...)
+}
+
+// SubmitPositionWithSigningID is the hosted-mode entry point that decouples
+// the stored agent_id from the identity used in the signed canonical payload.
+// MCP's hosted-mode transport scopes args.agent_id to "<keyID>:<agentID>"
+// before calling the service; the client, however, signs with the unscoped
+// agent_id it knows. Passing the unscoped form as signingAgentID lets the
+// server reconstruct the exact bytes the client signed.
+//
+// Callers that don't scope agent_ids should use SubmitPosition, which forwards
+// here with signingAgentID == agentID.
+func (s *Service) SubmitPositionWithSigningID(ctx context.Context, deliberationID, agentID, signingAgentID, content string, opts ...PositionOption) (*Position, error) {
 	if len(agentID) > maxAgentIDLen {
 		return nil, fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
 	}
@@ -748,7 +761,7 @@ func (s *Service) SubmitPosition(ctx context.Context, deliberationID, agentID, c
 		p.Draft = true
 	}
 
-	if err := s.verifyPositionSignature(ctx, d, p, rawContent); err != nil {
+	if err := s.verifyPositionSignature(ctx, d, p, rawContent, signingAgentID); err != nil {
 		return nil, err
 	}
 	// If sanitization mutated the content, the stored signature no longer verifies
@@ -800,13 +813,21 @@ func (s *Service) Vote(ctx context.Context, deliberationID, agentID, positionID 
 	if len(criterionID) > 0 && criterionID[0] != "" {
 		v.CriterionID = criterionID[0]
 	}
-	return s.castVote(ctx, v)
+	return s.castVote(ctx, v, agentID)
 }
 
 // SubmitSignedVote is the signature-aware entry point. Parallel to Vote() but
 // attaches an ed25519 signature that is verified against the agent's registered
 // public key before the vote is recorded.
 func (s *Service) SubmitSignedVote(ctx context.Context, deliberationID, agentID, positionID string, value int, qualifier, caveat, criterionID string, signature []byte) error {
+	return s.SubmitSignedVoteWithSigningID(ctx, deliberationID, agentID, agentID, positionID, value, qualifier, caveat, criterionID, signature)
+}
+
+// SubmitSignedVoteWithSigningID is the hosted-mode entry point for signed
+// votes. See SubmitPositionWithSigningID — same rationale: the canonical
+// payload's agent_id must match what the client signed, even when the server
+// has scoped the stored agent_id for namespace isolation.
+func (s *Service) SubmitSignedVoteWithSigningID(ctx context.Context, deliberationID, agentID, signingAgentID, positionID string, value int, qualifier, caveat, criterionID string, signature []byte) error {
 	v := &Vote{
 		DeliberationID: deliberationID,
 		AgentID:        agentID,
@@ -817,13 +838,17 @@ func (s *Service) SubmitSignedVote(ctx context.Context, deliberationID, agentID,
 		CriterionID:    criterionID,
 		Signature:      signature,
 	}
-	return s.castVote(ctx, v)
+	return s.castVote(ctx, v, signingAgentID)
 }
 
 // castVote is the shared body for Vote and SubmitSignedVote. It does input
 // validation, loads the deliberation + position, verifies any attached signature,
 // persists the vote, and handles seconding.
-func (s *Service) castVote(ctx context.Context, v *Vote) error {
+//
+// signingAgentID is the identity used to reconstruct the signed canonical
+// payload. For direct callers it matches v.AgentID; hosted-mode callers pass
+// the unscoped agent_id the client actually signed with.
+func (s *Service) castVote(ctx context.Context, v *Vote, signingAgentID string) error {
 	if len(v.AgentID) > maxAgentIDLen {
 		return fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
 	}
@@ -851,7 +876,7 @@ func (s *Service) castVote(ctx context.Context, v *Vote) error {
 		return fmt.Errorf("vote value must be between -2 and 2")
 	}
 
-	if err := s.verifyVoteSignature(ctx, d, v); err != nil {
+	if err := s.verifyVoteSignature(ctx, d, v, signingAgentID); err != nil {
 		return err
 	}
 
@@ -2267,6 +2292,16 @@ func (s *Service) RegisterAgentKey(ctx context.Context, agentID string, publicKe
 	return nil
 }
 
+// GetActiveAgentKey returns the most recently registered non-revoked public key
+// for the agent, if any. Exposed at the service layer so HTTP middleware can
+// verify envelope signatures without depending on the store package directly.
+//
+// Callers should use errors.Is(err, ErrAgentKeyNotFound) to distinguish "no key
+// registered" from a real DB error.
+func (s *Service) GetActiveAgentKey(ctx context.Context, agentID string) ([]byte, string, error) {
+	return s.store.GetActiveAgentKey(ctx, agentID)
+}
+
 // RevokeAgentKey invalidates the active signing key for an agent.
 // Subsequent signed submissions will fail verification until a new key is registered.
 func (s *Service) RevokeAgentKey(ctx context.Context, agentID string) error {
@@ -2282,9 +2317,13 @@ func (s *Service) RevokeAgentKey(ctx context.Context, agentID string) error {
 // (before any server-side PII sanitization) — the signature must verify against
 // the exact bytes the client signed, not the stored form.
 //
+// signingAgentID is the identity used to reconstruct the canonical payload.
+// It matches p.AgentID for direct callers but may differ in hosted mode where
+// the transport scopes the stored agent_id.
+//
 // Returns an error only when the policy says to reject; advisory-mode warnings
 // are emitted via the audit log and the position is accepted.
-func (s *Service) verifyPositionSignature(ctx context.Context, d *Deliberation, p *Position, signingContent string) error {
+func (s *Service) verifyPositionSignature(ctx context.Context, d *Deliberation, p *Position, signingContent, signingAgentID string) error {
 	policy := d.SignaturePolicy
 	if policy == "" {
 		policy = "none"
@@ -2301,7 +2340,7 @@ func (s *Service) verifyPositionSignature(ctx context.Context, d *Deliberation, 
 		if !hasKey {
 			return fmt.Errorf("signature provided but no public key is registered for agent %q", p.AgentID)
 		}
-		msg := auth.PositionPayload(p.AgentID, p.DeliberationID, p.Round, signingContent)
+		msg := auth.PositionPayload(signingAgentID, p.DeliberationID, p.Round, signingContent)
 		if err := auth.Verify(algo, pubkey, msg, p.Signature); err != nil {
 			s.audit("participate:signature_verify_fail:position", d.ID, p.AgentID)
 			return fmt.Errorf("SIGNATURE_VERIFY_FAIL: %w", err)
@@ -2322,7 +2361,10 @@ func (s *Service) verifyPositionSignature(ctx context.Context, d *Deliberation, 
 // verifyVoteSignature enforces signature_policy against a vote. Parallel to
 // verifyPositionSignature — the only differences are the canonical payload and
 // the audit/log labels.
-func (s *Service) verifyVoteSignature(ctx context.Context, d *Deliberation, v *Vote) error {
+//
+// signingAgentID has the same role as in verifyPositionSignature: the identity
+// used to reconstruct the canonical payload the client signed.
+func (s *Service) verifyVoteSignature(ctx context.Context, d *Deliberation, v *Vote, signingAgentID string) error {
 	policy := d.SignaturePolicy
 	if policy == "" {
 		policy = "none"
@@ -2339,7 +2381,7 @@ func (s *Service) verifyVoteSignature(ctx context.Context, d *Deliberation, v *V
 		if !hasKey {
 			return fmt.Errorf("signature provided but no public key is registered for agent %q", v.AgentID)
 		}
-		msg := auth.VotePayload(v.AgentID, v.DeliberationID, v.PositionID, v.Value, v.Qualifier, v.Caveat, v.CriterionID)
+		msg := auth.VotePayload(signingAgentID, v.DeliberationID, v.PositionID, v.Value, v.Qualifier, v.Caveat, v.CriterionID)
 		if err := auth.Verify(algo, pubkey, msg, v.Signature); err != nil {
 			s.audit("participate:signature_verify_fail:vote", d.ID, v.AgentID)
 			return fmt.Errorf("SIGNATURE_VERIFY_FAIL: %w", err)

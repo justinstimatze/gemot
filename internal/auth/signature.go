@@ -26,6 +26,7 @@ import (
 const (
 	DomainPosition = "gemot/v1/position"
 	DomainVote     = "gemot/v1/vote"
+	DomainEnvelope = "gemot/v1/envelope"
 
 	AlgoEd25519 = "ed25519"
 )
@@ -83,6 +84,33 @@ func VotePayload(agentID, deliberationID, positionID string, value int, qualifie
 	buf = writeLenPrefixed(buf, []byte(qualifier))
 	buf = writeLenPrefixed(buf, []byte(caveat))
 	buf = writeLenPrefixed(buf, []byte(criterionID))
+	return buf
+}
+
+// EnvelopePayload returns the canonical bytes to sign for an outer request
+// envelope — the JSON-RPC/MCP frame rather than any single position or vote.
+// Envelope signing defends against replay at the transport layer: per-action
+// signatures bind content but do not bind the delivery moment, so a bearer
+// token or TLS proxy that captures a signed request could resubmit it. The
+// envelope commits to agent_id, method, a hash of the request body, a nonce,
+// and a timestamp. A replay window + nonce cache at the receiver completes
+// the defense.
+//
+// bodyHash is the SHA-256 of the raw request body as received on the wire.
+// Sign the hash rather than the body itself so signatures stay small regardless
+// of request size.
+//
+// timestamp is Unix seconds at the client. The receiver rejects requests
+// outside a symmetric window (default ±5 min) before this payload is even
+// verified.
+func EnvelopePayload(agentID, method string, bodyHash []byte, nonce string, timestamp int64) []byte {
+	buf := make([]byte, 0, 96+len(agentID)+len(method)+len(nonce))
+	buf = writeLenPrefixed(buf, []byte(DomainEnvelope))
+	buf = writeLenPrefixed(buf, []byte(agentID))
+	buf = writeLenPrefixed(buf, []byte(method))
+	buf = writeLenPrefixed(buf, bodyHash)
+	buf = writeLenPrefixed(buf, []byte(nonce))
+	buf = writeInt64(buf, timestamp)
 	return buf
 }
 

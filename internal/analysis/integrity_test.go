@@ -1,6 +1,8 @@
 package analysis
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -122,40 +124,38 @@ func TestValidateCruxProvenance_DegenerateIgnored(t *testing.T) {
 	}
 }
 
-func TestValidateCruxStability_Disabled(t *testing.T) {
-	cruxes := []deliberation.Crux{{Claim: "c"}}
-	if w := validateCruxStability(cruxes, 0, nil, nil); len(w) != 0 {
-		t.Errorf("samples=0 must short-circuit, got %v", w)
-	}
-}
-
-func TestValidateCruxStability_FlagsDivergence(t *testing.T) {
-	cruxes := []deliberation.Crux{{Claim: "original"}}
-	gen := func(_ deliberation.Crux, n int) ([]string, error) {
-		out := make([]string, n)
-		for i := range out {
-			out[i] = "different"
+// TestCruxStabilityWarning_Wired exercises the inline stability path used at
+// crux-generation time. The semantic judge is implemented by the stubbed
+// structured-output func — we simulate a run where samples mostly disagree
+// with the chosen claim.
+func TestCruxStabilityWarning_Wired(t *testing.T) {
+	a := &TextAnalyzer{}
+	// judgeCruxSame passes an anonymous struct pointer; round-trip through
+	// json so the stub doesn't need to know the exact type.
+	a.structuredOutput = func(_ context.Context, _, prompt string, _ map[string]any, out any) error {
+		payload := map[string]any{
+			"same":   strings.Contains(prompt, "Claim B: chosen"),
+			"reason": "stub",
 		}
-		return out, nil
+		raw, _ := json.Marshal(payload)
+		return json.Unmarshal(raw, out)
 	}
-	judge := func(a, b string) (bool, error) { return a == b, nil }
-	warnings := validateCruxStability(cruxes, 3, gen, judge)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "CRUX_INSTABILITY") {
-		t.Fatalf("want CRUX_INSTABILITY warning, got %v", warnings)
-	}
-}
 
-func TestValidateCruxStability_StablePasses(t *testing.T) {
-	cruxes := []deliberation.Crux{{Claim: "original"}}
-	gen := func(_ deliberation.Crux, n int) ([]string, error) {
-		out := make([]string, n)
-		for i := range out {
-			out[i] = "original"
-		}
-		return out, nil
+	// 1 of 4 samples matches chosen -> 25% agree -> below 2/3 threshold -> warn.
+	warn := a.cruxStabilityWarning(context.Background(), "chosen", []string{"chosen", "drift-a", "drift-b", "drift-c"})
+	if !strings.Contains(warn, "CRUX_INSTABILITY") {
+		t.Fatalf("want CRUX_INSTABILITY warning for divergent samples, got %q", warn)
 	}
-	judge := func(a, b string) (bool, error) { return a == b, nil }
-	if w := validateCruxStability(cruxes, 3, gen, judge); len(w) != 0 {
-		t.Errorf("stable crux should not warn, got %v", w)
+
+	// All samples match -> no warning.
+	warn = a.cruxStabilityWarning(context.Background(), "chosen", []string{"chosen", "chosen", "chosen"})
+	if warn != "" {
+		t.Fatalf("stable samples must not warn, got %q", warn)
+	}
+
+	// Fewer than 2 samples -> insufficient signal -> no warning.
+	warn = a.cruxStabilityWarning(context.Background(), "chosen", []string{"chosen"})
+	if warn != "" {
+		t.Fatalf("single-sample path must not warn, got %q", warn)
 	}
 }

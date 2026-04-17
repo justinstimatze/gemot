@@ -117,6 +117,45 @@ func TestVerify_CrossDomainReplay(t *testing.T) {
 	}
 }
 
+func TestEnvelopePayload_DomainAndFields(t *testing.T) {
+	body := []byte(`{"method":"participate","params":{"action":"vote"}}`)
+	h := [32]byte{}
+	copy(h[:], body)
+	base := EnvelopePayload("alice", "participate", h[:], "nonce-1", 1000)
+	// Must differ from position / vote payloads sharing the same surface fields.
+	if bytes.Equal(base, PositionPayload("alice", "participate", 1, string(body))) {
+		t.Fatal("envelope must not collide with position payload")
+	}
+	// Each field contributes — changing any one changes the bytes.
+	cases := map[string][]byte{
+		"agent":     EnvelopePayload("bob", "participate", h[:], "nonce-1", 1000),
+		"method":    EnvelopePayload("alice", "analyze", h[:], "nonce-1", 1000),
+		"body":      EnvelopePayload("alice", "participate", []byte("different-hash"), "nonce-1", 1000),
+		"nonce":     EnvelopePayload("alice", "participate", h[:], "nonce-2", 1000),
+		"timestamp": EnvelopePayload("alice", "participate", h[:], "nonce-1", 1001),
+	}
+	for name, other := range cases {
+		if bytes.Equal(base, other) {
+			t.Errorf("changing %s should change envelope payload", name)
+		}
+	}
+}
+
+func TestEnvelopePayload_SignVerify(t *testing.T) {
+	pub, priv := newKeypair(t)
+	h := [32]byte{1, 2, 3}
+	msg := EnvelopePayload("alice", "participate", h[:], "n", 1000)
+	sig := ed25519.Sign(priv, msg)
+	if err := Verify(AlgoEd25519, pub, msg, sig); err != nil {
+		t.Fatalf("verify envelope: %v", err)
+	}
+	// Tampering with the timestamp should fail.
+	tampered := EnvelopePayload("alice", "participate", h[:], "n", 1001)
+	if err := Verify(AlgoEd25519, pub, tampered, sig); !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("tampered timestamp must fail verify, got %v", err)
+	}
+}
+
 func TestValidatePublicKey(t *testing.T) {
 	pub, _ := newKeypair(t)
 	if err := ValidatePublicKey(AlgoEd25519, pub); err != nil {

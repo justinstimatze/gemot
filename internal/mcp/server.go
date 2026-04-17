@@ -103,7 +103,7 @@ func (s *server) audit(ctx context.Context, method, deliberationID, agentID stri
 }
 
 // Version is the current gemot release version.
-const Version = "0.10.0"
+const Version = "0.10.1"
 
 // newServer creates an MCP server with 6 grouped tools.
 func newServer(s *server) *sdkmcp.Server {
@@ -419,6 +419,10 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if len(args.Content) > 65536 {
 			return errResult(fmt.Errorf("content exceeds maximum length of 65536 bytes"))
 		}
+		// Capture the client's unscoped agent_id before scoping. The signature
+		// was computed over this form; the server stores the scoped form but
+		// must reconstruct the canonical payload with the unscoped one.
+		unscopedAgentID := args.AgentID
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
 		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
@@ -472,7 +476,7 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 			}
 			opts = append(opts, deliberation.WithSignature(sigBytes))
 		}
-		p, err := s.svc.SubmitPosition(ctx, args.DeliberationID, args.AgentID, args.Content, opts...)
+		p, err := s.svc.SubmitPositionWithSigningID(ctx, args.DeliberationID, args.AgentID, unscopedAgentID, args.Content, opts...)
 		if err != nil {
 			return errResult(err)
 		}
@@ -502,6 +506,7 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if args.DeliberationID == "" || args.AgentID == "" || args.PositionID == "" {
 			return errResult(fmt.Errorf("deliberation_id, agent_id, and position_id are required"))
 		}
+		unscopedVoteAgentID := args.AgentID
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
 		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
@@ -515,7 +520,7 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 			if err != nil {
 				return errResult(fmt.Errorf("signature must be base64-encoded: %w", err))
 			}
-			if err := s.svc.SubmitSignedVote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID, sigBytes); err != nil {
+			if err := s.svc.SubmitSignedVoteWithSigningID(ctx, args.DeliberationID, args.AgentID, unscopedVoteAgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID, sigBytes); err != nil {
 				return errResult(err)
 			}
 		} else if err := s.svc.Vote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID); err != nil {

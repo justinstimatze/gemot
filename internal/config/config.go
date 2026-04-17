@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -11,6 +12,13 @@ type Config struct {
 	DatabaseURL  string
 	AnthropicKey string
 	Model        string
+
+	// StabilitySamples enables opt-in CRUX_INSTABILITY re-sampling at analysis
+	// time. 0 or 1 disables the check; 2+ triggers N extra same-prompt crux
+	// calls per subtopic plus a semantic-judge call per sample. Expect cost
+	// scaling roughly linear in N × subtopic count. Suggested dev/research
+	// value: 3. Leave unset in production unless the cost profile is understood.
+	StabilitySamples int
 }
 
 // Load reads configuration from environment variables (and optional .env file).
@@ -19,9 +27,10 @@ func Load() *Config {
 	loadDotenv(".env")
 
 	cfg := &Config{
-		DatabaseURL:  envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
-		AnthropicKey: envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
-		Model:        envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
+		DatabaseURL:      envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
+		AnthropicKey:     envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
+		Model:            envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
+		StabilitySamples: envInt("GEMOT_STABILITY_SAMPLES", 0),
 	}
 
 	// Validate model is in known set
@@ -47,6 +56,21 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envInt reads an integer env var; unset or unparseable falls back to the default.
+// Malformed values emit a warning on stderr so misconfiguration is visible.
+func envInt(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: %s=%q is not an integer, using default %d\n", key, raw, fallback)
+		return fallback
+	}
+	return n
 }
 
 // loadDotenv reads a .env file and sets any vars not already in the environment.
