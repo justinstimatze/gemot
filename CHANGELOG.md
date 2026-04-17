@@ -2,6 +2,27 @@
 
 All notable changes to gemot are documented here.
 
+## v0.10.0 (2026-04-17)
+
+### New Features — DARPA Track 1 foundation
+
+- **LLM-specific integrity checks** (`internal/analysis/integrity.go`): `LOW_EFFORT_ABS` / `LOW_EFFORT_REL` (absolute floor <2 claims, median-relative <25% when median ≥4), `THIN_PROVENANCE` (crux backed by <2 source positions or <2 quotes), `CRUX_INSTABILITY` hook (pure-Go; candidate generator + semantic judge unwired pending LLM-defense runs), cross-family consistency stub.
+- **Per-agent ed25519 signed positions and votes**: new `internal/auth` package with SSH/Noise/TUF-style length-prefixed canonical payloads and domain separation (`gemot/v1/position`, `gemot/v1/vote`). Signatures verified against registered public keys at submit time.
+- **Per-deliberation signature policy**: `none` / `advisory` / `required`, DMARC-style staged migration. DB-enforced via CHECK constraint.
+- **Agent key registration and rotation**: new `agent_keys` table, `participate action:register_key` and `revoke_key` MCP tool actions, in-transaction rotation with UNIQUE partial index preventing concurrent-registration races.
+- **`participate` tool gained**: optional `signature` field on `submit_position` and `vote`, `register_key` and `revoke_key` actions.
+- **Threat model updated**: 7 new implemented-defense rows; planned-defense table reorganized around DARPA-PS-26-09 Track 1 items.
+
+### Tests
+
+- 286 tests (up from 187). New coverage:
+  - Signature canonicalization, domain separation, cross-domain replay
+  - Signed position/vote with policy matrix (none/advisory/required)
+  - Key rotation, revocation, signature verification after rotation
+  - Signed content with PII sanitization (verify against raw content)
+  - Low-effort position detection (absolute + median-relative)
+  - Crux provenance validation
+
 ## v0.9.0 (2026-04-06)
 
 ### Breaking Changes
