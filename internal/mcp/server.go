@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -102,7 +103,7 @@ func (s *server) audit(ctx context.Context, method, deliberationID, agentID stri
 }
 
 // Version is the current gemot release version.
-const Version = "0.8.0"
+const Version = "0.10.0"
 
 // newServer creates an MCP server with 6 grouped tools.
 func newServer(s *server) *sdkmcp.Server {
@@ -127,12 +128,14 @@ func newServer(s *server) *sdkmcp.Server {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "participate",
 		Description: `Participate in a deliberation. Actions:
-- submit_position: Submit your position (deliberation_id, agent_id, content; optional: model_family, group, conviction, reservation, on_behalf_of, interests, draft, metadata)
+- submit_position: Submit your position (deliberation_id, agent_id, content; optional: model_family, group, conviction, reservation, on_behalf_of, interests, draft, metadata, signature)
 - publish_position: Publish a draft position (position_id)
-- vote: Vote on a position — value: -2=strongly_disagree, -1=disagree_with_caveats, 0=mixed, 1=agree_with_caveats, 2=strongly_agree (deliberation_id, agent_id, position_id, value; optional: qualifier, caveat, criterion_id)
+- vote: Vote on a position — value: -2=strongly_disagree, -1=disagree_with_caveats, 0=mixed, 1=agree_with_caveats, 2=strongly_agree (deliberation_id, agent_id, position_id, value; optional: qualifier, caveat, criterion_id, signature)
 - get_positions: Get all positions (deliberation_id; optional: round, exclude_agent_id, group, shuffle)
 - get_context: Get your personal context — cluster, allies, cruxes (deliberation_id, agent_id)
-- withdraw: Withdraw from a deliberation (deliberation_id, agent_id)`,
+- withdraw: Withdraw from a deliberation (deliberation_id, agent_id)
+- register_key: Register a base64 ed25519 public key for this agent (agent_id, public_key; optional: algo)
+- revoke_key: Revoke this agent's active signing key (agent_id)`,
 	}, s.handleParticipate)
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
@@ -227,6 +230,13 @@ type participateParams struct {
 	ExcludeAgentID *string        `json:"exclude_agent_id,omitempty"`
 	Round          *int           `json:"round,omitempty"`
 	Shuffle        *bool          `json:"shuffle,omitempty"`
+	// Signature is a base64-encoded ed25519 signature over the canonical
+	// position/vote payload (see internal/auth). Verified against the agent's
+	// registered public key when signature_policy != "none".
+	Signature string `json:"signature,omitempty"`
+	// PublicKey (base64, ed25519, 32 bytes) is used by action:register_key.
+	PublicKey string `json:"public_key,omitempty"`
+	Algo      string `json:"algo,omitempty"`
 }
 
 type analyzeToolParams struct {
@@ -455,6 +465,13 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if len(args.Metadata) > 0 {
 			opts = append(opts, deliberation.WithMetadata(args.Metadata))
 		}
+		if args.Signature != "" {
+			sigBytes, err := base64.StdEncoding.DecodeString(args.Signature)
+			if err != nil {
+				return errResult(fmt.Errorf("signature must be base64-encoded: %w", err))
+			}
+			opts = append(opts, deliberation.WithSignature(sigBytes))
+		}
 		p, err := s.svc.SubmitPosition(ctx, args.DeliberationID, args.AgentID, args.Content, opts...)
 		if err != nil {
 			return errResult(err)
@@ -493,11 +510,49 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if err != nil {
 			return errResult(err)
 		}
-		if err := s.svc.Vote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID); err != nil {
+		if args.Signature != "" {
+			sigBytes, err := base64.StdEncoding.DecodeString(args.Signature)
+			if err != nil {
+				return errResult(fmt.Errorf("signature must be base64-encoded: %w", err))
+			}
+			if err := s.svc.SubmitSignedVote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID, sigBytes); err != nil {
+				return errResult(err)
+			}
+		} else if err := s.svc.Vote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID); err != nil {
 			return errResult(err)
 		}
 		s.audit(ctx, "participate:vote", args.DeliberationID, args.AgentID)
 		return textResult("vote recorded\n\n---\nNext: vote on more positions, or call analyze action:run when all votes are in."), nil, nil
+
+	case "register_key":
+		if args.AgentID == "" || args.PublicKey == "" {
+			return errResult(fmt.Errorf("agent_id and public_key (base64) are required"))
+		}
+		args.AgentID = scopeAgentID(ctx, args.AgentID)
+		pubBytes, err := base64.StdEncoding.DecodeString(args.PublicKey)
+		if err != nil {
+			return errResult(fmt.Errorf("public_key must be base64-encoded: %w", err))
+		}
+		algo := args.Algo
+		if algo == "" {
+			algo = "ed25519"
+		}
+		if err := s.svc.RegisterAgentKey(ctx, args.AgentID, pubBytes, algo); err != nil {
+			return errResult(err)
+		}
+		s.audit(ctx, "participate:register_key", "", args.AgentID)
+		return textResult("public key registered — future signed positions and votes will be verified against it"), nil, nil
+
+	case "revoke_key":
+		if args.AgentID == "" {
+			return errResult(fmt.Errorf("agent_id is required"))
+		}
+		args.AgentID = scopeAgentID(ctx, args.AgentID)
+		if err := s.svc.RevokeAgentKey(ctx, args.AgentID); err != nil {
+			return errResult(err)
+		}
+		s.audit(ctx, "participate:revoke_key", "", args.AgentID)
+		return textResult("public key revoked"), nil, nil
 
 	case "get_positions":
 		if args.DeliberationID == "" {

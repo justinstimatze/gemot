@@ -34,6 +34,11 @@ type ClaimCache interface {
 type TextAnalyzer struct {
 	structuredOutput llm.StructuredOutputFunc
 	cache            ClaimCache
+
+	// StabilityCheckSamples enables multi-candidate crux regeneration (0 = off).
+	// When > 1, validateCruxStability runs over the final crux set. Each sampled
+	// crux incurs N additional LLM calls, so this is opt-in.
+	StabilityCheckSamples int
 }
 
 func NewTextAnalyzer(client *llm.Client) *TextAnalyzer {
@@ -462,6 +467,10 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	// Integrity: coverage validation — flag agents whose positions yielded no claims
 	warnings = append(warnings, validateCoverage(positions, allClaims)...)
 
+	// Integrity: low-effort-position detection — flag thin positions that survived
+	// extraction but produced suspiciously few claims relative to peers.
+	warnings = append(warnings, validateLowEffortPositions(positions, allClaims)...)
+
 	// Debug: log claim distribution to stderr for production diagnostics
 	{
 		topicCounts := map[string]int{}
@@ -673,6 +682,19 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	cruxes = validated.Valid
 	discardedCruxes := validated.Degenerate
 	warnings = append(warnings, cruxWarnings...)
+
+	// Integrity: provenance — flag cruxes backed by too few positions or quotes.
+	warnings = append(warnings, validateCruxProvenance(cruxes)...)
+
+	// Integrity: crux-stability check (opt-in — StabilityCheckSamples > 1).
+	// The candidate generator and semantic judge are left unwired until the
+	// Track-1 LLM defenses land; the call stays in place so the hook point is
+	// visible and the warning taxonomy is stable.
+	warnings = append(warnings, validateCruxStability(cruxes, a.StabilityCheckSamples, nil, nil)...)
+
+	// Integrity: cross-model consistency check — stub until secondary-family
+	// client is wired (Track 1 / DARPA-PS-26-09 LLM defenses).
+	warnings = append(warnings, validateAnalysisModelConsistency(cruxes)...)
 
 	// Integrity: check for Sybil-like voting patterns
 	warnings = append(warnings, validateVoteSimilarity(votes, agents)...)

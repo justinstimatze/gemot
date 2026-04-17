@@ -227,6 +227,41 @@ ALTER TABLE votes DROP CONSTRAINT IF EXISTS votes_check;
 ALTER TABLE votes ADD COLUMN IF NOT EXISTS qualifier TEXT DEFAULT '';
 ALTER TABLE votes ADD COLUMN IF NOT EXISTS caveat TEXT DEFAULT '';
 
+-- Per-agent public keys for signed positions and votes.
+-- One agent may have multiple registered keys over time; the active key is the
+-- most-recently-registered non-revoked row. Rotation = register new + revoke old.
+-- `id` is a UUID so concurrent registrations in the same microsecond do not
+-- collide on the primary key.
+CREATE TABLE IF NOT EXISTS agent_keys (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    public_key BYTEA NOT NULL,
+    algo TEXT NOT NULL DEFAULT 'ed25519',
+    registered_at TIMESTAMPTZ DEFAULT NOW(),
+    revoked_at TIMESTAMPTZ
+);
+-- UNIQUE partial index: one active key per agent at a time. Doubles as the
+-- active-key lookup index AND prevents a race where two concurrent
+-- RegisterAgentKey transactions both UPDATE-to-revoke zero rows and then both
+-- INSERT, leaving two active keys. The unique constraint forces one of the
+-- INSERTs to fail with a uniqueness violation.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_keys_active ON agent_keys(agent_id) WHERE revoked_at IS NULL;
+
+-- Per-action signatures. Nullable because signing is opt-in per signature_policy.
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS signature BYTEA;
+ALTER TABLE votes ADD COLUMN IF NOT EXISTS signature BYTEA;
+
+-- Per-deliberation signature policy: 'none' (legacy, no signing),
+-- 'advisory' (warn on unsigned when key registered), 'required' (reject unsigned).
+-- CHECK constraint prevents typos from silently falling through to fail-open
+-- behavior in the verification switch.
+ALTER TABLE deliberations ADD COLUMN IF NOT EXISTS signature_policy TEXT DEFAULT 'none';
+DO $$ BEGIN
+    ALTER TABLE deliberations ADD CONSTRAINT deliberations_sig_policy_check
+        CHECK (signature_policy IN ('none', 'advisory', 'required'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,

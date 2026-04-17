@@ -3,6 +3,7 @@ package deliberation
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,8 +12,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/justinstimatze/gemot/internal/auth"
 	"github.com/justinstimatze/gemot/internal/sanitize"
 )
+
+// ErrAgentKeyNotFound is returned by AgentKeyStore.GetActiveAgentKey when the agent
+// has no registered (non-revoked) public key. Verification helpers treat this as
+// "no key" rather than a DB error and fall back to policy handling.
+var ErrAgentKeyNotFound = errAgentKeyNotFound{}
+
+type errAgentKeyNotFound struct{}
+
+func (errAgentKeyNotFound) Error() string { return "agent_keys: no active key registered for agent" }
 
 const (
 	maxTopicLen       = 500
@@ -102,6 +113,13 @@ type AccessStore interface {
 	LookupShareToken(ctx context.Context, token string) (groupID string, err error)
 }
 
+// AgentKeyStore manages per-agent public keys used for signed positions and votes.
+type AgentKeyStore interface {
+	RegisterAgentKey(ctx context.Context, agentID string, publicKey []byte, algo string) error
+	GetActiveAgentKey(ctx context.Context, agentID string) (publicKey []byte, algo string, err error)
+	RevokeAgentKey(ctx context.Context, agentID string) error
+}
+
 // ModerationStore manages disputes, abuse reports, and context access.
 type ModerationStore interface {
 	CreateDispute(ctx context.Context, d *Dispute) error
@@ -121,6 +139,7 @@ type Store interface {
 	AnalysisStore
 	AccessStore
 	ModerationStore
+	AgentKeyStore
 }
 
 // ContextKeyDeliberationID is the context key for passing the deliberation ID
@@ -205,6 +224,12 @@ func WithParentPosition(id string) PositionOption {
 // WithMetadata sets extensible metadata on a position (lat, lon, label, etc.).
 func WithMetadata(m map[string]any) PositionOption {
 	return func(p *Position) { p.Metadata = m }
+}
+
+// WithSignature attaches an ed25519 signature over auth.PositionPayload.
+// The signature is verified against the agent's registered public key at submit time.
+func WithSignature(sig []byte) PositionOption {
+	return func(p *Position) { p.Signature = sig }
 }
 
 // Service orchestrates deliberation operations.
@@ -397,6 +422,27 @@ func WithRules(rules map[string]any) DeliberationOption {
 // WithDeadline sets an absolute deadline for the deliberation.
 func WithDeadline(d time.Time) DeliberationOption {
 	return func(del *Deliberation) { del.DeadlineAt = &d }
+}
+
+// WithSignaturePolicy sets the per-deliberation signature policy:
+//   - "none"     (default): signatures ignored, unsigned submissions always accepted
+//   - "advisory": accept unsigned submissions from agents with a registered key,
+//     but emit UNSIGNED_POSITION / UNSIGNED_VOTE to the audit log
+//   - "required": reject unsigned submissions from agents with a registered key
+//
+// Any submission that *does* carry a signature is verified in all modes; a bad
+// signature is always rejected regardless of policy.
+//
+// Unknown values are normalized to "none" to avoid fail-open surprises if the
+// verify switch sees an unexpected string. The DB also enforces the valid set
+// via a CHECK constraint so an attempted persist with a bad value errors out.
+func WithSignaturePolicy(policy string) DeliberationOption {
+	switch policy {
+	case "none", "advisory", "required":
+	default:
+		policy = "none"
+	}
+	return func(del *Deliberation) { del.SignaturePolicy = policy }
 }
 
 // ContextKeyTemplate is the context key for passing the template name through analysis.
@@ -615,6 +661,12 @@ func (s *Service) SubmitPosition(ctx context.Context, deliberationID, agentID, c
 		return nil, fmt.Errorf("content exceeds %d characters", maxContentLen)
 	}
 
+	// Capture the raw content before sanitization. Signature verification must run
+	// against the exact bytes the client signed — any server-side mutation
+	// (PII redaction, normalization) invalidates the signed hash. The raw content
+	// is threaded to verifyPositionSignature; the sanitized form is what we store.
+	rawContent := content
+
 	// PII sanitization at write time (defense in depth — also sanitized at analysis time)
 	sanitized := sanitize.Position(content)
 	if len(sanitized.Warnings) > 0 {
@@ -696,6 +748,17 @@ func (s *Service) SubmitPosition(ctx context.Context, deliberationID, agentID, c
 		p.Draft = true
 	}
 
+	if err := s.verifyPositionSignature(ctx, d, p, rawContent); err != nil {
+		return nil, err
+	}
+	// If sanitization mutated the content, the stored signature no longer verifies
+	// against the stored content even though it was valid at submit time. The audit
+	// event above records that verification succeeded; warn the operator so later
+	// readers understand why post-hoc reverification would fail.
+	if len(p.Signature) > 0 && rawContent != content {
+		fmt.Fprintf(os.Stderr, "gemot: SIG_SANITIZED position in %s from agent %q — signature was valid at submit but content was sanitized (stored signature will not reverify against stored content)\n", deliberationID, agentID)
+	}
+
 	if err := s.store.CreatePosition(ctx, p); err != nil {
 		return nil, err
 	}
@@ -726,33 +789,6 @@ func (s *Service) GetPositions(ctx context.Context, deliberationID string, exclu
 }
 
 func (s *Service) Vote(ctx context.Context, deliberationID, agentID, positionID string, value int, qualifier, caveat string, criterionID ...string) error {
-	if len(agentID) > maxAgentIDLen {
-		return fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
-	}
-
-	d, err := s.store.GetDeliberation(ctx, deliberationID)
-	if err != nil {
-		return fmt.Errorf("deliberation not found: %w", err)
-	}
-	if d.Status != "open" {
-		return fmt.Errorf("deliberation is %s, not accepting votes", d.Status)
-	}
-	if d.DeadlineAt != nil && time.Now().After(*d.DeadlineAt) {
-		return fmt.Errorf("deliberation deadline has passed")
-	}
-
-	pos, err := s.store.GetPositionByID(ctx, positionID)
-	if err != nil {
-		return fmt.Errorf("position not found: %w", err)
-	}
-	if pos.DeliberationID != deliberationID {
-		return fmt.Errorf("position does not belong to this deliberation")
-	}
-
-	if value < -2 || value > 2 {
-		return fmt.Errorf("vote value must be between -2 and 2")
-	}
-
 	v := &Vote{
 		DeliberationID: deliberationID,
 		AgentID:        agentID,
@@ -764,26 +800,81 @@ func (s *Service) Vote(ctx context.Context, deliberationID, agentID, positionID 
 	if len(criterionID) > 0 && criterionID[0] != "" {
 		v.CriterionID = criterionID[0]
 	}
+	return s.castVote(ctx, v)
+}
+
+// SubmitSignedVote is the signature-aware entry point. Parallel to Vote() but
+// attaches an ed25519 signature that is verified against the agent's registered
+// public key before the vote is recorded.
+func (s *Service) SubmitSignedVote(ctx context.Context, deliberationID, agentID, positionID string, value int, qualifier, caveat, criterionID string, signature []byte) error {
+	v := &Vote{
+		DeliberationID: deliberationID,
+		AgentID:        agentID,
+		PositionID:     positionID,
+		Value:          value,
+		Qualifier:      qualifier,
+		Caveat:         caveat,
+		CriterionID:    criterionID,
+		Signature:      signature,
+	}
+	return s.castVote(ctx, v)
+}
+
+// castVote is the shared body for Vote and SubmitSignedVote. It does input
+// validation, loads the deliberation + position, verifies any attached signature,
+// persists the vote, and handles seconding.
+func (s *Service) castVote(ctx context.Context, v *Vote) error {
+	if len(v.AgentID) > maxAgentIDLen {
+		return fmt.Errorf("agent_id exceeds %d characters", maxAgentIDLen)
+	}
+
+	d, err := s.store.GetDeliberation(ctx, v.DeliberationID)
+	if err != nil {
+		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	if d.Status != "open" {
+		return fmt.Errorf("deliberation is %s, not accepting votes", d.Status)
+	}
+	if d.DeadlineAt != nil && time.Now().After(*d.DeadlineAt) {
+		return fmt.Errorf("deliberation deadline has passed")
+	}
+
+	pos, err := s.store.GetPositionByID(ctx, v.PositionID)
+	if err != nil {
+		return fmt.Errorf("position not found: %w", err)
+	}
+	if pos.DeliberationID != v.DeliberationID {
+		return fmt.Errorf("position does not belong to this deliberation")
+	}
+
+	if v.Value < -2 || v.Value > 2 {
+		return fmt.Errorf("vote value must be between -2 and 2")
+	}
+
+	if err := s.verifyVoteSignature(ctx, d, v); err != nil {
+		return err
+	}
+
 	// Lock per-deliberation to ensure vote+resolution is atomic.
-	mu := s.resolutionLock(deliberationID)
+	mu := s.resolutionLock(v.DeliberationID)
 	mu.Lock()
 	defer mu.Unlock()
 
 	if err := s.store.CreateVote(ctx, v); err != nil {
 		return err
 	}
-	s.audit("participate:vote", deliberationID, agentID)
-	s.emitWithData("vote_cast", deliberationID, agentID, positionID, map[string]any{
-		"position_id": positionID,
-		"value":       value,
+	s.audit("participate:vote", v.DeliberationID, v.AgentID)
+	s.emitWithData("vote_cast", v.DeliberationID, v.AgentID, v.PositionID, map[string]any{
+		"position_id": v.PositionID,
+		"value":       v.Value,
 	})
 
 	// Seconding: a +1 vote from a different agent publishes a draft motion
-	if value == 1 && RuleBool(d, "require_second", false) && pos.Draft && pos.AgentID != agentID {
-		if err := s.store.PublishPosition(ctx, positionID); err != nil {
-			slog.Error("failed to publish seconded position", "position_id", positionID, "error", err)
+	if v.Value == 1 && RuleBool(d, "require_second", false) && pos.Draft && pos.AgentID != v.AgentID {
+		if err := s.store.PublishPosition(ctx, v.PositionID); err != nil {
+			slog.Error("failed to publish seconded position", "position_id", v.PositionID, "error", err)
 		} else {
-			s.emit("position_seconded", deliberationID, agentID, positionID)
+			s.emit("position_seconded", v.DeliberationID, v.AgentID, v.PositionID)
 		}
 	}
 
@@ -2157,4 +2248,110 @@ func contains(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// RegisterAgentKey records an ed25519 public key for an agent. Signed positions
+// and votes from this agent will be verified against this key until it is revoked
+// or replaced by a subsequent registration.
+func (s *Service) RegisterAgentKey(ctx context.Context, agentID string, publicKey []byte, algo string) error {
+	if len(agentID) == 0 || len(agentID) > maxAgentIDLen {
+		return fmt.Errorf("agent_id must be between 1 and %d characters", maxAgentIDLen)
+	}
+	if err := auth.ValidatePublicKey(algo, publicKey); err != nil {
+		return err
+	}
+	if err := s.store.RegisterAgentKey(ctx, agentID, publicKey, algo); err != nil {
+		return err
+	}
+	s.audit("participate:register_key", "", agentID)
+	return nil
+}
+
+// RevokeAgentKey invalidates the active signing key for an agent.
+// Subsequent signed submissions will fail verification until a new key is registered.
+func (s *Service) RevokeAgentKey(ctx context.Context, agentID string) error {
+	if err := s.store.RevokeAgentKey(ctx, agentID); err != nil {
+		return err
+	}
+	s.audit("participate:revoke_key", "", agentID)
+	return nil
+}
+
+// verifyPositionSignature enforces the deliberation's signature_policy against
+// a position submission. signingContent is the raw client-supplied content
+// (before any server-side PII sanitization) — the signature must verify against
+// the exact bytes the client signed, not the stored form.
+//
+// Returns an error only when the policy says to reject; advisory-mode warnings
+// are emitted via the audit log and the position is accepted.
+func (s *Service) verifyPositionSignature(ctx context.Context, d *Deliberation, p *Position, signingContent string) error {
+	policy := d.SignaturePolicy
+	if policy == "" {
+		policy = "none"
+	}
+	pubkey, algo, keyErr := s.store.GetActiveAgentKey(ctx, p.AgentID)
+	hasKey := keyErr == nil
+	if keyErr != nil && !errors.Is(keyErr, ErrAgentKeyNotFound) {
+		// Real DB error — fail closed.
+		return fmt.Errorf("signature verification: %w", keyErr)
+	}
+
+	switch {
+	case len(p.Signature) > 0:
+		if !hasKey {
+			return fmt.Errorf("signature provided but no public key is registered for agent %q", p.AgentID)
+		}
+		msg := auth.PositionPayload(p.AgentID, p.DeliberationID, p.Round, signingContent)
+		if err := auth.Verify(algo, pubkey, msg, p.Signature); err != nil {
+			s.audit("participate:signature_verify_fail:position", d.ID, p.AgentID)
+			return fmt.Errorf("SIGNATURE_VERIFY_FAIL: %w", err)
+		}
+	case hasKey:
+		// Unsigned submission from an agent with a registered key — honor policy.
+		switch policy {
+		case "required":
+			return fmt.Errorf("signature required: agent %q has a registered key but submission is unsigned", p.AgentID)
+		case "advisory":
+			s.audit("participate:unsigned_position", d.ID, p.AgentID)
+			fmt.Fprintf(os.Stderr, "gemot: UNSIGNED_POSITION from agent %q (key registered, policy=advisory)\n", p.AgentID)
+		}
+	}
+	return nil
+}
+
+// verifyVoteSignature enforces signature_policy against a vote. Parallel to
+// verifyPositionSignature — the only differences are the canonical payload and
+// the audit/log labels.
+func (s *Service) verifyVoteSignature(ctx context.Context, d *Deliberation, v *Vote) error {
+	policy := d.SignaturePolicy
+	if policy == "" {
+		policy = "none"
+	}
+	pubkey, algo, keyErr := s.store.GetActiveAgentKey(ctx, v.AgentID)
+	hasKey := keyErr == nil
+	if keyErr != nil && !errors.Is(keyErr, ErrAgentKeyNotFound) {
+		// Real DB error — fail closed.
+		return fmt.Errorf("signature verification: %w", keyErr)
+	}
+
+	switch {
+	case len(v.Signature) > 0:
+		if !hasKey {
+			return fmt.Errorf("signature provided but no public key is registered for agent %q", v.AgentID)
+		}
+		msg := auth.VotePayload(v.AgentID, v.DeliberationID, v.PositionID, v.Value, v.Qualifier, v.Caveat, v.CriterionID)
+		if err := auth.Verify(algo, pubkey, msg, v.Signature); err != nil {
+			s.audit("participate:signature_verify_fail:vote", d.ID, v.AgentID)
+			return fmt.Errorf("SIGNATURE_VERIFY_FAIL: %w", err)
+		}
+	case hasKey:
+		switch policy {
+		case "required":
+			return fmt.Errorf("signature required: agent %q has a registered key but vote is unsigned", v.AgentID)
+		case "advisory":
+			s.audit("participate:unsigned_vote", d.ID, v.AgentID)
+			fmt.Fprintf(os.Stderr, "gemot: UNSIGNED_VOTE from agent %q (key registered, policy=advisory)\n", v.AgentID)
+		}
+	}
+	return nil
 }

@@ -21,6 +21,7 @@ type Deliberation struct {
 	Rules           map[string]any `json:"rules,omitempty"`            // governance rules (quorum, timelock, etc.)
 	GroupID         string         `json:"group_id,omitempty"`         // links related deliberations
 	Resolution      *Resolution    `json:"resolution,omitempty"`       // set when deliberation reaches threshold
+	SignaturePolicy string         `json:"signature_policy,omitempty"` // none | advisory | required
 	DeadlineAt      *time.Time     `json:"deadline_at,omitempty"`
 	CreatedAt       time.Time      `json:"created_at"`
 }
@@ -61,6 +62,7 @@ type Position struct {
 	ParentPositionID string         `json:"parent_position_id,omitempty"`
 	Metadata         map[string]any `json:"metadata,omitempty"`
 	Round            int            `json:"round_number"`
+	Signature        []byte         `json:"signature,omitempty"` // ed25519 signature over auth.PositionPayload
 	CreatedAt        time.Time      `json:"created_at"`
 }
 
@@ -144,5 +146,6 @@ type Vote struct {
 	CriterionID    string    `json:"criterion_id,omitempty"`
 	Qualifier      string    `json:"qualifier,omitempty"` // brief reason for this stance
 	Caveat         string    `json:"caveat,omitempty"`    // specific condition or objection
+	Signature      []byte    `json:"signature,omitempty"` // ed25519 signature over auth.VotePayload
 	CreatedAt      time.Time `json:"created_at"`
 }

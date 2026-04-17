@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 )
@@ -26,6 +27,159 @@ func validateCoverage(positions []deliberation.Position, claims []claim) []strin
 		}
 	}
 	return warnings
+}
+
+// validateLowEffortPositions flags agents whose claim count is suspiciously low
+// relative to peers. A low-effort (or deliberately thin) position gets under-represented
+// in downstream crux detection because it contributes fewer claims for the LLM to weigh.
+//
+// Two independent thresholds fire:
+//   - Absolute floor: fewer than 2 claims always flags (LOW_EFFORT_ABS).
+//   - Median-relative: claim count below 25% of the cohort median, when the median
+//     is at least 4 (LOW_EFFORT_REL). The median-4 guard avoids spurious flags
+//     in small or uniformly-thin deliberations where the signal is not meaningful.
+//
+// Agents with zero claims are already surfaced by validateCoverage and intentionally
+// skipped here to avoid double-warning.
+func validateLowEffortPositions(positions []deliberation.Position, claims []claim) []string {
+	claimCount := map[string]int{}
+	for _, c := range claims {
+		claimCount[c.AgentID]++
+	}
+
+	// Build counts in agent order from positions (exclude agents with zero claims)
+	var counts []int
+	type agentCount struct {
+		id string
+		n  int
+	}
+	var perAgent []agentCount
+	for _, p := range positions {
+		n := claimCount[p.AgentID]
+		if n == 0 {
+			continue
+		}
+		counts = append(counts, n)
+		perAgent = append(perAgent, agentCount{id: p.AgentID, n: n})
+	}
+	if len(counts) == 0 {
+		return nil
+	}
+
+	sort.Ints(counts)
+	var median float64
+	mid := len(counts) / 2
+	if len(counts)%2 == 0 {
+		median = float64(counts[mid-1]+counts[mid]) / 2
+	} else {
+		median = float64(counts[mid])
+	}
+
+	var warnings []string
+	for _, a := range perAgent {
+		if a.n < 2 {
+			warnings = append(warnings, fmt.Sprintf(
+				"LOW_EFFORT_ABS: agent %q produced only %d claim(s) — position may be too thin to surface cruxes",
+				a.id, a.n,
+			))
+			continue
+		}
+		if median >= 4 && float64(a.n) < 0.25*median {
+			warnings = append(warnings, fmt.Sprintf(
+				"LOW_EFFORT_REL: agent %q produced %d claim(s) vs cohort median %.1f — position is under-represented relative to peers",
+				a.id, a.n, median,
+			))
+		}
+	}
+	return warnings
+}
+
+// validateCruxProvenance flags cruxes that lack the source-quote and source-position
+// breadth needed to trust the claim. A crux derived from a single position or a single
+// quote is framing-manipulable: a crafted adversarial position can drag the crux claim
+// toward its preferred wording with no counterweight.
+//
+// This is a lightweight check — provenance is already populated at extraction time;
+// we only inspect what's there.
+func validateCruxProvenance(cruxes []deliberation.Crux) []string {
+	var warnings []string
+	for _, c := range cruxes {
+		if c.Degenerate {
+			continue
+		}
+		positionIDs := map[string]bool{}
+		for _, id := range c.SourcePositionIDs {
+			positionIDs[id] = true
+		}
+		if len(positionIDs) < 2 || len(c.SourceQuotes) < 2 {
+			warnings = append(warnings, fmt.Sprintf(
+				"THIN_PROVENANCE: crux %q rests on %d source position(s) and %d source quote(s) — framing is under-constrained",
+				truncateClaim(c.Claim, 60), len(positionIDs), len(c.SourceQuotes),
+			))
+		}
+	}
+	return warnings
+}
+
+// validateCruxStability re-runs crux generation on a sampled subtopic N times and
+// flags cruxes whose claim text disagrees across candidates. Adversarial inputs
+// (AdvSumm-class attacks) can produce stable-but-biased framing that defeats
+// variance-based ensemble detection at the token level, so the comparison is
+// semantic (handled by the judge closure the caller supplies).
+//
+// This function is intentionally pure: the caller supplies a candidate generator
+// and a judge. No LLM client is imported here. The check is gated at the call
+// site by TextAnalyzer.StabilityCheckSamples (0 = off) so the expensive path
+// stays opt-in.
+//
+// Returns warnings; empty slice if the check is disabled or produces no divergence.
+func validateCruxStability(
+	cruxes []deliberation.Crux,
+	samples int,
+	generateCandidates func(c deliberation.Crux, n int) ([]string, error),
+	judgeSame func(a, b string) (bool, error),
+) []string {
+	if samples < 2 || generateCandidates == nil || judgeSame == nil {
+		return nil
+	}
+	var warnings []string
+	for _, c := range cruxes {
+		if c.Degenerate {
+			continue
+		}
+		candidates, err := generateCandidates(c, samples)
+		if err != nil || len(candidates) < 2 {
+			continue
+		}
+		agree := 0
+		for _, cand := range candidates {
+			same, err := judgeSame(c.Claim, cand)
+			if err != nil {
+				continue
+			}
+			if same {
+				agree++
+			}
+		}
+		if float64(agree)/float64(len(candidates)) < 2.0/3.0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"CRUX_INSTABILITY: crux %q disagreed with %d/%d regenerated candidates — framing may be adversarially shaped",
+				truncateClaim(c.Claim, 60), len(candidates)-agree, len(candidates),
+			))
+		}
+	}
+	return warnings
+}
+
+// validateAnalysisModelConsistency will re-run a sampled slice of analysis on a
+// second model family and flag semantic drift. Adversarial inputs can produce
+// stable-but-wrong outputs within a single model family (correlated training data);
+// cross-family comparison is the defense.
+//
+// TODO(darpa-track1): wire a secondary LLM client (Gemini/GPT) and implement.
+// Stub exists so the call site and threat-model entry are real.
+func validateAnalysisModelConsistency(_ []deliberation.Crux) []string {
+	return nil
 }
 
 // validateCruxAgents checks that every agent listed in a crux's agree/disagree/no_clear_position
