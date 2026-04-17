@@ -121,56 +121,6 @@ func validateCruxProvenance(cruxes []deliberation.Crux) []string {
 	return warnings
 }
 
-// validateCruxStability re-runs crux generation on a sampled subtopic N times and
-// flags cruxes whose claim text disagrees across candidates. Adversarial inputs
-// (AdvSumm-class attacks) can produce stable-but-biased framing that defeats
-// variance-based ensemble detection at the token level, so the comparison is
-// semantic (handled by the judge closure the caller supplies).
-//
-// This function is intentionally pure: the caller supplies a candidate generator
-// and a judge. No LLM client is imported here. The check is gated at the call
-// site by TextAnalyzer.StabilityCheckSamples (0 = off) so the expensive path
-// stays opt-in.
-//
-// Returns warnings; empty slice if the check is disabled or produces no divergence.
-func validateCruxStability(
-	cruxes []deliberation.Crux,
-	samples int,
-	generateCandidates func(c deliberation.Crux, n int) ([]string, error),
-	judgeSame func(a, b string) (bool, error),
-) []string {
-	if samples < 2 || generateCandidates == nil || judgeSame == nil {
-		return nil
-	}
-	var warnings []string
-	for _, c := range cruxes {
-		if c.Degenerate {
-			continue
-		}
-		candidates, err := generateCandidates(c, samples)
-		if err != nil || len(candidates) < 2 {
-			continue
-		}
-		agree := 0
-		for _, cand := range candidates {
-			same, err := judgeSame(c.Claim, cand)
-			if err != nil {
-				continue
-			}
-			if same {
-				agree++
-			}
-		}
-		if float64(agree)/float64(len(candidates)) < 2.0/3.0 {
-			warnings = append(warnings, fmt.Sprintf(
-				"CRUX_INSTABILITY: crux %q disagreed with %d/%d regenerated candidates — framing may be adversarially shaped",
-				truncateClaim(c.Claim, 60), len(candidates)-agree, len(candidates),
-			))
-		}
-	}
-	return warnings
-}
-
 // validateAnalysisModelConsistency will re-run a sampled slice of analysis on a
 // second model family and flag semantic drift. Adversarial inputs can produce
 // stable-but-wrong outputs within a single model family (correlated training data);

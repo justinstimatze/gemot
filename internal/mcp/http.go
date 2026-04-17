@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/justinstimatze/gemot/internal/auth"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
 	"github.com/justinstimatze/gemot/internal/store"
@@ -56,6 +57,22 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 		Enabled:         os.Getenv("STRIPE_SECRET_KEY") != "",
 	}
 	paymentMiddleware := payments.Middleware(ctx, mppCfg, apiSecret, creditStore)
+
+	// Envelope signature middleware (Phase B2): optional per-request ed25519
+	// signatures over the JSON-RPC body + nonce + timestamp. Mode is driven by
+	// GEMOT_ENVELOPE_MODE (off|advisory|required); default off keeps existing
+	// clients working. The nonce cache is in-memory per-instance — multi-node
+	// deployments must either pin clients to one instance or back this with a
+	// shared store (THREAT_MODEL.md tracks the follow-up).
+	envelopeMode, err := ParseEnvelopeMode(os.Getenv("GEMOT_ENVELOPE_MODE"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: %v — defaulting to off\n", err)
+	}
+	nonceCache := auth.NewMemoryNonceCache(0, 0)
+	envelopeMiddleware := EnvelopeMiddleware(svc, nonceCache, envelopeMode, 0)
+	if envelopeMode != EnvelopeOff {
+		fmt.Fprintf(os.Stderr, "gemot: envelope middleware enabled (mode=%d)\n", envelopeMode)
+	}
 
 	mcpSSEHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
 	mcpStreamHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
@@ -124,8 +141,12 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 		}
 		mcpStreamHandler.ServeHTTP(w, r)
 	})
-	mux.Handle("/mcp", paymentMiddleware(mcpAutoHandler))
-	mux.Handle("/mcp/", paymentMiddleware(mcpAutoHandler))
+	// Payment runs first so the request context carries ContextKeyKeyID by the
+	// time the envelope middleware scopes the agent_id for key lookup. SSE GET
+	// endpoints are unaffected: envelope middleware exempts non-POST requests
+	// internally, and the explicit /mcp/sse routes skip envelope entirely.
+	mux.Handle("/mcp", paymentMiddleware(envelopeMiddleware(mcpAutoHandler)))
+	mux.Handle("/mcp/", paymentMiddleware(envelopeMiddleware(mcpAutoHandler)))
 	mux.Handle("/mcp/sse/", paymentMiddleware(mcpSSEWithKeepalive))
 	mux.Handle("/mcp/sse", paymentMiddleware(mcpSSEWithKeepalive))
 
@@ -254,7 +275,13 @@ No API key needed — the join code is your credential.
 			html.EscapeString(jc.Code), html.EscapeString(jc.Code), html.EscapeString(jc.Code), html.EscapeString(jc.Code))
 	})
 
-	// A2A endpoint — JSON-RPC for all gemot tools (authenticated, rate-limited)
+	// A2A endpoint — JSON-RPC for all gemot tools (authenticated, rate-limited).
+	// A2AHandler performs bearer-token auth inline, so ContextKeyKeyID is not
+	// populated by the time an outer envelope middleware would run. Until A2A
+	// auth is refactored into a middleware (tracked in THREAT_MODEL), /a2a
+	// skips envelope verification; hosted-mode A2A callers cannot use envelope
+	// signing. Per-action signatures (B1) still apply via the signature field
+	// in participate params.
 	a2aLimiter := payments.NewRateLimiter(ctx, 30, time.Minute) // 30/min, same as MCP
 	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB, gemotDB))
 

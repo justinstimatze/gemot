@@ -71,6 +71,10 @@ func cmdServe(httpMode bool, addr string) {
 		synth := analysis.NewSynthesizer(client)
 		// Enable LLM response caching (24h TTL, T3C pattern)
 		synth.SetCache(store.NewLLMCache(db, 24*time.Hour))
+		if cfg.StabilitySamples > 1 {
+			synth.SetStabilityCheckSamples(cfg.StabilitySamples)
+			fmt.Fprintf(os.Stderr, "gemot: crux-stability re-sampling enabled (N=%d) — each generated crux will incur ~%d extra LLM calls\n", cfg.StabilitySamples, cfg.StabilitySamples*2)
+		}
 		analyzer = synth
 	} else {
 		fmt.Fprintf(os.Stderr, "Warning: ANTHROPIC_API_KEY not set, analysis will not be available\n")

@@ -2,6 +2,25 @@
 
 All notable changes to gemot are documented here.
 
+## v0.10.1 (2026-04-17) — Track 1 follow-ups
+
+### New Features
+
+- **Phase B1.5 — hosted-mode signature fix**: `scopeAgentID` in the MCP transport used to rewrite `"alice"` → `"<keyID>:alice"` before the service layer, which broke signature verification in hosted mode (client signs `"alice"`; server reconstructed the payload with the scoped form). New `SubmitPositionWithSigningID` / `SubmitSignedVoteWithSigningID` service methods decouple the stored agent_id from the signing agent_id; MCP threads the unscoped form through.
+- **Task A extension — `CRUX_INSTABILITY` wired end-to-end**: `TextAnalyzer.StabilityCheckSamples > 1` now issues N extra same-prompt crux calls per subtopic and judges them against the chosen crux via a Haiku-grade semantic-same prompt. Cruxes with <2/3 semantic agreement emit `CRUX_INSTABILITY`. Opt-in via `GEMOT_STABILITY_SAMPLES` env var.
+- **Phase B2 — request-envelope signing + replay protection**: new `internal/mcp/envelope.go` HTTP middleware verifies optional ed25519 signatures over `(agent_id, method, body_hash, nonce, timestamp)` on `/mcp` and `/a2a`. Three modes (`off` default / `advisory` / `required`) via `GEMOT_ENVELOPE_MODE`. `±5 min` timestamp window; in-memory `MemoryNonceCache` per-process (single-instance). New domain tag `gemot/v1/envelope` in `internal/auth`.
+- **THREAT_MODEL.md updated**: all three items marked implemented; three new open items tracked (durable nonce cache for multi-instance, per-action signing over A2A, cross-family model consistency).
+
+### Tests
+
+- 287 tests (up from 286 after reconciling `validateCruxStability` with the wired path). New coverage:
+  - Hosted-mode per-action signature path (`TestHostedModeSigningID`)
+  - `cruxStabilityWarning` wired path (`TestCruxStabilityWarning_Wired`)
+  - Envelope canonical payload + domain separation + sign/verify round-trip
+  - Replay window validation (zero-skew, past skew, future skew)
+  - In-memory nonce cache (first observation, replay rejection, TTL expiry, capacity eviction)
+  - Envelope middleware: off / advisory / required modes, advisory-valid-passes, advisory-invalid-rejects, bad sig, stale timestamp, replay, missing key, partial headers, non-POST bypass, body-size limit, hosted-mode scoped-key lookup, hosted-mode missing-context rejection
+
 ## v0.10.0 (2026-04-17)
 
 ### New Features — DARPA Track 1 foundation

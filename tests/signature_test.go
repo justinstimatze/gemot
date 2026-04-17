@@ -302,3 +302,61 @@ func TestSignedVote(t *testing.T) {
 		t.Fatalf("bad vote sig must fail: %v", err)
 	}
 }
+
+// TestHostedModeSigningID covers the scopeAgentID interaction with signatures.
+// Hosted-mode MCP transports scope agent_ids as "<keyID>:<agentID>" before
+// handing off to the service, but the client signs with the unscoped ID it
+// knows. SubmitPositionWithSigningID/SubmitSignedVoteWithSigningID decouple
+// the stored (scoped) identity from the signed (unscoped) one.
+func TestHostedModeSigningID(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	d, _ := svc.CreateDeliberation(ctx, "Test", "", deliberation.WithSignaturePolicy("required"))
+
+	// The hosted MCP layer scopes both register_key and submit_position to the
+	// same stored agent_id. The client sees only the unscoped form.
+	const unscoped = "alice"
+	const scoped = "k_abc123:alice"
+
+	pub, priv := newKeypair(t)
+	if err := svc.RegisterAgentKey(ctx, scoped, pub, auth.AlgoEd25519); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Client signs with its unscoped view of its own identity.
+	content := "hosted-mode position"
+	sig := signPosition(t, priv, unscoped, d.ID, d.Round, content)
+
+	// Happy path: scoped storage ID + unscoped signing ID → verify succeeds.
+	p, err := svc.SubmitPositionWithSigningID(ctx, d.ID, scoped, unscoped, content, deliberation.WithSignature(sig))
+	if err != nil {
+		t.Fatalf("hosted signed position: %v", err)
+	}
+	if p.AgentID != scoped {
+		t.Fatalf("stored agent_id = %q, want %q", p.AgentID, scoped)
+	}
+
+	// Regression: the old SubmitPosition path (signingAgentID == scoped agent_id)
+	// must now reject this signature, since the client signed with the unscoped form.
+	sigScoped := signPosition(t, priv, scoped, d.ID, d.Round, content) // re-sign with scoped to confirm the old path still works when the client does happen to know the scope
+	if _, err := svc.SubmitPosition(ctx, d.ID, scoped, content, deliberation.WithSignature(sigScoped)); err != nil {
+		t.Fatalf("non-hosted path with matching signing ID: %v", err)
+	}
+	if _, err := svc.SubmitPosition(ctx, d.ID, scoped, content, deliberation.WithSignature(sig)); err == nil || !strings.Contains(err.Error(), "SIGNATURE_VERIFY_FAIL") {
+		t.Fatalf("non-hosted path with unscoped-signed sig must fail, got %v", err)
+	}
+
+	// Vote path mirrors the position path.
+	bobPos, err := svc.SubmitPosition(ctx, d.ID, "k_abc123:bob", "bob pos")
+	if err != nil {
+		t.Fatalf("bob pos: %v", err)
+	}
+	// Wait — bob has no key and policy is "required". That's allowed because
+	// required is gated on "agent has a registered key but did not sign."
+	// Bob has no key, so he is exempt. Alice votes on bob's position.
+	voteSig := signVote(t, priv, unscoped, d.ID, bobPos.ID, 1, "", "", "")
+	if err := svc.SubmitSignedVoteWithSigningID(ctx, d.ID, scoped, unscoped, bobPos.ID, 1, "", "", "", voteSig); err != nil {
+		t.Fatalf("hosted signed vote: %v", err)
+	}
+}
