@@ -1,8 +1,10 @@
 package mcp
 
 import (
+	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,73 @@ import (
 	"github.com/justinstimatze/gemot/internal/payments"
 	"github.com/justinstimatze/gemot/internal/store"
 )
+
+// A2AAuthMiddleware verifies A2A bearer-token auth and populates the request
+// context with the same keys payments.Middleware uses on /mcp:
+//
+//   - payments.ContextKeyIsAdmin — true when the caller presents the admin secret
+//   - payments.ContextKeyAPIKey  — the full customer token (gmt_...) for credit ops
+//   - payments.ContextKeyKeyID   — the 8-char agent namespace derived from that token
+//
+// Lifting auth into a middleware is what lets EnvelopeMiddleware wrap the A2A
+// handler: envelope verification calls scopeAgentID(ctx), which reads
+// ContextKeyKeyID to rewrite "alice" → "k_test:alice" for key lookup in hosted
+// mode. Previously A2AHandler parsed Authorization itself, so ContextKeyKeyID
+// was never set by the time an outer middleware could see it.
+//
+// Responses use the JSON-RPC error envelope to match existing A2A clients.
+// Unlike payments.Middleware, this middleware never falls through to sandbox
+// mode — unauthenticated A2A requests are rejected outright, preserving the
+// strict posture agents expect from /a2a.
+func A2AAuthMiddleware(apiSecret string, creditStore *payments.CreditStore, rateLimiter *payments.RateLimiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+
+			// Dev mode: no apiSecret configured → admin on every request.
+			if apiSecret == "" {
+				ctx = context.WithValue(ctx, payments.ContextKeyIsAdmin{}, true)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			authHdr := r.Header.Get("Authorization")
+			if !strings.HasPrefix(authHdr, "Bearer ") {
+				writeA2AError(w, nil, -32000, "Authorization: Bearer <api_key> required")
+				return
+			}
+			token := strings.TrimPrefix(authHdr, "Bearer ")
+
+			// Admin secret — unlimited access.
+			if subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1 {
+				ctx = context.WithValue(ctx, payments.ContextKeyIsAdmin{}, true)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
+			// Customer API key — must be gmt_-prefixed and exist in credit store.
+			if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
+				writeA2AError(w, nil, -32000, "Invalid API key")
+				return
+			}
+			valid, _ := creditStore.ValidateKey(token)
+			if !valid {
+				writeA2AError(w, nil, -32000, "Invalid or expired API key")
+				return
+			}
+
+			keyID := payments.KeyID(token)
+			if rateLimiter != nil && !rateLimiter.Allow(keyID) {
+				writeA2AError(w, nil, -32000, "rate limit exceeded — max 30 requests per minute")
+				return
+			}
+
+			ctx = context.WithValue(ctx, payments.ContextKeyAPIKey{}, token)
+			ctx = context.WithValue(ctx, payments.ContextKeyKeyID{}, keyID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
 
 // sanitizeError maps known internal errors to user-friendly messages.
 func sanitizeError(err error) string {
@@ -66,47 +135,14 @@ type AuditStore interface {
 	GetAuditLog(deliberationID string, limit int) ([]map[string]string, error)
 }
 
-func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter, auditLog AuditStore, jobDB *store.DB) http.HandlerFunc {
+func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, auditLog AuditStore, jobDB *store.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST required", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Auth: dev mode (no apiSecret) grants admin access without a token
-		auth := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(auth, "Bearer ")
-		isAdmin := false
-		var keyID string
-
-		if apiSecret == "" {
-			// Dev mode: no auth required, treat as admin
-			isAdmin = true
-		} else if !strings.HasPrefix(auth, "Bearer ") {
-			writeA2AError(w, nil, -32000, "Authorization: Bearer <api_key> required")
-			return
-		} else {
-			isAdmin = subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
-			if !isAdmin {
-				if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
-					writeA2AError(w, nil, -32000, "Invalid API key")
-					return
-				}
-				if valid, _ := creditStore.ValidateKey(token); !valid {
-					writeA2AError(w, nil, -32000, "Invalid or expired API key")
-					return
-				}
-				keyID = payments.KeyID(token)
-			}
-		}
-
-		// Rate limit A2A requests
-		if !isAdmin && keyID != "" {
-			if !rateLimiter.Allow(keyID) {
-				writeA2AError(w, nil, -32000, "rate limit exceeded — max 30 requests per minute")
-				return
-			}
-		}
+		// Auth, admin detection, and rate limiting are all handled by
+		// A2AAuthMiddleware. The handler just consumes the context it populates.
+		ctx := r.Context()
+		isAdmin, _ := ctx.Value(payments.ContextKeyIsAdmin{}).(bool)
+		keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
+		token, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
 
 		var req A2ARequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, 65536)).Decode(&req); err != nil {
@@ -117,8 +153,6 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 			writeA2AError(w, req.ID, -32600, "Invalid Request: jsonrpc must be 2.0")
 			return
 		}
-
-		ctx := r.Context()
 
 		// Access control helper
 		checkAccess := func(deliberationID string) error {
@@ -392,7 +426,8 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				agentID := scope(str(s, "agent_id"))
+				unscopedAgentID := str(s, "agent_id")
+				agentID := scope(unscopedAgentID)
 				content := str(s, "content")
 				if content == "" {
 					writeA2AError(w, req.ID, -32602, "content is required")
@@ -435,6 +470,18 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						popts = append(popts, deliberation.WithMetadata(m))
 					}
 				}
+				// Per-action ed25519 signature (optional). The client signs with
+				// the unscoped agent_id; SubmitPositionWithSigningID reconstructs
+				// the canonical payload using that same form while the stored
+				// record remains scoped.
+				if sigB64 := str(s, "signature"); sigB64 != "" {
+					sigBytes, err := base64.StdEncoding.DecodeString(sigB64)
+					if err != nil {
+						writeA2AError(w, req.ID, -32602, fmt.Sprintf("signature must be base64-encoded: %v", err))
+						return
+					}
+					popts = append(popts, deliberation.WithSignature(sigBytes))
+				}
 				var posCost int
 				if !isDraft && !isAdmin {
 					if dd, err := svc.GetDeliberation(ctx, str(s, "deliberation_id")); err == nil {
@@ -448,7 +495,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 						}
 					}
 				}
-				p, err := svc.SubmitPosition(ctx, str(s, "deliberation_id"), agentID, content, popts...)
+				p, err := svc.SubmitPositionWithSigningID(ctx, str(s, "deliberation_id"), agentID, unscopedAgentID, content, popts...)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -472,14 +519,24 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				agentID := scope(str(s, "agent_id"))
+				unscopedVoteAgentID := str(s, "agent_id")
+				agentID := scope(unscopedVoteAgentID)
 				value, err := coerceVoteValue(s["value"])
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
-				err = svc.Vote(ctx, str(s, "deliberation_id"), agentID, str(s, "position_id"), value, str(s, "qualifier"), str(s, "caveat"), str(s, "criterion_id"))
-				if err != nil {
+				if sigB64 := str(s, "signature"); sigB64 != "" {
+					sigBytes, err := base64.StdEncoding.DecodeString(sigB64)
+					if err != nil {
+						writeA2AError(w, req.ID, -32602, fmt.Sprintf("signature must be base64-encoded: %v", err))
+						return
+					}
+					if err := svc.SubmitSignedVoteWithSigningID(ctx, str(s, "deliberation_id"), agentID, unscopedVoteAgentID, str(s, "position_id"), value, str(s, "qualifier"), str(s, "caveat"), str(s, "criterion_id"), sigBytes); err != nil {
+						writeA2AError(w, req.ID, -32000, err.Error())
+						return
+					}
+				} else if err := svc.Vote(ctx, str(s, "deliberation_id"), agentID, str(s, "position_id"), value, str(s, "qualifier"), str(s, "caveat"), str(s, "criterion_id")); err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
@@ -676,8 +733,10 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				}
 				result, err := CoreRunExpertPanel(ctx, svc, str(s, "document"), str(s, "topic"), str(s, "experts"), str(s, "group_id"), model, keyID, str(s, "source_type"), str(s, "depth"))
 				if err != nil {
-					if creditCost > 0 && creditStore != nil {
-						_, _ = creditStore.AddCredits(keyID, creditCost)
+					// Refund must use the full gmt_ token — AddCredits looks up
+					// by `WHERE key = $2` and silently no-ops on the 8-char keyID.
+					if creditCost > 0 && creditStore != nil && strings.HasPrefix(token, "gmt_") {
+						_, _ = creditStore.AddCredits(token, creditCost)
 					}
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
@@ -694,8 +753,10 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, ap
 				}
 				result, err := CoreFollowUpExpertPanel(ctx, svc, str(s, "deliberation_id"), model, keyID)
 				if err != nil {
-					if creditCost > 0 && creditStore != nil {
-						_, _ = creditStore.AddCredits(keyID, creditCost)
+					// Refund must use the full gmt_ token — AddCredits looks up
+					// by `WHERE key = $2` and silently no-ops on the 8-char keyID.
+					if creditCost > 0 && creditStore != nil && strings.HasPrefix(token, "gmt_") {
+						_, _ = creditStore.AddCredits(token, creditCost)
 					}
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return

@@ -276,14 +276,13 @@ No API key needed — the join code is your credential.
 	})
 
 	// A2A endpoint — JSON-RPC for all gemot tools (authenticated, rate-limited).
-	// A2AHandler performs bearer-token auth inline, so ContextKeyKeyID is not
-	// populated by the time an outer envelope middleware would run. Until A2A
-	// auth is refactored into a middleware (tracked in THREAT_MODEL), /a2a
-	// skips envelope verification; hosted-mode A2A callers cannot use envelope
-	// signing. Per-action signatures (B1) still apply via the signature field
-	// in participate params.
+	// Middleware order mirrors /mcp: auth outer → envelope → handler. The auth
+	// layer populates ContextKeyKeyID so the envelope layer's scopeAgentID
+	// rewrite resolves the correct stored key in hosted mode.
 	a2aLimiter := payments.NewRateLimiter(ctx, 30, time.Minute) // 30/min, same as MCP
-	mux.HandleFunc("POST /a2a", A2AHandler(svc, creditStore, apiSecret, a2aLimiter, gemotDB, gemotDB))
+	a2aAuth := A2AAuthMiddleware(apiSecret, creditStore, a2aLimiter)
+	a2aHandler := A2AHandler(svc, creditStore, gemotDB, gemotDB)
+	mux.Handle("POST /a2a", a2aAuth(envelopeMiddleware(a2aHandler)))
 
 	// SSE event stream — real-time deliberation state changes
 	eventBus := deliberation.NewEventBus()
