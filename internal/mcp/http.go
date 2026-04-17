@@ -68,7 +68,19 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gemot: WARNING: %v — defaulting to off\n", err)
 	}
-	nonceCache := auth.NewMemoryNonceCache(0, 0)
+	var nonceCache auth.NonceCache
+	switch store := strings.TrimSpace(os.Getenv("GEMOT_NONCE_STORE")); store {
+	case "postgres":
+		pg := auth.NewPostgresNonceCache(db, 0)
+		pg.StartJanitor(ctx, 0)
+		nonceCache = pg
+		fmt.Fprintf(os.Stderr, "gemot: envelope nonce cache: postgres (durable)\n")
+	case "", "memory":
+		nonceCache = auth.NewMemoryNonceCache(0, 0)
+	default:
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: unknown GEMOT_NONCE_STORE=%q — defaulting to memory (single-instance only)\n", store)
+		nonceCache = auth.NewMemoryNonceCache(0, 0)
+	}
 	envelopeMiddleware := EnvelopeMiddleware(svc, nonceCache, envelopeMode, 0)
 	if envelopeMode != EnvelopeOff {
 		fmt.Fprintf(os.Stderr, "gemot: envelope middleware enabled (mode=%d)\n", envelopeMode)
