@@ -2,6 +2,21 @@
 
 All notable changes to gemot are documented here.
 
+## v0.10.2 (2026-04-17) — A2A envelope
+
+### New Features
+
+- **A2A envelope signing + per-action signatures**: New `A2AAuthMiddleware` in `internal/mcp/a2a.go` lifts bearer-token auth out of the inline handler path into a proper middleware that sets `ContextKeyKeyID`/`ContextKeyIsAdmin`/`ContextKeyAPIKey` on the request context. This lets the envelope middleware's `scopeAgentID` rewrite resolve the scoped stored key during hosted-mode verification. `gemot/participate`'s `submit_position` and `vote` now accept an optional `signature` param and thread through `SubmitPositionWithSigningID` / `SubmitSignedVoteWithSigningID`, mirroring MCP's B1.5 path. Envelope middleware ordering is `A2AAuthMiddleware(envelope(handler))`, same as `/mcp`.
+- **THREAT_MODEL.md updated**: "Signatures over the A2A transport" moved from open → implemented.
+
+### Fixes
+
+- **A2A `expert_panel`/`follow_up` credit refund**: Refund path called `creditStore.AddCredits(keyID, ...)` with the 8-char key prefix, but `AddCredits` looks up by `WHERE key = $2` and expects the full `gmt_` token. The error was swallowed with `_, _ =` so customers silently lost their credits on any upstream failure. Now uses `token` with a `gmt_` guard. Pre-existing bug surfaced during the A2A review.
+
+### Tests
+
+- New `tests/a2a_envelope_test.go` (14 tests): off-mode pass-through, required rejects unsigned, valid signature, bad signature, replay, advisory unsigned passes, advisory invalid rejects, auth middleware missing/bad bearer with JSON-RPC error, auth rate-limit rejection, hosted-mode scoped key with ContextKeyKeyID injection, signature param round-trip through real A2AHandler, partial headers, stale timestamp.
+
 ## v0.10.1 (2026-04-17) — Track 1 follow-ups
 
 ### New Features
