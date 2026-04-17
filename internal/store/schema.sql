@@ -262,6 +262,17 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- Envelope nonce cache (durable, multi-instance safe).
+-- Replaces the per-process MemoryNonceCache when GEMOT_NONCE_STORE=postgres.
+-- `nonce` is the 32-byte base64url from the envelope header; `expires_at`
+-- is set to now + 2*ReplayWindow at insert time. A background janitor
+-- periodically deletes expired rows so the table stays bounded.
+CREATE TABLE IF NOT EXISTS envelope_nonces (
+    nonce TEXT PRIMARY KEY,
+    expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_envelope_nonces_expires ON envelope_nonces(expires_at);
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,

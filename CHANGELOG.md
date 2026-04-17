@@ -2,6 +2,17 @@
 
 All notable changes to gemot are documented here.
 
+## Unreleased — DARPA Track 1 M8 work
+
+### New Features
+
+- **Durable nonce cache for multi-instance envelope verification**: new `auth.PostgresNonceCache` (internal/auth/pg_nonce_cache.go) backs the envelope replay defense on the `envelope_nonces` Postgres table. Observation uses `INSERT ... ON CONFLICT DO NOTHING` so concurrent replicas converge on a single winner without distributed locking; a background janitor sweeps expired rows on a `ReplayWindow` cadence. Selected at startup by `GEMOT_NONCE_STORE=postgres`; defaults to the existing `MemoryNonceCache` for single-instance deployments. Closes the open THREAT_MODEL row that blocked horizontal scaling with `GEMOT_ENVELOPE_MODE=required`.
+- **THREAT_MODEL.md updated**: "Durable nonce cache for multi-instance envelope verification" moved from planned → implemented.
+
+### Tests
+
+- New `tests/pg_nonce_cache_test.go` (4 tests): first-observation accepts, duplicate rejects with `ErrReplay`, janitor-sweeps-expired-rows, concurrent-safe across two independent cache instances backed by the same DB.
+
 ## v0.10.2 (2026-04-17) — A2A envelope
 
 ### New Features
