@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"testing"
@@ -21,7 +22,8 @@ func TestSubmitPositionRoutedThroughBFT(t *testing.T) {
 	ctx := context.Background()
 	log := store.NewPostgresLogStore(db)
 	voteHist := store.NewPostgresVoteHistoryStore(db, bft.ReplicaID(0))
-	engine, err := bft.BootstrapSingleNode(ctx, log, voteHist)
+	keys := store.NewPostgresReplicaKeyStore(db)
+	engine, err := bft.BootstrapSingleNode(ctx, log, voteHist, keys)
 	if err != nil {
 		t.Fatalf("BootstrapSingleNode: %v", err)
 	}
@@ -77,29 +79,22 @@ func TestSubmitPositionRoutedThroughBFT(t *testing.T) {
 	}
 }
 
-// TestBFTEngineBootIdempotent simulates a process restart: after the
-// first boot writes committed blocks to the log, a fresh engine
-// booted against the same stores must succeed and Replay the
-// committed chain state — specifically, the new replica's committed
-// log must contain every prior-boot committed block.
-//
-// KNOWN LIMITATION: cross-boot Submit after restart currently fails
-// because Bootstrap generates a fresh BLS keypair on each call, so
-// QCs from the prior boot cannot be verified under the new boot's
-// roster. Persisting the BLS key across boots is session-5c scope
-// (client-side QC verification + multi-node deploy both require it).
-// The committed log survives; only the ability to extend the chain
-// post-restart is blocked pending key persistence.
-func TestBFTEngineBootIdempotent(t *testing.T) {
+// TestBFTEngineResumesAcrossBoot is the session-5c acceptance test:
+// with the replica keypair persisted in bft_replica_keys, a fresh
+// engine booted against the same stores can verify prior-boot QCs
+// and extend the chain — the limitation documented in session 5b
+// is now closed.
+func TestBFTEngineResumesAcrossBoot(t *testing.T) {
 	db := tempDB(t)
 	ctx := context.Background()
 
 	log := store.NewPostgresLogStore(db)
 	voteHist := store.NewPostgresVoteHistoryStore(db, bft.ReplicaID(0))
+	keys := store.NewPostgresReplicaKeyStore(db)
 
 	// First boot: drive 3 submits (commits blocks 1 and 2 under the
 	// two-chain rule; block 3 remains prepared but uncommitted).
-	eng1, err := bft.BootstrapSingleNode(ctx, log, voteHist)
+	eng1, err := bft.BootstrapSingleNode(ctx, log, voteHist, keys)
 	if err != nil {
 		t.Fatalf("first Bootstrap: %v", err)
 	}
@@ -113,15 +108,72 @@ func TestBFTEngineBootIdempotent(t *testing.T) {
 		t.Fatalf("after 3 submits, committed height = %d; want 2", heightBefore)
 	}
 
-	// Second boot: must succeed against the same stores (Replay +
-	// RestoreVoteHistory + view advance past prior proposedInView).
-	if _, err := bft.BootstrapSingleNode(ctx, log, voteHist); err != nil {
-		t.Fatalf("second Bootstrap: %v (log + vote history must replay cleanly)", err)
+	// Second boot: fresh engine against the same stores. Extending
+	// the chain requires verifying the prior boot's QC — which only
+	// works if the BLS keypair persisted from boot 1.
+	eng2, err := bft.BootstrapSingleNode(ctx, log, voteHist, keys)
+	if err != nil {
+		t.Fatalf("second Bootstrap: %v", err)
+	}
+	qc, block, err := eng2.Submit(ctx, []byte("post-restart"))
+	if err != nil {
+		t.Fatalf("eng2.Submit: %v (BLS key persistence must carry across boot)", err)
+	}
+	// Next height extends the last committed (= block 2); prepared-
+	// but-uncommitted block 3 is not recovered by Replay, so the new
+	// submission lands at height 3 and view > 3.
+	if block.Height != 3 {
+		t.Fatalf("post-restart block height = %d; want 3", block.Height)
+	}
+	if qc.View <= 3 {
+		t.Fatalf("post-restart QC view = %d; want > 3", qc.View)
 	}
 
-	// Post-restart committed log is unchanged.
+	// Committed log continues to grow across restarts: the new
+	// submission's successor would commit this block, but a third
+	// submission under the second engine is enough to confirm the
+	// chain is live — commit block 3 via two-chain.
+	if _, _, err := eng2.Submit(ctx, []byte("post-restart-2")); err != nil {
+		t.Fatalf("eng2.Submit 2: %v", err)
+	}
 	heightAfter, _ := log.HighestHeight(ctx)
-	if heightAfter != heightBefore {
-		t.Fatalf("restart changed committed log height: before=%d after=%d", heightBefore, heightAfter)
+	if heightAfter <= heightBefore {
+		t.Fatalf("after restart + 2 submits, committed height = %d; want > %d", heightAfter, heightBefore)
+	}
+}
+
+// TestReplicaKeyStoreReturnsSameKey confirms the atomic LoadOrGenerate
+// contract: the first call persists a new keypair; subsequent calls
+// return the identical one.
+func TestReplicaKeyStoreReturnsSameKey(t *testing.T) {
+	db := tempDB(t)
+	ctx := context.Background()
+	ks := store.NewPostgresReplicaKeyStore(db)
+
+	kp1, err := ks.LoadOrGenerate(ctx, bft.ReplicaID(0))
+	if err != nil {
+		t.Fatalf("first LoadOrGenerate: %v", err)
+	}
+	kp2, err := ks.LoadOrGenerate(ctx, bft.ReplicaID(0))
+	if err != nil {
+		t.Fatalf("second LoadOrGenerate: %v", err)
+	}
+	priv1, pub1 := kp1.Marshal()
+	priv2, pub2 := kp2.Marshal()
+	if !bytes.Equal(priv1, priv2) {
+		t.Fatalf("second load returned different private key — persistence failed")
+	}
+	if !bytes.Equal(pub1, pub2) {
+		t.Fatalf("second load returned different public key — persistence failed")
+	}
+
+	// A different replica ID yields a different keypair.
+	kp3, err := ks.LoadOrGenerate(ctx, bft.ReplicaID(1))
+	if err != nil {
+		t.Fatalf("replica-1 LoadOrGenerate: %v", err)
+	}
+	priv3, _ := kp3.Marshal()
+	if bytes.Equal(priv1, priv3) {
+		t.Fatalf("replica 0 and replica 1 produced identical private keys — not isolated by replica_id")
 	}
 }
