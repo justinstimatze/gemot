@@ -163,24 +163,28 @@ CastVote(r, b) ==
        THEN UNCHANGED <<view, blocks, qcs, locked, highQC, committed, nextBlockID>>
        ELSE UNCHANGED <<view, blocks, qcs, locked, highQC, committed, nextBlockID>>
 
-\* Form a QC when 2f+1 votes exist for a block in its view.
+\* Form a QC when 2f+1 votes exist for a block in its view. This action
+\* is atomic with the honest-replica lock update: in the real protocol,
+\* every honest replica that sees a QC on a new block updates its
+\* lockedQC and highQC to point at that block (if its view is newer
+\* than the current lock). Modeling these as separate actions — which
+\* the earlier draft did via an optional LockOn — allowed TLC to
+\* explore executions where no honest replica ever locked, making the
+\* ExtendsChain constraint in HonestCanVote trivially satisfiable.
+\* That masked the safety property the spec is supposed to verify.
+\* Session-1 fix: couple the lock update into FormQC so every honest
+\* replica's view of the lock advances monotonically on QC formation.
 FormQC(bid, v) ==
     /\ [view |-> v, blockID |-> bid] \notin qcs
     /\ LET voters == {w.replica : w \in {x \in votes : x.blockID = bid /\ x.view = v}}
        IN Cardinality(voters) >= Quorum
     /\ qcs' = qcs \cup {[view |-> v, blockID |-> bid]}
-    /\ \* On QC formation, honest replicas update highQC and advance view.
-       highQC' = [r \in Replicas |-> IF r \in Honest THEN bid ELSE highQC[r]]
+    /\ highQC' = [r \in Replicas |->
+           IF r \in Honest /\ v > BlockOf(highQC[r]).view THEN bid ELSE highQC[r]]
+    /\ locked'  = [r \in Replicas |->
+           IF r \in Honest /\ v > BlockOf(locked[r]).view THEN bid ELSE locked[r]]
     /\ view' = IF v + 1 <= MaxView THEN v + 1 ELSE view
-    /\ UNCHANGED <<blocks, votes, locked, committed, lastVotedView, nextBlockID>>
-
-\* Lock on a block once there's a QC on a block extending it in a later view
-\* (the one-chain precursor to commit). Simplified: lock when a QC is seen.
-LockOn(r, bid) ==
-    /\ r \in Honest
-    /\ [view |-> BlockOf(bid).view, blockID |-> bid] \in qcs
-    /\ locked' = [locked EXCEPT ![r] = bid]
-    /\ UNCHANGED <<view, blocks, votes, qcs, highQC, committed, lastVotedView, nextBlockID>>
+    /\ UNCHANGED <<blocks, votes, committed, lastVotedView, nextBlockID>>
 
 \* Two-chain commit rule: honest replica commits block b when there are QCs
 \* on both b and a direct child of b in consecutive views.
@@ -202,7 +206,7 @@ Next ==
            Propose(leader, parentID, h)
     \/ \E r \in Replicas, b \in blocks: CastVote(r, b)
     \/ \E bid \in BlockIDs, v \in Views: FormQC(bid, v)
-    \/ \E r \in Replicas, bid \in BlockIDs: LockOn(r, bid) \/ Commit(r, bid)
+    \/ \E r \in Replicas, bid \in BlockIDs: Commit(r, bid)
 
 Spec == Init /\ [][Next]_vars
 

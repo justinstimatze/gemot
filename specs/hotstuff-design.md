@@ -190,16 +190,28 @@ Byzantine leader tolerance.
 
 ### Placeholder in Session 1
 
-Session 1 uses a placeholder `Signature []byte` type and a
-`AggregateSigs(sigs []Signature) Signature` stub that concatenates
-the input. `Verify` always returns nil error. Tests assert protocol
-mechanics (vote counts, commit rule, safety guards) independently of
-crypto correctness.
+Session 1 uses a `PlaceholderSigner` that encodes the replica ID in
+the first four bytes of the signature followed by `sha256(msg)`.
+`Verify` validates the claimed replica ID and the digest match;
+`Aggregate` concatenates (sorted by replica ID) so `VerifyAggregate`
+can split back into per-replica chunks. All signatures are forgeable
+by anyone who knows the replica ID — the placeholder exists only so
+protocol tests can distinguish votes by source and validate the
+proposal/vote signature paths end-to-end.
+
+Message-layer domain separation is enforced independently of the
+signer: vote digests are prefixed with `0x01`, proposal digests with
+`0x02`. Under a real threshold-sig scheme this prevents a vote
+signature over `(view, blockhash)` from being replayed as a proposal
+signature (or vice versa). The session-1 placeholder follows the same
+domain boundaries so session 2's swap to real BLS is a pure
+signer-implementation replacement, not a protocol change.
 
 This is deliberate: we want session-1 protocol tests to fail loudly
 when protocol logic is wrong, not when a crypto library is missing.
-A `TODO-PANIC-ON-THRESHOLD-SIG` constant tagged in the code makes it
-impossible to accidentally ship the placeholder to production.
+The `PlaceholderSigner` constructor is loudly labeled
+"DO NOT SHIP THIS TO PRODUCTION" and a CI grep for the type name in
+non-test builds catches accidental reuse.
 
 ### Real scheme (Session 2+)
 
@@ -327,17 +339,24 @@ Session 1 ships iff:
    model, protocol choice rationale, happy-path state machine,
    commit rule, storage design, deferred list.
 2. `specs/HotStuff.tla` + `HotStuff.cfg` model-check to completion
-   under TLC in under 30 seconds on the CI Postgres box. All safety
-   invariants and (bounded) liveness hold.
+   under TLC in under 5 seconds. All safety invariants hold.
+   Stress bounds (`HotStuff_stress.cfg`, `MaxView=4, MaxHeight=2,
+   MaxBlocks=5`) also pass in under 10 seconds and are retained as
+   a regression harness — an earlier draft that modeled `LockOn` as
+   optional failed the stress cfg, motivating the atomic-lock
+   coupling into `FormQC` in the current spec.
 3. `specs/README.md` is updated with a HotStuff entry mirroring the
    Deliberation spec's section structure, including the
    generalization-to-arbitrary-n argument.
 4. `internal/bft/` package compiles (`go build ./...`) and all
    happy-path unit tests pass (`go test ./internal/bft/...`).
 5. Unit tests cover: single-shot commit (N=4, f=1, all honest),
-   pipelined commits (3 blocks in a row commit the first), safety
+   pipelined commits (4 rounds commit blocks 1 and 2), safety
    (replica refuses to vote for a conflicting proposal in the same
-   view), vote threshold (QC forms at 2f+1, not at f+1 or 2f).
+   view), vote threshold (QC forms at 2f+1, not at f+1 or 2f),
+   proposal-sender verification (non-leader sender rejected),
+   proposal-signature verification (tampered signature rejected),
+   leader-side double-propose guard.
 6. `THREAT_MODEL.md` row "Byzantine-tolerant sequence agreement"
    moved from Planned → Partially Implemented with explicit
    deferred-items caveat.

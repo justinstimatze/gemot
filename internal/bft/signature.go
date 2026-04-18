@@ -3,10 +3,22 @@ package bft
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sort"
 )
+
+// placeholderIDLen is the width of the encoded replica ID in the
+// per-replica placeholder signature. 4 bytes (uint32) supports up to
+// 2^32 replicas; under the previous 1-byte encoding the cap was 256
+// which silently folded larger IDs under modulo into collisions.
+const placeholderIDLen = 4
+
+// placeholderSigLen is the total byte length of one per-replica
+// placeholder signature: the 4-byte replica ID followed by the 32-byte
+// SHA-256 of the signed message.
+const placeholderSigLen = placeholderIDLen + sha256.Size
 
 // Signer is the cryptographic interface the protocol layer depends on.
 // Session 1 uses PlaceholderSigner, which encodes replica ID in the
@@ -52,30 +64,33 @@ func NewPlaceholderSigner(id ReplicaID) *PlaceholderSigner {
 }
 
 // Sign returns a deterministic byte slice derived from (replica, msg).
-// First byte is the replica ID (truncated to uint8 — fine for session
-// 1's small replica sets) followed by the SHA-256 of msg. This is
-// forgeable by anyone who knows the replica ID; the placeholder
-// exists only to let protocol tests distinguish votes by source.
+// First four bytes encode the replica ID in big-endian uint32 form,
+// followed by the SHA-256 of msg. This is forgeable by anyone who
+// knows the replica ID; the placeholder exists only to let protocol
+// tests distinguish votes by source.
 func (s *PlaceholderSigner) Sign(msg []byte) Signature {
 	h := sha256.Sum256(msg)
-	out := make([]byte, 0, 1+len(h))
-	out = append(out, byte(s.ID))
+	out := make([]byte, 0, placeholderSigLen)
+	var idBuf [placeholderIDLen]byte
+	binary.BigEndian.PutUint32(idBuf[:], uint32(s.ID))
+	out = append(out, idBuf[:]...)
 	out = append(out, h[:]...)
 	return out
 }
 
-// Verify checks that the first byte matches the claimed signer and the
-// SHA-256 matches msg. Unforgeable only in the sense that the placeholder
-// encodes the signer's ID — not a cryptographic property.
+// Verify checks that the encoded replica ID matches the claimed signer
+// and the SHA-256 matches msg. Unforgeable only in the sense that the
+// placeholder encodes the signer's ID — not a cryptographic property.
 func (s *PlaceholderSigner) Verify(signer ReplicaID, msg []byte, sig Signature) error {
-	if len(sig) != 1+sha256.Size {
-		return fmt.Errorf("placeholder sig wrong length: got %d, want %d", len(sig), 1+sha256.Size)
+	if len(sig) != placeholderSigLen {
+		return fmt.Errorf("placeholder sig wrong length: got %d, want %d", len(sig), placeholderSigLen)
 	}
-	if sig[0] != byte(signer) {
-		return fmt.Errorf("placeholder sig replica-id mismatch: got %d, want %d", sig[0], signer)
+	encodedID := binary.BigEndian.Uint32(sig[:placeholderIDLen])
+	if ReplicaID(encodedID) != signer {
+		return fmt.Errorf("placeholder sig replica-id mismatch: got %d, want %d", encodedID, signer)
 	}
 	h := sha256.Sum256(msg)
-	if !bytes.Equal(sig[1:], h[:]) {
+	if !bytes.Equal(sig[placeholderIDLen:], h[:]) {
 		return errors.New("placeholder sig message digest mismatch")
 	}
 	return nil
@@ -89,10 +104,13 @@ func (s *PlaceholderSigner) Aggregate(sigs []Signature) Signature {
 	copied := make([]Signature, len(sigs))
 	copy(copied, sigs)
 	sort.Slice(copied, func(i, j int) bool {
-		if len(copied[i]) == 0 || len(copied[j]) == 0 {
+		// Short/empty sigs sort before full-length ones deterministically.
+		if len(copied[i]) < placeholderIDLen || len(copied[j]) < placeholderIDLen {
 			return len(copied[i]) < len(copied[j])
 		}
-		return copied[i][0] < copied[j][0]
+		idI := binary.BigEndian.Uint32(copied[i][:placeholderIDLen])
+		idJ := binary.BigEndian.Uint32(copied[j][:placeholderIDLen])
+		return idI < idJ
 	})
 	var out Signature
 	for _, sig := range copied {
@@ -102,18 +120,17 @@ func (s *PlaceholderSigner) Aggregate(sigs []Signature) Signature {
 }
 
 // VerifyAggregate splits the concatenated signature back into per-replica
-// chunks (each of length 1+sha256.Size) and verifies each. Session 2's
-// real scheme replaces this with a single threshold-signature check.
+// chunks and verifies each. Session 2's real scheme replaces this with
+// a single threshold-signature check.
 func (s *PlaceholderSigner) VerifyAggregate(signers []ReplicaID, msg []byte, agg Signature) error {
-	chunkLen := 1 + sha256.Size
-	if len(agg) != len(signers)*chunkLen {
-		return fmt.Errorf("placeholder agg sig wrong length: got %d, want %d", len(agg), len(signers)*chunkLen)
+	if len(agg) != len(signers)*placeholderSigLen {
+		return fmt.Errorf("placeholder agg sig wrong length: got %d, want %d", len(agg), len(signers)*placeholderSigLen)
 	}
 	sorted := make([]ReplicaID, len(signers))
 	copy(sorted, signers)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	for i, signer := range sorted {
-		chunk := agg[i*chunkLen : (i+1)*chunkLen]
+		chunk := agg[i*placeholderSigLen : (i+1)*placeholderSigLen]
 		if err := s.Verify(signer, msg, chunk); err != nil {
 			return fmt.Errorf("placeholder agg sig chunk %d (replica %d): %w", i, signer, err)
 		}
