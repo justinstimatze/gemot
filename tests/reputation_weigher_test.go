@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
 	"github.com/justinstimatze/gemot/internal/reputation"
@@ -18,9 +19,10 @@ import (
 // zero values), AccumulateTrustEdges sums weights, PersistEigenTrustScores
 // upserts.
 type fakeReputationStore struct {
-	reps   map[string]store.Reputation
-	edges  map[[2]string]float64
-	scores map[string]float64
+	reps      map[string]store.Reputation
+	edges     map[[2]string]float64
+	scores    map[string]float64
+	decayCall int
 }
 
 func newFakeRepStore() *fakeReputationStore {
@@ -56,6 +58,28 @@ func (f *fakeReputationStore) AccumulateTrustEdges(_ context.Context, edges []an
 		}
 		f.edges[[2]string{e.From, e.To}] += e.Weight
 	}
+	return nil
+}
+
+// ApplyDisputeEdges subtracts weight (mirroring Postgres semantics:
+// negatives allowed; EigenTrust clamps non-positive at input).
+func (f *fakeReputationStore) ApplyDisputeEdges(_ context.Context, edges []analysis.Edge) error {
+	for _, e := range edges {
+		if e.Weight <= 0 {
+			continue
+		}
+		f.edges[[2]string{e.From, e.To}] -= e.Weight
+	}
+	return nil
+}
+
+// DecayTrustEdges is a no-op in the fake store — decay math is tested
+// against the real Postgres store in reputation_decay_test.go, and
+// in-memory tests assert edge accumulation invariants that decay would
+// obscure. Call count is recorded so we can assert the weigher
+// invokes the hook exactly when configured.
+func (f *fakeReputationStore) DecayTrustEdges(_ context.Context, _ time.Duration) error {
+	f.decayCall++
 	return nil
 }
 
@@ -166,7 +190,7 @@ func TestUpdateFromRoundAccumulatesEdgesAndSurvived(t *testing.T) {
 		"p-alice": "alice",
 	}
 
-	if err := w.UpdateFromRound(context.Background(), cruxes, authors); err != nil {
+	if err := w.UpdateFromRound(context.Background(), cruxes, authors, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 
@@ -204,7 +228,7 @@ func TestUpdateFromRoundDedupAgreers(t *testing.T) {
 	}
 	authors := map[string]string{"p-alice": "alice"}
 
-	if err := w.UpdateFromRound(context.Background(), cruxes, authors); err != nil {
+	if err := w.UpdateFromRound(context.Background(), cruxes, authors, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 	if fs.edges[[2]string{"bob", "alice"}] != 1 {
@@ -231,7 +255,7 @@ func TestUpdateFromRoundBlocksSybilPair(t *testing.T) {
 	}
 	authors := map[string]string{"p-A": "A", "p-B": "B"}
 
-	if err := w.UpdateFromRound(context.Background(), cruxes, authors); err != nil {
+	if err := w.UpdateFromRound(context.Background(), cruxes, authors, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 	if fs.reps["A"].SurvivedCount != 0 {

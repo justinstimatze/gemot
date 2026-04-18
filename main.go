@@ -57,11 +57,13 @@ func cmdServe(httpMode bool, addr string) {
 	// Wired into both the synthesizer (reads scores during analysis) and
 	// the service (writes edges/survived counts after each round).
 	repWeigher := reputation.NewWeigher(db, reputation.Config{
-		Enabled:       cfg.EigenTrustEnabled,
-		ColdCap:       cfg.EigenTrustColdCap,
-		ColdThreshold: cfg.EigenTrustColdThreshold,
-		Iterations:    cfg.EigenTrustIterations,
-		DBFail:        cfg.EigenTrustDBFail,
+		Enabled:           cfg.EigenTrustEnabled,
+		ColdCap:           cfg.EigenTrustColdCap,
+		ColdThreshold:     cfg.EigenTrustColdThreshold,
+		Iterations:        cfg.EigenTrustIterations,
+		DBFail:            cfg.EigenTrustDBFail,
+		DecayHalfLifeDays: cfg.EigenTrustDecayHalfLifeDays,
+		DisputeWeight:     cfg.EigenTrustDisputeWeight,
 	})
 
 	var analyzer deliberation.Analyzer

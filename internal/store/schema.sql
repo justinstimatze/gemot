@@ -124,6 +124,12 @@ CREATE TABLE IF NOT EXISTS disputes (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Schema v3: reputation ingestion tracking. NULL means the dispute has
+-- not yet contributed a negative edge to the trust graph. Set once by
+-- the reputation layer at round close, so re-running UpdateFromRound
+-- on the same deliberation does not double-count disputes.
+ALTER TABLE disputes ADD COLUMN IF NOT EXISTS rep_processed_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_disputes_delib ON disputes(deliberation_id);
 
 CREATE TABLE IF NOT EXISTS jobs (
@@ -307,4 +313,4 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (2) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (3) ON CONFLICT DO NOTHING;

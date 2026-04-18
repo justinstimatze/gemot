@@ -831,6 +831,49 @@ func (s *DB) GetDisputes(ctx context.Context, deliberationID string) ([]delibera
 	return result, rows.Err()
 }
 
+// GetUnprocessedDisputes returns disputes that have not yet been
+// ingested by the reputation layer (rep_processed_at IS NULL). The
+// reputation updater uses this to avoid double-counting disputes across
+// rounds — calling MarkDisputesProcessed after a successful update.
+func (s *DB) GetUnprocessedDisputes(ctx context.Context, deliberationID string) ([]deliberation.Dispute, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, deliberation_id, agent_id, crux_claim, correction, created_at FROM disputes WHERE deliberation_id = $1 AND rep_processed_at IS NULL ORDER BY created_at`,
+		deliberationID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get unprocessed disputes: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	var result []deliberation.Dispute
+	for rows.Next() {
+		var d deliberation.Dispute
+		var createdAt time.Time
+		if err := rows.Scan(&d.ID, &d.DeliberationID, &d.AgentID, &d.CruxClaim, &d.Correction, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan dispute: %w", err)
+		}
+		d.CreatedAt = createdAt
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
+
+// MarkDisputesProcessed stamps rep_processed_at on the given disputes
+// so a subsequent UpdateFromRound skips them. Idempotent — once
+// stamped, further calls are no-ops.
+func (s *DB) MarkDisputesProcessed(ctx context.Context, disputeIDs []string) error {
+	if len(disputeIDs) == 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE disputes SET rep_processed_at = NOW() WHERE id = ANY($1) AND rep_processed_at IS NULL`,
+		disputeIDs,
+	)
+	if err != nil {
+		return fmt.Errorf("mark disputes processed: %w", err)
+	}
+	return nil
+}
+
 // --- Job queue ---
 
 type Job struct {

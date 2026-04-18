@@ -38,6 +38,17 @@ type Config struct {
 	// rather than silently degrading to unit weights. Recommended for
 	// hosted / Byzantine-context deployments; see THREAT_MODEL.md.
 	EigenTrustDBFail string
+	// EigenTrustDecayHalfLifeDays exponentially decays trust-edge weights
+	// with the given half-life (0 disables). Defends against the
+	// whitewashing attack where a graduated Sybil ring retains pumped-up
+	// weight indefinitely — with decay, edges that stop being reinforced
+	// fade toward zero. Recommended: 14 (two-week half-life).
+	EigenTrustDecayHalfLifeDays int
+	// EigenTrustDisputeWeight is the negative edge weight added per
+	// Dispute against an agent's crux. Defaults to 0.5 — half a full
+	// endorsement. Stored weight can go negative; EigenTrust ignores
+	// non-positive edges so inbound trust mass is effectively clamped.
+	EigenTrustDisputeWeight float64
 
 	// ConsistencyModel + ConsistencyKey enable the cross-family OOD
 	// consistency check (DARPA-PS-26-09 Track 1, abstract §3). When
@@ -56,18 +67,20 @@ func Load() *Config {
 	loadDotenv(".env")
 
 	cfg := &Config{
-		DatabaseURL:             envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
-		AnthropicKey:            envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
-		Model:                   envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
-		StabilitySamples:        envInt("GEMOT_STABILITY_SAMPLES", 0),
-		EigenTrustEnabled:       envBool("GEMOT_EIGENTRUST_ENABLED", false),
-		EigenTrustColdCap:       envFloat("GEMOT_EIGENTRUST_COLD_CAP", 0.1),
-		EigenTrustColdThreshold: envInt("GEMOT_EIGENTRUST_COLD_THRESHOLD", 5),
-		EigenTrustIterations:    envInt("GEMOT_EIGENTRUST_ITERATIONS", 50),
-		EigenTrustDBFail:        envDBFailMode("GEMOT_EIGENTRUST_DB_FAIL", "open"),
-		ConsistencyModel:        os.Getenv("GEMOT_CONSISTENCY_MODEL"),
-		ConsistencyKey:          envOr("GEMOT_CONSISTENCY_KEY", os.Getenv("GEMINI_API_KEY")),
-		ConsistencySampleK:      envInt("GEMOT_CONSISTENCY_SAMPLE_K", 5),
+		DatabaseURL:                 envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
+		AnthropicKey:                envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
+		Model:                       envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
+		StabilitySamples:            envInt("GEMOT_STABILITY_SAMPLES", 0),
+		EigenTrustEnabled:           envBool("GEMOT_EIGENTRUST_ENABLED", false),
+		EigenTrustColdCap:           envFloat("GEMOT_EIGENTRUST_COLD_CAP", 0.1),
+		EigenTrustColdThreshold:     envInt("GEMOT_EIGENTRUST_COLD_THRESHOLD", 5),
+		EigenTrustIterations:        envInt("GEMOT_EIGENTRUST_ITERATIONS", 50),
+		EigenTrustDBFail:            envDBFailMode("GEMOT_EIGENTRUST_DB_FAIL", "open"),
+		EigenTrustDecayHalfLifeDays: envInt("GEMOT_EIGENTRUST_DECAY_HALFLIFE_DAYS", 0),
+		EigenTrustDisputeWeight:     envFloat("GEMOT_EIGENTRUST_DISPUTE_WEIGHT", 0.5),
+		ConsistencyModel:            os.Getenv("GEMOT_CONSISTENCY_MODEL"),
+		ConsistencyKey:              envOr("GEMOT_CONSISTENCY_KEY", os.Getenv("GEMINI_API_KEY")),
+		ConsistencySampleK:          envInt("GEMOT_CONSISTENCY_SAMPLE_K", 5),
 	}
 
 	// Validate model is in known set
@@ -87,8 +100,8 @@ func Load() *Config {
 
 	if cfg.EigenTrustEnabled {
 		fmt.Fprintf(os.Stderr,
-			"gemot: EigenTrust reputation enabled (cold_cap=%.2f, cold_threshold=%d, iterations=%d, db_fail=%s)\n",
-			cfg.EigenTrustColdCap, cfg.EigenTrustColdThreshold, cfg.EigenTrustIterations, cfg.EigenTrustDBFail)
+			"gemot: EigenTrust reputation enabled (cold_cap=%.2f, cold_threshold=%d, iterations=%d, db_fail=%s, decay_halflife_days=%d, dispute_weight=%.2f)\n",
+			cfg.EigenTrustColdCap, cfg.EigenTrustColdThreshold, cfg.EigenTrustIterations, cfg.EigenTrustDBFail, cfg.EigenTrustDecayHalfLifeDays, cfg.EigenTrustDisputeWeight)
 	}
 
 	if cfg.ConsistencyModel != "" && cfg.ConsistencyKey != "" {
