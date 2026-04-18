@@ -1,24 +1,27 @@
-# HotStuff SMR for Gemot: Design (Sessions 1–5a)
+# HotStuff SMR for Gemot: Design (Sessions 1–5b)
 
 ## Status
 
-**Session 5a of N.** Session 1 shipped the happy-path state machine,
-the TLA+ spec, and the protocol-core Go skeleton. Session 2 added view
-change and a Byzantine adversarial test suite. Session 3 replaced
-the placeholder signer with real BLS12-381 multi-signatures via
-`gnark-crypto`. Session 4 added the durable commit log. **Session 5a
-closes the session-4 anti-equivocation gap**: a `VoteHistoryStore`
-interface with in-memory + Postgres implementations, a
-`bft_vote_history` schema-v7 table, and protocol-path persistence
-(`HandleProposal` saves `lastVotedView` BEFORE emitting a vote;
-`Propose` saves `proposedInView` BEFORE returning the proposal).
-`RestoreVoteHistory` lifts the persisted counters into a fresh
-replica on restart, so a crash-and-restart cannot resurrect a voting
-right the replica already used — safe even under a Byzantine peer
-racing the restart. Service-layer integration (routing
-`submit_position`/`vote`/`analyze` through the BFT state machine),
-multi-node deploy, and client-side proof verification remain
-deferred — see "Not in Session 5a" below.
+**Session 5b of N.** Session 5b wires the BFT package into the
+service layer: `main.go` constructs a single-node `bft.Engine` at
+startup (N=1, F=0, Postgres log + vote history, fresh BLS keypair);
+`service.go.SubmitPosition` routes through `engine.Submit` so each
+position is ordered via propose → self-vote → QC; the returned
+`Position` carries the prepared QC as `BFTProof`. This is degenerate
+BFT (quorum=1, no meaningful Byzantine tolerance at N=1) but
+exercises the full state machine: propose, vote, QC formation,
+two-chain commit, durable log, vote-history persistence. Cross-boot
+Submit currently fails because BLS keys are generated fresh per boot
+(prior-boot QCs cannot be verified under the new roster) — the
+committed log still survives restart; only extending the chain
+post-restart is blocked until session 5c adds key persistence.
+
+**Previous sessions:** Session 1 shipped the happy-path state
+machine, TLA+ spec, and Go skeleton. Session 2 added view change +
+Byzantine adversarial tests. Session 3 replaced the placeholder
+signer with real BLS12-381 multi-signatures via `gnark-crypto`.
+Session 4 added the durable commit log. Session 5a closed the
+anti-equivocation gap with a durable `VoteHistoryStore`.
 
 Deliverable of DARPA-PS-26-09 Track 1 M8 ("Byzantine-tolerant sequence
 agreement," abstract §3).

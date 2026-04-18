@@ -192,6 +192,16 @@ func (r *Replica) View() View {
 	return r.view
 }
 
+// HighQC returns a copy of the replica's current highest-view QC.
+// Exported so the single-node BFT engine can read the QC that just
+// formed after HandleVote's processJustify call — HandleVote itself
+// doesn't return the QC. Thread-safe under the replica mutex.
+func (r *Replica) HighQC() QC {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.highQC
+}
+
 // Committed returns a copy of the ordered committed log. Exported for
 // tests; the session-3 service-layer wire-up will use a streaming API
 // instead of copying the whole slice.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
+	"github.com/justinstimatze/gemot/internal/bft"
 	"github.com/justinstimatze/gemot/internal/config"
 	"github.com/justinstimatze/gemot/internal/cost"
 	"github.com/justinstimatze/gemot/internal/deliberation"
@@ -108,7 +109,20 @@ func cmdServe(httpMode bool, addr string) {
 		analyzer = &noopAnalyzer{}
 	}
 
+	// Single-node HotStuff BFT engine. Session 5b wires position
+	// submissions through the state machine so clients receive a QC
+	// proof with each response. N=1/F=0 is degenerate BFT (quorum=1)
+	// but exercises the same path a multi-node deploy will use.
+	bftLog := store.NewPostgresLogStore(db)
+	bftVoteHist := store.NewPostgresVoteHistoryStore(db, bft.ReplicaID(0))
+	bftEngine, err := bft.BootstrapSingleNode(context.Background(), bftLog, bftVoteHist)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error bootstrapping BFT engine: %v\n", err)
+		os.Exit(1)
+	}
+
 	svc := deliberation.NewService(db, analyzer)
+	svc.SetBFTEngine(bftEngine)
 	if synth, ok := analyzer.(*analysis.Synthesizer); ok {
 		svc.SetCompromiseGenerator(synth)
 		svc.SetReframer(synth)

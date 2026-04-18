@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/auth"
+	"github.com/justinstimatze/gemot/internal/bft"
 	"github.com/justinstimatze/gemot/internal/sanitize"
 	"github.com/justinstimatze/gemot/types"
 )
@@ -266,6 +267,11 @@ type Service struct {
 	// Optional audit logger — set via SetAuditLogger after construction.
 	// Logs all write operations at the service layer so nothing bypasses the audit trail.
 	auditFn func(method, deliberationID, agentID string)
+
+	// Optional BFT engine — when set, position submissions route
+	// through the HotStuff state machine and return a prepared QC
+	// as proof. nil = direct writes (legacy / tests without BFT).
+	bftEngine *bft.Engine
 }
 
 func NewService(store Store, analyzer Analyzer) *Service {
@@ -280,6 +286,14 @@ func NewService(store Store, analyzer Analyzer) *Service {
 // SetAuditLogger sets a function that logs all service-level write operations.
 func (s *Service) SetAuditLogger(fn func(method, deliberationID, agentID string)) {
 	s.auditFn = fn
+}
+
+// SetBFTEngine wires a HotStuff BFT engine into the service.
+// Position submissions route through the state machine (ordered via
+// propose → vote → QC) and embed the resulting QC proof on the
+// returned Position.BFTProof. nil engine disables routing (tests).
+func (s *Service) SetBFTEngine(e *bft.Engine) {
+	s.bftEngine = e
 }
 
 func (s *Service) audit(method, deliberationID, agentID string) {
@@ -789,6 +803,27 @@ func (s *Service) SubmitPositionWithSigningID(ctx context.Context, deliberationI
 	// readers understand why post-hoc reverification would fail.
 	if len(p.Signature) > 0 && rawContent != content {
 		fmt.Fprintf(os.Stderr, "gemot: SIG_SANITIZED position in %s from agent %q — signature was valid at submit but content was sanitized (stored signature will not reverify against stored content)\n", deliberationID, agentID)
+	}
+
+	// BFT routing: order the submission through the HotStuff state
+	// machine before persisting to domain tables. Payload is the
+	// canonical position bytes (deliberation-id, agent-id, content,
+	// round) — the same identity the signature covers — so the log
+	// entry is self-describing. QC attaches to the returned Position
+	// as proof of ordering; session 5c will expose replay-from-log
+	// so clients can reconstruct and verify.
+	if s.bftEngine != nil {
+		payload := []byte(fmt.Sprintf("submit_position|%s|%s|%d|%s",
+			deliberationID, agentID, p.Round, content))
+		qc, _, err := s.bftEngine.Submit(ctx, payload)
+		if err != nil {
+			return nil, fmt.Errorf("bft: order position: %w", err)
+		}
+		proof, err := bft.EncodeQCProof(qc)
+		if err != nil {
+			return nil, fmt.Errorf("bft: encode proof: %w", err)
+		}
+		p.BFTProof = proof
 	}
 
 	if err := s.store.CreatePosition(ctx, p); err != nil {
