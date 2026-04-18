@@ -8,12 +8,11 @@ import (
 // Replay reconstructs a replica's committed state from a durable
 // LogStore. Session-4 MVP: restores knownBlocks, committed,
 // committedLog, view, highQC, and lockedQC from the persisted log.
-// Does NOT restore lastVotedView or proposedInView — those are
-// session-5 work because they require a separate durable
-// vote-history table to preserve anti-equivocation across restarts
-// under Byzantine peers. Session 4's replay is safe for crash-
-// recovery of a single honest replica; it is NOT safe yet under a
-// Byzantine adversary that can race the restart.
+// Does NOT restore lastVotedView or proposedInView — those counters
+// are maintained via a separate durable VoteHistoryStore (session 5a,
+// see RestoreVoteHistory). A production restart flow calls both:
+// Replay to recover committed chain state, then RestoreVoteHistory
+// to recover anti-equivocation counters.
 //
 // Call on a freshly-constructed Replica (from NewReplica) BEFORE
 // any protocol methods are driven. The passed log is also attached

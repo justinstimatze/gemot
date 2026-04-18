@@ -134,9 +134,16 @@ func (r *Replica) HandleProposal(p Proposal) error {
 	}
 	r.knownBlocks[blockHash] = p.Block
 
-	// Accept: update prepared, emit vote. highQC / lockedQC are updated
-	// on QC receipt (chained HotStuff advances them via the arriving
-	// justify QC, not via the vote path).
+	// Accept: persist vote history BEFORE updating memory or emitting
+	// the vote. If the store rejects or errors, we refuse to vote in
+	// this view — a liveness loss, not a safety loss. Reversing this
+	// order (memory first, persist second) would let a crash-after-
+	// vote-sent leave the replica free to double-vote on restart.
+	if r.voteHistory != nil {
+		if err := r.voteHistory.SaveVote(context.Background(), p.View); err != nil {
+			return fmt.Errorf("bft: persist lastVotedView: %w", err)
+		}
+	}
 	r.preparedQC = QC{
 		View:      p.View,
 		BlockHash: blockHash,
@@ -398,6 +405,16 @@ func (r *Replica) Propose(parent Hash, payload []byte, justify QC) (*Proposal, e
 		Sender:  r.ID,
 	}
 	p.Sig = r.signer.Sign(proposalSignDigest(p.View, blockHash))
+	// Persist proposal history BEFORE returning the proposal for
+	// broadcast. If the store errors, we refuse to propose in this
+	// view — the view will time out and the next leader takes over
+	// (liveness loss). A crash after broadcast but before persist
+	// would otherwise permit equivocating proposals on restart.
+	if r.voteHistory != nil {
+		if err := r.voteHistory.SaveProposal(context.Background(), r.view); err != nil {
+			return nil, fmt.Errorf("bft: persist proposedInView: %w", err)
+		}
+	}
 	r.proposedInView = r.view
 	return p, nil
 }

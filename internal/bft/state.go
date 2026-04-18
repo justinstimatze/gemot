@@ -1,6 +1,7 @@
 package bft
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -76,6 +77,17 @@ type Replica struct {
 	// than diverging from the persisted state. Session 4.
 	log LogStore
 
+	// voteHistory durably records the (lastVotedView, proposedInView)
+	// anti-equivocation counters. Optional — when nil, those counters
+	// live only in memory and reset on restart (session-4 behavior,
+	// safe only under a single-honest-replica crash without Byzantine
+	// peers). When set via SetVoteHistory or populated by
+	// RestoreVoteHistory, HandleProposal persists lastVotedView BEFORE
+	// emitting a vote and Propose persists proposedInView BEFORE
+	// returning the proposal. On persist failure the replica refuses
+	// the action — liveness loss, not safety loss. Session 5a.
+	voteHistory VoteHistoryStore
+
 	mu sync.Mutex
 }
 
@@ -127,6 +139,38 @@ func NewReplica(id ReplicaID, n, f int, signer Signer, transport Transport, rost
 
 // Quorum is the 2f+1 threshold required to form a QC.
 func (r *Replica) Quorum() int { return 2*r.F + 1 }
+
+// SetVoteHistory attaches a durable vote-history store without loading
+// any prior state. Use this when constructing a fresh replica with no
+// persisted history; use RestoreVoteHistory when recovering a replica
+// that may have persisted counters from a previous boot.
+func (r *Replica) SetVoteHistory(vh VoteHistoryStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.voteHistory = vh
+}
+
+// RestoreVoteHistory loads persisted lastVotedView and proposedInView
+// from vh into the replica and attaches vh for future writes. Monotonic
+// — never regresses in-memory values even if they were somehow ahead of
+// the store. Call on a freshly-constructed Replica (after Replay, if
+// any) BEFORE driving any protocol methods.
+func (r *Replica) RestoreVoteHistory(ctx context.Context, vh VoteHistoryStore) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lastVoted, lastProposed, err := vh.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("bft: restore vote history: %w", err)
+	}
+	if lastVoted > r.lastVotedView {
+		r.lastVotedView = lastVoted
+	}
+	if lastProposed > r.proposedInView {
+		r.proposedInView = lastProposed
+	}
+	r.voteHistory = vh
+	return nil
+}
 
 // SetLog attaches a durable commit log to the replica. Committing a
 // block after SetLog persists a (Block, QC) LogEntry before the

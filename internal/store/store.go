@@ -43,7 +43,7 @@ func Open(dsn string) (*DB, error) {
 	}
 
 	// Check schema version — warn if DB is ahead of binary (downgrade)
-	const expectedVersion = 6
+	const expectedVersion = 7
 	var dbVersion int
 	if err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&dbVersion); err == nil && dbVersion > expectedVersion {
 		fmt.Fprintf(os.Stderr, "gemot: WARNING: database schema version %d is ahead of binary version %d — consider upgrading\n", dbVersion, expectedVersion)
