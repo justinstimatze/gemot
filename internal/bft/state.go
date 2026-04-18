@@ -69,6 +69,13 @@ type Replica struct {
 	transport Transport
 	roster    []ReplicaID
 
+	// log is the durable commit log. Optional — when nil, commits
+	// are memory-only (current session-1-through-3 behavior). When
+	// set via SetLog, commitBlock appends to it; commitBlock returns
+	// an error on log failure so the replica fails loudly rather
+	// than diverging from the persisted state. Session 4.
+	log LogStore
+
 	mu sync.Mutex
 }
 
@@ -120,6 +127,18 @@ func NewReplica(id ReplicaID, n, f int, signer Signer, transport Transport, rost
 
 // Quorum is the 2f+1 threshold required to form a QC.
 func (r *Replica) Quorum() int { return 2*r.F + 1 }
+
+// SetLog attaches a durable commit log to the replica. Committing a
+// block after SetLog persists a (Block, QC) LogEntry before the
+// in-memory committed set is updated — if the log append fails, the
+// commit is aborted and the replica's in-memory state does not
+// advance past the failure. Callers set this before driving any
+// protocol messages; swapping the log mid-flight is unsupported.
+func (r *Replica) SetLog(log LogStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.log = log
+}
 
 // View returns the current view. Exported for tests; do not call from
 // hot paths under the lock.

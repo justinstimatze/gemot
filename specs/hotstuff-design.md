@@ -1,16 +1,20 @@
-# HotStuff SMR for Gemot: Design (Sessions 1–3)
+# HotStuff SMR for Gemot: Design (Sessions 1–4)
 
 ## Status
 
-**Session 3 of N.** Session 1 shipped the happy-path state machine,
+**Session 4 of N.** Session 1 shipped the happy-path state machine,
 the TLA+ spec, and the protocol-core Go skeleton. Session 2 added view
-change and a Byzantine adversarial test suite. **Session 3 replaces
-the placeholder signer with real BLS12-381 multi-signatures** via
-`gnark-crypto` — every HotStuff signature the protocol produces is
-now cryptographically unforgeable under the threshold-sig assumption
-the TLA+ spec relied on. Service-layer integration, durable log,
-multi-node deploy, and client-side proof verification remain
-deferred — see "Not in Session 3" below.
+change and a Byzantine adversarial test suite. Session 3 replaced
+the placeholder signer with real BLS12-381 multi-signatures via
+`gnark-crypto`. **Session 4 adds the durable commit log**: a
+`LogStore` interface with in-memory + Postgres implementations, a
+`bft_log` schema-v6 table, a `Replay` helper that reconstructs
+committed state on replica restart, and commit-path persistence
+(`commitBlock` writes log-first-then-memory so the in-memory state
+never advances past the persisted tail). Service-layer integration
+(routing `submit_position`/`vote`/`analyze` through the BFT state
+machine), multi-node deploy, and client-side proof verification
+remain deferred — see "Not in Session 4" below.
 
 Deliverable of DARPA-PS-26-09 Track 1 M8 ("Byzantine-tolerant sequence
 agreement," abstract §3).
@@ -388,20 +392,31 @@ Operations that do **not** go through BFT:
 - Envelope nonce cache writes — orthogonal; handled by the existing
   `envelope_nonces` shared-Postgres path.
 
-## What's Not in Session 3
+## What's Not in Session 4
 
-Explicitly deferred. Each item is tracked for session 4+ with
+Explicitly deferred. Each item is tracked for session 5+ with
 acceptance criteria written down here so scope creep is visible.
 
 1. ~~**View change.**~~ **Delivered in session 2.** `Timeout()` +
    `HandleNewView()` drive view change under Byzantine leader failure;
    `TestLeaderStall` exercises the canonical case.
 2. ~~**Real threshold signatures.**~~ **Delivered in session 3.**
-   BLS12-381 multi-signatures via gnark-crypto. All 20 bft tests pass
-   under real pairing-based verification. Key distribution is
+   BLS12-381 multi-signatures via gnark-crypto. Key distribution is
    test-only (`GenerateBLSKeyset`); session 5 replaces with either
    trusted setup or DKG when multi-node deploy needs inter-replica
    key distribution.
+3. ~~**Durable commit log.**~~ **Delivered in session 4 (persistence
+   layer only).** `LogStore` interface + `InMemoryLogStore` +
+   `PostgresLogStore` (schema v6 `bft_log` table). `Replica.SetLog`
+   attaches a log; `commitBlock` persists (Block, QC) before
+   advancing in-memory state. `Replay` reconstructs knownBlocks,
+   committed, committedLog, view, highQC, lockedQC from the log.
+   **Known gap**: `lastVotedView` and `proposedInView` are NOT
+   persisted — a crashed-and-restarted replica could equivocate
+   under a Byzantine peer racing the restart. Safe for single-
+   honest-replica crash recovery (which is the current deployment
+   posture); session 5 adds a durable vote-history side-table before
+   the multi-node deploy.
 3. **Service-layer integration.** Sessions 1–2 ship `internal/bft/`
    as an independent package. Session 4 routes
    `internal/deliberation/service.go` writes through the BFT state
@@ -434,6 +449,46 @@ acceptance criteria written down here so scope creep is visible.
    The session-2 test suite covers liveness empirically; a formal
    liveness check lands with session 3 or later, guarded by a
    separate cfg.
+
+## Session 4 Acceptance
+
+Session 4 ships iff:
+
+1. `internal/bft/log.go` defines the `LogStore` interface
+   (Append/Load/HighestHeight) and `InMemoryLogStore` reference
+   implementation with height-monotonic append, fork detection via
+   `ErrLogForkDetected`, and idempotent exact-match re-append.
+2. `internal/bft/replay.go` reconstructs a fresh `Replica`'s
+   committed state from a `LogStore`. Restores knownBlocks,
+   committed, committedLog, view (= last logged view + 1), highQC,
+   and lockedQC.
+3. `internal/bft/state.go` gains a `log LogStore` field and
+   `SetLog(log LogStore)` setter. `internal/bft/protocol.go`
+   `commitBlock` is refactored to take `(Block, QC)` and persist
+   log-first-then-memory so the in-memory state never advances past
+   the persisted tail. Error propagation threads through
+   `processJustify` → `HandleProposal` / `HandleVote`.
+4. `internal/store/bft_log.go` ships `PostgresLogStore` implementing
+   the `LogStore` interface against the `bft_log` schema-v6 table.
+   Fork detection uses `INSERT ... ON CONFLICT DO NOTHING` + a
+   post-insert hash compare.
+5. `internal/store/schema.sql` bumps to version 6 with the
+   `bft_log` table definition (height PK, block_hash, block_bytes,
+   qc_bytes, committed_at). Migration is additive — empty bft_log
+   has no runtime cost on existing deployments.
+6. `internal/bft/log_test.go` ships 5 unit tests (in-memory log
+   append/load roundtrip, fork detection, gap rejection, log
+   writes on protocol commit, Replay reconstructs committed state
+   after a 4-round run).
+7. `tests/bft_log_integration_test.go` ships 2 Postgres integration
+   tests (append/load roundtrip with HighestHeight, fork detection).
+8. `specs/hotstuff-design.md` (this doc) promotes durable log from
+   deferred to delivered; `THREAT_MODEL.md` sub-caveat updated;
+   `CHANGELOG.md` records session 4.
+9. Commit + push. **No production deploy** — the BFT package is
+   still not wired into `internal/deliberation/service.go`. Schema
+   migration runs on boot; `bft_log` starts empty and stays empty
+   in prod until session 5 wires the service layer.
 
 ## Session 3 Acceptance
 
