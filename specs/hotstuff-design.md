@@ -1,19 +1,16 @@
-# HotStuff SMR for Gemot: Design (Sessions 1–2)
+# HotStuff SMR for Gemot: Design (Sessions 1–3)
 
 ## Status
 
-**Session 2 of N.** Session 1 shipped the happy-path state machine,
-the TLA+ spec, and the protocol-core Go skeleton. Session 2 adds view
-change — `Timeout()` and `HandleNewView()` methods, pending-NewView
-tallies, domain-separated NewView signatures — and extends the TLA+
-spec with `TriggerTimeout`/`ViewChange` actions, the liveness branch
-of the honest vote rule, and a `ViewMonotonic` property. A dedicated
-adversarial test suite (`internal/bft/adversarial_test.go`) covers
-Byzantine leader stall, cross-view equivocation, partitioned-minority
-liveness, and stale-NewView selection. Real threshold signatures,
-service-layer integration, durable log, multi-node deploy, and
-client-side proof verification remain deferred — see "Not in Session 2"
-below.
+**Session 3 of N.** Session 1 shipped the happy-path state machine,
+the TLA+ spec, and the protocol-core Go skeleton. Session 2 added view
+change and a Byzantine adversarial test suite. **Session 3 replaces
+the placeholder signer with real BLS12-381 multi-signatures** via
+`gnark-crypto` — every HotStuff signature the protocol produces is
+now cryptographically unforgeable under the threshold-sig assumption
+the TLA+ spec relied on. Service-layer integration, durable log,
+multi-node deploy, and client-side proof verification remain
+deferred — see "Not in Session 3" below.
 
 Deliverable of DARPA-PS-26-09 Track 1 M8 ("Byzantine-tolerant sequence
 agreement," abstract §3).
@@ -213,36 +210,85 @@ the locked QC's view, even if `b` does not extend the locked block).
 Without the liveness branch, a view change would leave honest
 replicas locked on the pre-timeout branch forever.
 
-## Threshold Signatures
+## Signatures
 
-### Placeholder in Session 1
+### BLS12-381 multi-signature (Session 3, current)
 
-Session 1 uses a `PlaceholderSigner` that encodes the replica ID in
-the first four bytes of the signature followed by `sha256(msg)`.
-`Verify` validates the claimed replica ID and the digest match;
-`Aggregate` concatenates (sorted by replica ID) so `VerifyAggregate`
-can split back into per-replica chunks. All signatures are forgeable
-by anyone who knows the replica ID — the placeholder exists only so
-protocol tests can distinguish votes by source and validate the
-proposal/vote signature paths end-to-end.
+Session 3 replaces the sessions-1/2 placeholder with real BLS12-381
+multi-signatures via `gnark-crypto/ecc/bls12-381`. Each replica owns
+a keypair; the public-key roster is distributed to every replica at
+startup; aggregation sums per-replica G1 signature points.
 
-Message-layer domain separation is enforced independently of the
-signer: vote digests are prefixed with `0x01`, proposal digests with
-`0x02`, NewView digests with `0x03` (session-2 addition). Under a
-real threshold-sig scheme these prefixes prevent any one domain's
-signature over `(view, blockhash)` from being replayed as another —
-a vote cannot become a proposal, a NewView cannot impersonate a
-vote. The placeholder follows the same domain boundaries so session
-3's swap to real BLS is a pure signer-implementation replacement,
-not a protocol change.
+Scheme (min-sig variant, RFC 9380 hash-to-curve):
 
-This is deliberate: we want session-1 protocol tests to fail loudly
-when protocol logic is wrong, not when a crypto library is missing.
-The `PlaceholderSigner` constructor is loudly labeled
-"DO NOT SHIP THIS TO PRODUCTION" and a CI grep for the type name in
-non-test builds catches accidental reuse.
+```
+Private key:  scalar s ∈ Fr (the scalar field of BLS12-381)
+Public key:   s · g₂  ∈ G2  (96 bytes compressed)
+Sign(msg):    s · H(msg)  ∈ G1  (48 bytes compressed)
+Verify:       e(sig, g₂) == e(H(msg), pk)
+              (implemented via PairingCheck([-H(msg), sig], [pk, g₂]))
+Aggregate:    Σᵢ sigᵢ = Σᵢ (sᵢ · H(msg)) = (Σᵢ sᵢ) · H(msg)
+VerifyAgg:    e(agg, g₂) == e(H(msg), Σᵢ pkᵢ)
+```
 
-### Real scheme (Session 3+)
+`H(msg)` is hash-to-G1 with DST
+`BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_` per the RFC 9380
+BLS signature profile. Changing this DST invalidates every signature
+ever produced — it is schema-breaking.
+
+### Multi-signature vs. threshold BLS
+
+Session 3 ships multi-signature, not threshold BLS. The distinction:
+
+- **Multi-sig**: each replica owns an independent keypair; aggregation
+  is the sum of per-replica signatures; the verifier knows which
+  replicas contributed (the QC's `Signers` list).
+- **Threshold BLS**: a master secret is Shamir-split across replicas;
+  any 2f+1 partial signatures can Lagrange-interpolate to the master
+  signature; the verifier uses a single master public key and does
+  not need to know which replicas contributed.
+
+For HotStuff, either works. Multi-sig matches the QC data model
+exactly — the QC carries `Signers []ReplicaID` and `AggSig` already,
+so the verifier deriving the aggregate public key as `Σᵢ pk_{Signers[i]}`
+is a natural read. Threshold BLS requires a distributed key
+generation (DKG) ceremony at protocol bootstrap, which is session-5
+work (multi-node deploy needs key distribution anyway). Shipping
+multi-sig in session 3 gets real crypto into the protocol
+immediately without the DKG dependency.
+
+The design doc reserves the word "threshold" for the HotStuff
+protocol-layer threshold (2f+1 quorum). The cryptographic scheme
+underneath that threshold is multi-signature.
+
+### Message-layer domain separation
+
+Domain separation is enforced independently of the signer. Vote
+digests are prefixed with `0x01`, proposal digests with `0x02`,
+NewView digests with `0x03`. Under BLS a shared digest bit-pattern
+across domains would let one domain's signature be replayed as
+another — a vote signature over `(view, blockhash)` could become a
+NewView signature over `(view, 0, zerohash)` if the byte strings
+matched. Domain bytes prevent this at the message layer before the
+signer ever sees the bytes.
+
+### Key distribution (Session 3: test-only)
+
+`GenerateBLSKeyset(n int)` produces n independent keypairs via
+`crypto/rand` and returns the shared roster. This is test-only —
+all keys exist in a single process. Session 5 replaces this with
+either:
+
+- **Trusted setup**: one-time offline ceremony that emits per-replica
+  keypairs over a secure channel. Simple, suitable for closed-
+  federation deployments.
+- **DKG**: Pedersen- or GG20-style distributed key generation
+  ceremony at cluster bootstrap. Harder but lets the roster evolve.
+
+The choice deferred to session 5 when actual inter-replica key
+distribution is needed.
+
+### Library choice
 
 **Constraint: no cgo.** The gemot Dockerfile builds with
 `CGO_ENABLED=0`. Adding cgo would break the Fly container build.
@@ -262,17 +308,39 @@ This eliminates the two most popular Go BLS libraries:
 - `github.com/drand/kyber-bls12381` — drand randomness beacon.
   Pure Go wrapper over go.dedis.ch/kyber/v3.
 
-**Decision (preliminary):** `gnark-crypto`. ConsenSys maintenance,
-broad adoption in Ethereum ecosystem, minimal additional dependency
-graph beyond what we already pull. Finalize in session 3.
+**Decision (finalized in session 3):** `github.com/consensys/gnark-crypto`
+@ v0.20.1. ConsenSys maintenance, broad Ethereum-ecosystem adoption,
+pure-Go (verified `CGO_ENABLED=0 go build ./...` passes). gnark-crypto
+provides the BLS12-381 curve primitives — G1/G2 arithmetic, pairing,
+RFC 9380 hash-to-G1 — but not a pre-built BLS signature scheme, so
+the sign/verify/aggregate/verify-aggregate layer is implemented
+directly in `internal/bft/bls_signer.go` on top of the primitives.
+Roughly 200 lines of Go.
 
-### Scheme
+Alternatives considered:
 
-2f+1-of-N BLS threshold signatures. Each replica holds a secret key
-share; aggregated signatures verify against a single group public
-key. Key distribution is out-of-band at protocol bootstrap (not
-dynamic); replica roster changes require a separate reconfiguration
-protocol (out of scope for this work).
+- `github.com/cloudflare/circl/sign/bls` provides a full BLS
+  signature API (Sign/Verify/Aggregate/VerifyAggregate) with
+  KeyGen from IKM, but its VerifyAggregate takes distinct-message
+  pairs — suitable for BLS multi-sig across different messages but
+  suboptimal for same-message aggregation (N pairings instead of 2).
+  Writing our own sign/verify on top of gnark-crypto's primitives
+  was cleaner than adding a second crypto dependency just for this
+  path.
+- `github.com/drand/kyber-bls12381` (drand randomness beacon) has
+  threshold BLS primitives including Lagrange interpolation —
+  suitable if we decide to move to threshold BLS in a later session,
+  but a heavier dependency tree than gnark-crypto for today's
+  multi-signature scope.
+
+### Replica roster changes
+
+Not in scope for any of sessions 1–5. The roster is fixed at cluster
+bootstrap; adding or removing a replica requires a separate
+reconfiguration protocol (cf. Raft's joint-consensus pattern adapted
+for BFT, or BLS DKG resharing). Gemot's current operational model is
+small-N closed federation where a ~monthly roster rotation via
+full-cluster restart is acceptable.
 
 ## Storage Design
 
@@ -320,19 +388,20 @@ Operations that do **not** go through BFT:
 - Envelope nonce cache writes — orthogonal; handled by the existing
   `envelope_nonces` shared-Postgres path.
 
-## What's Not in Session 2
+## What's Not in Session 3
 
-Explicitly deferred. Each item is tracked for session 3+ with
+Explicitly deferred. Each item is tracked for session 4+ with
 acceptance criteria written down here so scope creep is visible.
 
 1. ~~**View change.**~~ **Delivered in session 2.** `Timeout()` +
    `HandleNewView()` drive view change under Byzantine leader failure;
-   `TestLeaderStall` exercises the canonical case (replica 0 silent,
-   replica 1 becomes leader of view 2, protocol resumes).
-2. **Real threshold signatures.** Placeholder in sessions 1–2. Session
-   3 wires `gnark-crypto` (or the finalized scheme), implements
-   distributed key generation or out-of-band key distribution, and
-   re-runs protocol tests under real verification.
+   `TestLeaderStall` exercises the canonical case.
+2. ~~**Real threshold signatures.**~~ **Delivered in session 3.**
+   BLS12-381 multi-signatures via gnark-crypto. All 20 bft tests pass
+   under real pairing-based verification. Key distribution is
+   test-only (`GenerateBLSKeyset`); session 5 replaces with either
+   trusted setup or DKG when multi-node deploy needs inter-replica
+   key distribution.
 3. **Service-layer integration.** Sessions 1–2 ship `internal/bft/`
    as an independent package. Session 4 routes
    `internal/deliberation/service.go` writes through the BFT state
@@ -365,6 +434,33 @@ acceptance criteria written down here so scope creep is visible.
    The session-2 test suite covers liveness empirically; a formal
    liveness check lands with session 3 or later, guarded by a
    separate cfg.
+
+## Session 3 Acceptance
+
+Session 3 ships iff:
+
+1. `internal/bft/bls_signer.go` implements the `Signer` interface
+   using BLS12-381 multi-signatures via gnark-crypto primitives.
+   Sign/Verify/Aggregate/VerifyAggregate all pass the RFC 9380 hash-
+   to-G1 + pairing-check tests in `bls_signer_test.go`.
+2. `PlaceholderSigner` removed from the codebase. `signature.go`
+   retains only the `Signer` interface and the `newViewDigest`
+   helper.
+3. `newCluster` in tests generates a fresh BLS keyset per cluster and
+   distributes (keypair, roster) pairs to each replica. All 13
+   pre-existing bft tests pass under real BLS verification.
+4. CGO_ENABLED=0 build passes (`CGO_ENABLED=0 go build ./...`) —
+   gnark-crypto is pure Go; the Fly Dockerfile's no-cgo posture is
+   preserved.
+5. `specs/hotstuff-design.md` (this doc) promotes real-threshold-sigs
+   from deferred to delivered, documents the library choice, and
+   explains the multi-sig-vs-threshold-BLS distinction.
+6. `THREAT_MODEL.md` "Byzantine-tolerant sequence agreement" sub-
+   caveat updated to reflect real sigs shipping (remaining deferrals:
+   service integration, multi-node deploy, client proof).
+7. `CHANGELOG.md` Unreleased entry documents the session-3 additions.
+8. Commit + push. **No production deploy** — the BFT package is
+   still not wired into `internal/deliberation/service.go`.
 
 ## Session 2 Acceptance
 

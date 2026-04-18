@@ -5,24 +5,33 @@ import (
 	"testing"
 )
 
-// Session-1 tests: happy path only (all honest, no network failures,
-// no view change). Byzantine behaviors, message drops, equivocation,
-// and view-change flows land in session 2.
+// Session-1 happy-path tests plus the session-2 adversarial suite
+// (adversarial_test.go). Session-3 swapped the placeholder signer
+// for real BLS12-381 multi-signatures via gnark-crypto; newCluster
+// now generates a fresh BLS keyset per cluster and distributes
+// matched (keypair, roster) pairs to each replica.
 
-// newCluster spins up N replicas with a placeholder signer per node,
-// an in-memory network with room for many messages, and a deterministic
-// roster. Returns the replicas keyed by ID so tests drive messages
-// directly rather than through a goroutine-driven dispatch loop.
+// newCluster spins up N replicas with real BLS signers, an in-memory
+// network with room for many messages, and a deterministic roster.
+// Returns the replicas keyed by ID so tests drive messages directly
+// rather than through a goroutine-driven dispatch loop.
 func newCluster(t *testing.T, n, f int) map[ReplicaID]*Replica {
 	t.Helper()
 	roster := make([]ReplicaID, n)
 	for i := 0; i < n; i++ {
 		roster[i] = ReplicaID(i)
 	}
+	keys, pubRoster, err := GenerateBLSKeyset(n)
+	if err != nil {
+		t.Fatalf("GenerateBLSKeyset: %v", err)
+	}
 	net := NewInMemoryNetwork(roster, 256)
 	reps := make(map[ReplicaID]*Replica, n)
 	for _, id := range roster {
-		signer := NewPlaceholderSigner(id)
+		signer, err := NewBLSSigner(id, keys[id], pubRoster)
+		if err != nil {
+			t.Fatalf("NewBLSSigner(%d): %v", id, err)
+		}
 		r, err := NewReplica(id, n, f, signer, net[id], roster)
 		if err != nil {
 			t.Fatalf("NewReplica(%d): %v", id, err)
@@ -413,7 +422,15 @@ func TestPipelinedCommitOrdering(t *testing.T) {
 func TestByzantineBoundConstructor(t *testing.T) {
 	roster := []ReplicaID{0, 1, 2, 3}
 	net := NewInMemoryNetwork(roster, 16)
-	_, err := NewReplica(0, 4, 2, NewPlaceholderSigner(0), net[0], roster)
+	keys, pubRoster, err := GenerateBLSKeyset(4)
+	if err != nil {
+		t.Fatalf("GenerateBLSKeyset: %v", err)
+	}
+	signer, err := NewBLSSigner(0, keys[0], pubRoster)
+	if err != nil {
+		t.Fatalf("NewBLSSigner: %v", err)
+	}
+	_, err = NewReplica(0, 4, 2, signer, net[0], roster)
 	if err == nil {
 		t.Fatalf("expected error for N=4 F=2 (3F=6 not < 4)")
 	}
