@@ -16,6 +16,7 @@ import (
 // without a live DB.
 type Store interface {
 	LoadReputation(ctx context.Context, agents []string) (map[string]store.Reputation, error)
+	ResolveVertices(ctx context.Context, agents []string) (map[string]string, error)
 	LoadTrustEdges(ctx context.Context) ([]analysis.Edge, error)
 	AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge) error
 	ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge) error
@@ -179,17 +180,61 @@ func (r *Weigher) UpdateFromRound(
 	positionAuthors map[string]string,
 	disputes []types.Dispute,
 ) error {
+	// Collect every symbolic agent_id that appears in this round so we
+	// can pin each one to its current vertex in a single batched lookup.
+	// Emitted edges + survived_count increments + dispute edges all use
+	// the vertex form so that a later key rotation doesn't retroactively
+	// reassign attribution of edges written under the pre-rotation key.
+	allAgents := map[string]struct{}{}
+	for _, c := range cruxes {
+		for _, pid := range c.SourcePositionIDs {
+			if author, ok := positionAuthors[pid]; ok && author != "" {
+				allAgents[author] = struct{}{}
+			}
+		}
+		for _, agreer := range c.AgreeAgents {
+			if agreer != "" {
+				allAgents[agreer] = struct{}{}
+			}
+		}
+	}
+	for _, d := range disputes {
+		if d.AgentID != "" {
+			allAgents[d.AgentID] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(allAgents))
+	for a := range allAgents {
+		names = append(names, a)
+	}
+	vertices, err := r.store.ResolveVertices(ctx, names)
+	if err != nil {
+		return fmt.Errorf("resolve vertices: %w", err)
+	}
+	vertex := func(id string) string {
+		if v, ok := vertices[id]; ok {
+			return v
+		}
+		// Defensive fallback: if ResolveVertices returned nothing for an
+		// agent (shouldn't happen because every symbolic id went into the
+		// input), treat as unsigned. Prefix with store.VertexIDPrefix to
+		// stay consistent with the storage format.
+		return store.VertexIDPrefix + id
+	}
+
 	agreersByAuthor := map[string]map[string]struct{}{}
 	var edges []analysis.Edge
 	// Build a claim→authors index for dispute mapping. We key by the
 	// surviving crux's claim text because Dispute.CruxClaim holds the
 	// claim string (the Dispute model predates persistent crux IDs).
+	// Authors in this map are already vertex-form so disputes can emit
+	// edges without re-resolving.
 	cruxAuthorsByClaim := map[string]map[string]struct{}{}
 	for _, c := range cruxes {
 		authors := map[string]struct{}{}
 		for _, pid := range c.SourcePositionIDs {
 			if author, ok := positionAuthors[pid]; ok && author != "" {
-				authors[author] = struct{}{}
+				authors[vertex(author)] = struct{}{}
 			}
 		}
 		if c.Claim != "" {
@@ -197,19 +242,20 @@ func (r *Weigher) UpdateFromRound(
 		}
 		seenAgreers := map[string]struct{}{}
 		for _, agreer := range c.AgreeAgents {
-			if _, dup := seenAgreers[agreer]; dup {
+			agreerV := vertex(agreer)
+			if _, dup := seenAgreers[agreerV]; dup {
 				continue
 			}
-			seenAgreers[agreer] = struct{}{}
-			for author := range authors {
-				if agreer == author {
+			seenAgreers[agreerV] = struct{}{}
+			for authorV := range authors {
+				if agreerV == authorV {
 					continue
 				}
-				edges = append(edges, analysis.Edge{From: agreer, To: author, Weight: 1})
-				if agreersByAuthor[author] == nil {
-					agreersByAuthor[author] = map[string]struct{}{}
+				edges = append(edges, analysis.Edge{From: agreerV, To: authorV, Weight: 1})
+				if agreersByAuthor[authorV] == nil {
+					agreersByAuthor[authorV] = map[string]struct{}{}
 				}
-				agreersByAuthor[author][agreer] = struct{}{}
+				agreersByAuthor[authorV][agreerV] = struct{}{}
 			}
 		}
 	}
@@ -224,20 +270,21 @@ func (r *Weigher) UpdateFromRound(
 		if !ok {
 			continue
 		}
-		for author := range authors {
-			if author == d.AgentID {
+		disputerV := vertex(d.AgentID)
+		for authorV := range authors {
+			if authorV == disputerV {
 				continue
 			}
 			disputeEdges = append(disputeEdges, analysis.Edge{
-				From: d.AgentID, To: author, Weight: disputeWeight,
+				From: disputerV, To: authorV, Weight: disputeWeight,
 			})
 		}
 	}
 
 	var survivedAuthors []string
-	for author, agreers := range agreersByAuthor {
+	for authorV, agreers := range agreersByAuthor {
 		if len(agreers) >= minDistinctAgreers {
-			survivedAuthors = append(survivedAuthors, author)
+			survivedAuthors = append(survivedAuthors, authorV)
 		}
 	}
 

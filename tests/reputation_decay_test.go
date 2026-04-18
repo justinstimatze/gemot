@@ -42,10 +42,10 @@ func TestUpdateFromRoundApplyDispute(t *testing.T) {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 
-	if got := fs.edges[[2]string{"bob", "alice"}]; got != 1 {
+	if got := fs.edges[[2]string{idV("bob"), idV("alice")}]; got != 1 {
 		t.Fatalf("bob→alice expected 1, got %f", got)
 	}
-	if got := fs.edges[[2]string{"carol", "alice"}]; got != -0.5 {
+	if got := fs.edges[[2]string{idV("carol"), idV("alice")}]; got != -0.5 {
 		t.Fatalf("carol→alice expected -0.5, got %f", got)
 	}
 }
@@ -72,7 +72,7 @@ func TestDisputeCancelsPriorEndorsement(t *testing.T) {
 	if err := w.UpdateFromRound(context.Background(), r1, map[string]string{"p-alice": "alice"}, nil); err != nil {
 		t.Fatalf("round 1: %v", err)
 	}
-	if got := fs.edges[[2]string{"bob", "alice"}]; got != 1 {
+	if got := fs.edges[[2]string{idV("bob"), idV("alice")}]; got != 1 {
 		t.Fatalf("after r1, bob→alice want 1, got %f", got)
 	}
 
@@ -90,7 +90,7 @@ func TestDisputeCancelsPriorEndorsement(t *testing.T) {
 	if err := w.UpdateFromRound(context.Background(), r2, map[string]string{"p-alice-2": "alice"}, disputes); err != nil {
 		t.Fatalf("round 2: %v", err)
 	}
-	if got := fs.edges[[2]string{"bob", "alice"}]; got != 0.4 {
+	if got := fs.edges[[2]string{idV("bob"), idV("alice")}]; got != 0.4 {
 		t.Fatalf("net edge after dispute want 0.4, got %f", got)
 	}
 }
@@ -118,7 +118,7 @@ func TestDisputeSkipsSelf(t *testing.T) {
 	if err := w.UpdateFromRound(context.Background(), cruxes, map[string]string{"p-alice": "alice"}, disputes); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
-	if _, ok := fs.edges[[2]string{"alice", "alice"}]; ok {
+	if _, ok := fs.edges[[2]string{idV("alice"), idV("alice")}]; ok {
 		t.Fatalf("unexpected self-dispute edge")
 	}
 }
@@ -256,13 +256,13 @@ func TestDisputeAgainstSybilRingDampensScore(t *testing.T) {
 	if err := wPumped.UpdateFromRound(context.Background(), allCruxes, authors, nil); err != nil {
 		t.Fatalf("pumped round: %v", err)
 	}
-	pumpedRingMin := fsPumped.scores["s1"]
+	pumpedRingMin := fsPumped.scores[idV("s1")]
 	for _, a := range []string{"s2", "s3"} {
-		if fsPumped.scores[a] < pumpedRingMin {
-			pumpedRingMin = fsPumped.scores[a]
+		if fsPumped.scores[idV(a)] < pumpedRingMin {
+			pumpedRingMin = fsPumped.scores[idV(a)]
 		}
 	}
-	pumpedHonest := fsPumped.scores["honest"]
+	pumpedHonest := fsPumped.scores[idV("honest")]
 	if pumpedRingMin <= pumpedHonest {
 		t.Fatalf("baseline invariant broken: ring min (%f) should exceed honest (%f) without disputes",
 			pumpedRingMin, pumpedHonest)
@@ -290,11 +290,11 @@ func TestDisputeAgainstSybilRingDampensScore(t *testing.T) {
 	}
 	disputedRingMax := 0.0
 	for _, a := range []string{"s1", "s2", "s3"} {
-		if fsDisputed.scores[a] > disputedRingMax {
-			disputedRingMax = fsDisputed.scores[a]
+		if fsDisputed.scores[idV(a)] > disputedRingMax {
+			disputedRingMax = fsDisputed.scores[idV(a)]
 		}
 	}
-	disputedHonest := fsDisputed.scores["honest"]
+	disputedHonest := fsDisputed.scores[idV("honest")]
 
 	// Primary invariant: disputes flip the ordering — honest now
 	// dominates the ring's best member, because the one cross-group edge

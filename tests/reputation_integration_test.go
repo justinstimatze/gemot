@@ -23,34 +23,41 @@ func TestReputationStoreRoundTripPostgres(t *testing.T) {
 	db := tempDB(t)
 	ctx := context.Background()
 
-	agents := []string{"alice", "bob", "carol"}
-	if err := db.IncrementSurvivedCounts(ctx, agents); err != nil {
+	// Write-side methods take pre-resolved vertex-form strings (the
+	// Weigher emits in this format after v4 schema). Read-side
+	// LoadReputation takes symbolic agent_ids and internally resolves
+	// via agent_keys — the three agents here have no registered keys so
+	// they all resolve to "id:<name>".
+	symbolic := []string{"alice", "bob", "carol"}
+	vertices := []string{idV("alice"), idV("bob"), idV("carol")}
+
+	if err := db.IncrementSurvivedCounts(ctx, vertices); err != nil {
 		t.Fatalf("IncrementSurvivedCounts (insert): %v", err)
 	}
-	reps, err := db.LoadReputation(ctx, agents)
+	reps, err := db.LoadReputation(ctx, symbolic)
 	if err != nil {
 		t.Fatalf("LoadReputation: %v", err)
 	}
-	for _, a := range agents {
+	for _, a := range symbolic {
 		if reps[a].SurvivedCount != 1 {
 			t.Fatalf("%s survived_count=%d, want 1", a, reps[a].SurvivedCount)
 		}
 	}
 	// Second call — ON CONFLICT DO UPDATE path.
-	if err := db.IncrementSurvivedCounts(ctx, agents); err != nil {
+	if err := db.IncrementSurvivedCounts(ctx, vertices); err != nil {
 		t.Fatalf("IncrementSurvivedCounts (update): %v", err)
 	}
-	reps, _ = db.LoadReputation(ctx, agents)
-	for _, a := range agents {
+	reps, _ = db.LoadReputation(ctx, symbolic)
+	for _, a := range symbolic {
 		if reps[a].SurvivedCount != 2 {
 			t.Fatalf("%s survived_count after 2nd increment=%d, want 2", a, reps[a].SurvivedCount)
 		}
 	}
 
 	edges := []analysis.Edge{
-		{From: "bob", To: "alice", Weight: 1},
-		{From: "carol", To: "alice", Weight: 1},
-		{From: "alice", To: "carol", Weight: 0.5},
+		{From: idV("bob"), To: idV("alice"), Weight: 1},
+		{From: idV("carol"), To: idV("alice"), Weight: 1},
+		{From: idV("alice"), To: idV("carol"), Weight: 0.5},
 	}
 	if err := db.AccumulateTrustEdges(ctx, edges); err != nil {
 		t.Fatalf("AccumulateTrustEdges (insert): %v", err)
@@ -67,23 +74,23 @@ func TestReputationStoreRoundTripPostgres(t *testing.T) {
 	for _, e := range loaded {
 		byPair[[2]string{e.From, e.To}] = e.Weight
 	}
-	if w := byPair[[2]string{"bob", "alice"}]; w != 2 {
+	if w := byPair[[2]string{idV("bob"), idV("alice")}]; w != 2 {
 		t.Fatalf("bob→alice weight=%f after two accumulates, want 2", w)
 	}
-	if w := byPair[[2]string{"alice", "carol"}]; w != 1 {
+	if w := byPair[[2]string{idV("alice"), idV("carol")}]; w != 1 {
 		t.Fatalf("alice→carol weight=%f after two accumulates of 0.5, want 1", w)
 	}
 
-	scores := map[string]float64{"alice": 0.7, "bob": 0.2, "carol": 0.1}
+	scores := map[string]float64{idV("alice"): 0.7, idV("bob"): 0.2, idV("carol"): 0.1}
 	if err := db.PersistEigenTrustScores(ctx, scores); err != nil {
 		t.Fatalf("PersistEigenTrustScores (insert): %v", err)
 	}
 	// Re-persist with different values — should overwrite, not add.
-	scores2 := map[string]float64{"alice": 0.4, "bob": 0.4, "carol": 0.2}
+	scores2 := map[string]float64{idV("alice"): 0.4, idV("bob"): 0.4, idV("carol"): 0.2}
 	if err := db.PersistEigenTrustScores(ctx, scores2); err != nil {
 		t.Fatalf("PersistEigenTrustScores (update): %v", err)
 	}
-	reps, _ = db.LoadReputation(ctx, agents)
+	reps, _ = db.LoadReputation(ctx, symbolic)
 	if reps["alice"].Score != 0.4 {
 		t.Fatalf("alice score=%f, want 0.4 (overwrite)", reps["alice"].Score)
 	}

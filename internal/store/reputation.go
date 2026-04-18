@@ -2,10 +2,22 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
+)
+
+// VertexKey prefix constants. Reputation vertices are namespaced to
+// distinguish key-bound identities ("key:<agent_keys.id>") from legacy
+// symbolic identities ("id:<agent_id>"). The prefix is reserved — bare
+// agent_ids are always wrapped by the reputation layer before hitting
+// persistence, so these prefixes can never collide with a user-supplied
+// agent_id. See schema.sql v4 migration for the full rationale.
+const (
+	VertexKeyPrefix = "key:"
+	VertexIDPrefix  = "id:"
 )
 
 // Reputation is the persisted per-agent reputation state.
@@ -15,28 +27,82 @@ type Reputation struct {
 	SurvivedCount int
 }
 
-// LoadReputation fetches the reputation rows for the given agents.
-// Agents with no row yet are omitted from the result map (caller treats
-// missing entries as zero score / zero survived_count — the cold-start
-// state).
+// ResolveVertices maps symbolic agent_ids to their canonical reputation
+// vertex strings. An agent with an active (non-revoked) key gets the
+// "key:<agent_keys.id>" form; agents without active keys fall back to
+// "id:<agent_id>". One batched query via `unnest` + LEFT JOIN so the
+// call cost is O(1) DB round-trips regardless of cohort size. Callers
+// that emit edges or persist scores must resolve before writing so the
+// vertex pinned on-row matches the key active at emission time.
+func (s *DB) ResolveVertices(ctx context.Context, agents []string) (map[string]string, error) {
+	out := make(map[string]string, len(agents))
+	if len(agents) == 0 {
+		return out, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT a.raw, k.id
+		 FROM unnest($1::text[]) AS a(raw)
+		 LEFT JOIN agent_keys k
+		     ON k.agent_id = a.raw AND k.revoked_at IS NULL`,
+		agents)
+	if err != nil {
+		return nil, fmt.Errorf("resolve vertices: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var agent string
+		var keyID sql.NullString
+		if err := rows.Scan(&agent, &keyID); err != nil {
+			return nil, fmt.Errorf("scan vertex: %w", err)
+		}
+		if keyID.Valid && keyID.String != "" {
+			out[agent] = VertexKeyPrefix + keyID.String
+		} else {
+			out[agent] = VertexIDPrefix + agent
+		}
+	}
+	return out, rows.Err()
+}
+
+// LoadReputation fetches the reputation rows for the given symbolic
+// agents. Internally resolves each agent to its current canonical vertex
+// via agent_keys lookup so callers do not need to know about the
+// key-binding storage format. Agents with no row yet are omitted from
+// the result map (caller treats missing entries as zero score / zero
+// survived_count — the cold-start state). The returned map is keyed by
+// the originally-requested symbolic agent_id, not by the vertex string.
 func (s *DB) LoadReputation(ctx context.Context, agents []string) (map[string]Reputation, error) {
 	out := make(map[string]Reputation, len(agents))
 	if len(agents) == 0 {
 		return out, nil
 	}
+	vertices, err := s.ResolveVertices(ctx, agents)
+	if err != nil {
+		return nil, err
+	}
+	reverseMap := make(map[string]string, len(vertices))
+	vertexList := make([]string, 0, len(vertices))
+	for agent, vertex := range vertices {
+		reverseMap[vertex] = agent
+		vertexList = append(vertexList, vertex)
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT agent_id, score, survived_count FROM agent_reputation WHERE agent_id = ANY($1)`,
-		agents)
+		vertexList)
 	if err != nil {
 		return nil, fmt.Errorf("load reputation: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck
 	for rows.Next() {
+		var vertex string
 		var r Reputation
-		if err := rows.Scan(&r.AgentID, &r.Score, &r.SurvivedCount); err != nil {
+		if err := rows.Scan(&vertex, &r.Score, &r.SurvivedCount); err != nil {
 			return nil, fmt.Errorf("scan reputation: %w", err)
 		}
-		out[r.AgentID] = r
+		if sym, ok := reverseMap[vertex]; ok {
+			r.AgentID = sym
+			out[sym] = r
+		}
 	}
 	return out, rows.Err()
 }
