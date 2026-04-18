@@ -104,20 +104,32 @@ Liveness (under fairness):
 ## Model bounds and the n-agent generalization argument
 
 The committed cfg checks the smallest model that exercises every
-action in the spec: `|Agents| = 4`, `|Byzantine| = 1`, `MaxRounds = 1`,
-`MaxPID = 1`, `MaxCID = 1`. TLC explores 12,675 distinct reachable
-states in ~3 seconds and verifies all invariants and temporal
-properties (including liveness under strong fairness on
-`AnalysisClose`).
+non-trivial action in the spec: `|Agents| = 4`, `|Byzantine| = 1`,
+`MaxRounds = 1`, `MaxPID = 1`, `MaxCID = 1`. TLC explores 12,675
+distinct reachable states in ~3 seconds and verifies all invariants and
+temporal properties, including liveness under strong fairness on
+`AnalysisClose`.
 
-Larger bounds — `MaxPID = 2` or `MaxCID = 2` — drive reachable-state
-counts above what an 8-worker, 2 GB-heap TLC run can complete in a
-workable window. The `Deliberation.tla` module also defines a
-`Symmetry` operator for `Permutations(Honest) ∪ Permutations(Byzantine)`;
-symmetry reduction is sound for safety but TLC explicitly warns it can
-mask liveness violations, so the committed cfg omits it in exchange for
-tractable bounds. `Symmetry` remains available for safety-only runs at
-larger `MaxPID`.
+**Known coverage limitations of the minimal model.** Two properties
+are verified vacuously at these bounds and deserve honest disclosure:
+
+- At `MaxRounds = 1`, the guard `round < MaxRounds` on
+  `AnalysisAdvance` is permanently false, so no round transition is
+  ever observed. `RoundMonotonic` holds by construction but carries no
+  model-checking evidence; meaningful coverage needs `MaxRounds ≥ 2`.
+- At `MaxPID = 1`, the global counter allows only one total position,
+  so the Byzantine-equivocation branch (cap of 2 positions per round)
+  is unreachable. Spec-level correctness is unchanged, but the
+  equivocation path is untested at this bound.
+
+Larger bounds (`MaxPID = 2` or `MaxCID = 2`) push the reachable-state
+count above what an 8-worker, 2 GB-heap TLC run completes in a
+workable window. The `Deliberation.tla` module defines a partition-
+preserving `Symmetry` operator — `{p ∈ Permutations(Agents) : p(Honest)
+⊆ Honest ∧ p(Byzantine) ⊆ Byzantine}` — which is sound for safety
+checks and could be used with a safety-only cfg at higher `MaxPID`.
+The committed cfg omits symmetry because TLC warns it can mask
+liveness violations, and we want safety + liveness in one run.
 
 **Generalization from the small model to arbitrary n.** The argument
 for lifting the checked properties to any `n ≥ 4` with
@@ -159,6 +171,6 @@ specs and their own generalization arguments.
 
 - TLA+ 2024 core language ([Lamport's summary](https://lamport.azurewebsites.net/tla/summary-standalone.pdf)).
 - `FiniteSets`, `Integers`, `TLC` standard modules.
-- Symmetric reduction following TLC documentation.
-- Strong-fairness pattern from Lamport's *Specifying Systems*
-  (Addison-Wesley 2002), chapter 8 on fairness.
+- Symmetric reduction following the TLC documentation.
+- Weak/strong fairness notation from Lamport's *Specifying Systems*
+  (Addison-Wesley 2002).

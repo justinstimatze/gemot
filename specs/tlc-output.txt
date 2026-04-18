@@ -1,5 +1,5 @@
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
-Running breadth-first search Model-Checking with fp 50 and seed 5225466083760807742 with 8 workers on 8 cores with 1820MB heap and 64MB offheap memory [pid: 1614957] (Linux 6.17.0-22-generic amd64, Ubuntu 21.0.10 x86_64, MSBDiskFPSet, DiskStateQueue).
+Running breadth-first search Model-Checking with fp 85 and seed -755127510961584634 with 8 workers on 8 cores with 1820MB heap and 64MB offheap memory [pid: 1628420] (Linux 6.17.0-22-generic amd64, Ubuntu 21.0.10 x86_64, MSBDiskFPSet, DiskStateQueue).
 Parsing file /home/justin/Documents/gemot/specs/Deliberation.tla
 Parsing file /tmp/Integers.tla
 Parsing file /tmp/FiniteSets.tla
@@ -12,13 +12,13 @@ Semantic processing of module Sequences
 Semantic processing of module FiniteSets
 Semantic processing of module TLC
 Semantic processing of module Deliberation
-Starting... (2026-04-17 17:05:15)
+Starting... (2026-04-17 17:20:05)
 Implied-temporal checking--satisfiability problem has 2 branches.
 Computing initial states...
-Finished computing initial states: 1 distinct state generated at 2026-04-17 17:05:15.
-Progress(10) at 2026-04-17 17:05:17: 37,285 states generated, 12,675 distinct states found, 0 states left on queue.
-Checking 2 branches of temporal properties for the complete state space with 25350 total distinct states at (2026-04-17 17:05:17)
-Finished checking temporal properties in 00s at 2026-04-17 17:05:17
+Finished computing initial states: 1 distinct state generated at 2026-04-17 17:20:05.
+Progress(10) at 2026-04-17 17:20:06: 37,285 states generated, 12,675 distinct states found, 0 states left on queue.
+Checking 2 branches of temporal properties for the complete state space with 25350 total distinct states at (2026-04-17 17:20:06)
+Finished checking temporal properties in 00s at 2026-04-17 17:20:06
 Model checking completed. No error has been found.
   Estimates of the probability that TLC did not check all reachable states
   because two distinct states had the same fingerprint:
@@ -26,4 +26,4 @@ Model checking completed. No error has been found.
 37285 states generated, 12675 distinct states found, 0 states left on queue.
 The depth of the complete state graph search is 10.
 The average outdegree of the complete state graph is 1 (minimum is 0, the maximum 13 and the 95th percentile is 4).
-Finished in 02s at (2026-04-17 17:05:17)
+Finished in 01s at (2026-04-17 17:20:06)

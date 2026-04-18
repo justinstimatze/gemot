@@ -13,9 +13,12 @@ Scope & intent
   oracle whose only observable behavior is "advance the round",
   "close the deliberation", or "fail and retry."
 
-  Properties here are model-checked by TLC under symmetric reduction
-  (see Deliberation.cfg and README.md). Small-model results lift to
-  arbitrary n via the generalization argument in README.md.
+  Properties here are model-checked by TLC against the minimal-bounds
+  cfg in Deliberation.cfg (no symmetry, since TLC warns symmetry is
+  unsound with liveness checking). The Symmetry operator defined at
+  the bottom of this module is available for safety-only runs at
+  larger bounds. Small-model results lift to arbitrary n via the
+  generalization argument in README.md.
 
 *)
 EXTENDS Integers, FiniteSets, TLC
@@ -228,11 +231,19 @@ Termination == <>(status = "Closed")
 
 (* ---------------------------- Symmetry ---------------------------------- *)
 
-\* Permutations that preserve the Honest/Byzantine partition. Soundness
-\* argument: all actions are guarded only by membership in Honest vs
-\* Byzantine (never by specific agent identity), so any permutation within
-\* each group yields an equivalent execution. See README.md §"Symmetric
-\* reduction and the n-agent generalization argument."
-Symmetry == Permutations(Honest) \cup Permutations(Byzantine)
+\* Partition-preserving permutations of Agents. We cannot use
+\* Permutations(Honest) \cup Permutations(Byzantine) directly, because
+\* those two sets contain functions with different domains (Honest->Honest
+\* and Byzantine->Byzantine) — TLC's SYMMETRY directive requires all
+\* permutations to share the same base set (Agents). Instead, we take the
+\* subgroup of Permutations(Agents) that maps Honest to Honest and
+\* Byzantine to Byzantine. This is the correct group for the soundness
+\* argument: every action is guarded only by Honest/Byzantine membership,
+\* so permutations preserving the partition yield equivalent executions.
+\* See README.md §"Model bounds and the n-agent generalization argument."
+Symmetry ==
+    {p \in Permutations(Agents) :
+        /\ \A a \in Honest: p[a] \in Honest
+        /\ \A a \in Byzantine: p[a] \in Byzantine}
 
 =============================================================================
