@@ -38,6 +38,16 @@ type Config struct {
 	// rather than silently degrading to unit weights. Recommended for
 	// hosted / Byzantine-context deployments; see THREAT_MODEL.md.
 	EigenTrustDBFail string
+
+	// ConsistencyModel + ConsistencyKey enable the cross-family OOD
+	// consistency check (DARPA-PS-26-09 Track 1, abstract §3). When
+	// both are set at startup, a secondary Gemini client re-scores the
+	// top-K highest-controversy cruxes per analysis and emits
+	// CROSS_FAMILY_DRIFT warnings on strict-majority sign flip.
+	// Off-by-default; empty values disable the feature at zero cost.
+	ConsistencyModel   string
+	ConsistencyKey     string
+	ConsistencySampleK int // default 5
 }
 
 // Load reads configuration from environment variables (and optional .env file).
@@ -55,6 +65,9 @@ func Load() *Config {
 		EigenTrustColdThreshold: envInt("GEMOT_EIGENTRUST_COLD_THRESHOLD", 5),
 		EigenTrustIterations:    envInt("GEMOT_EIGENTRUST_ITERATIONS", 50),
 		EigenTrustDBFail:        envDBFailMode("GEMOT_EIGENTRUST_DB_FAIL", "open"),
+		ConsistencyModel:        os.Getenv("GEMOT_CONSISTENCY_MODEL"),
+		ConsistencyKey:          envOr("GEMOT_CONSISTENCY_KEY", os.Getenv("GEMINI_API_KEY")),
+		ConsistencySampleK:      envInt("GEMOT_CONSISTENCY_SAMPLE_K", 5),
 	}
 
 	// Validate model is in known set
@@ -76,6 +89,12 @@ func Load() *Config {
 		fmt.Fprintf(os.Stderr,
 			"gemot: EigenTrust reputation enabled (cold_cap=%.2f, cold_threshold=%d, iterations=%d, db_fail=%s)\n",
 			cfg.EigenTrustColdCap, cfg.EigenTrustColdThreshold, cfg.EigenTrustIterations, cfg.EigenTrustDBFail)
+	}
+
+	if cfg.ConsistencyModel != "" && cfg.ConsistencyKey != "" {
+		fmt.Fprintf(os.Stderr,
+			"gemot: cross-family OOD consistency ENABLED (model=%s, sample_k=%d) — expect ~%d extra LLM calls per analysis\n",
+			cfg.ConsistencyModel, cfg.ConsistencySampleK, cfg.ConsistencySampleK)
 	}
 
 	return cfg

@@ -43,6 +43,12 @@ func (s *Synthesizer) SetReputation(r ReputationWeigher) {
 	s.text.Reputation = r
 }
 
+// SetSecondary wires the cross-family OOD consistency check. Pass nil
+// to disable. sampleK <= 0 falls back to the default (5).
+func (s *Synthesizer) SetSecondary(sec llm.SecondaryStructuredOutput, sampleK int) {
+	s.text.SetSecondary(sec, sampleK)
+}
+
 // GenerateCompromise produces a compromise statement from analysis results.
 func (s *Synthesizer) GenerateCompromise(ctx context.Context, topic string, result *deliberation.AnalysisResult) (string, error) {
 	return s.text.GenerateCompromise(ctx, topic, result)
