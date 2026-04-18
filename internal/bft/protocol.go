@@ -5,11 +5,14 @@ import (
 	"fmt"
 )
 
-// Session-1 scope: happy-path state transitions only. View change,
-// NewView handling, and real timeout-driven leader rotation are
-// session 2. The protocol layer here is synchronous and single-
-// threaded per replica (mutex-guarded); adversarial reordering tests
-// live in session 2+.
+// Session-1 scope: happy-path state transitions (HandleProposal,
+// HandleVote, Propose, AdvanceView). Session-2 additions: Timeout()
+// and HandleNewView() drive view change under Byzantine leader
+// failure; Propose transparently extends the highest-view QC from
+// 2f+1 collected NewViews when acting as the new leader. The
+// protocol layer remains synchronous and single-threaded per replica
+// (mutex-guarded); real time.Timer wiring and multi-node transport
+// land in session 4+.
 
 var (
 	// ErrNotLeader fires when a replica receives a vote for a view
@@ -35,6 +38,16 @@ var (
 	// ErrWrongLeader fires when a proposal's Sender is not the designated
 	// leader for its view.
 	ErrWrongLeader = errors.New("bft: proposal sender is not leader for view")
+	// ErrStaleNewView fires when a NewView message targets a view the
+	// replica has already advanced past.
+	ErrStaleNewView = errors.New("bft: NewView targets a view already passed")
+	// ErrBadNewViewSig fires when a NewView signature verification fails.
+	ErrBadNewViewSig = errors.New("bft: NewView signature verification failed")
+	// ErrBadNewViewQC fires when a NewView's carried highQC is malformed
+	// or fails threshold verification. Protects the new leader from
+	// accepting forged-QC NewViews that would let a Byzantine sender
+	// trick the collected set into extending a non-existent chain.
+	ErrBadNewViewQC = errors.New("bft: NewView high QC verification failed")
 )
 
 // Digest domain separation: one-byte prefix distinguishes what is being
@@ -46,6 +59,7 @@ var (
 const (
 	domainVote     byte = 0x01
 	domainProposal byte = 0x02
+	domainNewView  byte = 0x03
 )
 
 // voteDigest is the byte sequence a replica signs when voting for a
@@ -298,6 +312,15 @@ func (r *Replica) HandleVote(v Vote) (*QC, error) {
 	// for this same (view, block) will silently land in a fresh bucket
 	// and never reach quorum again; AdvanceView GC cleans those up.
 	delete(r.pendingVotes, key)
+	// The leader that just formed the QC must integrate it into its own
+	// state — advance highQC, potentially lock, try the two-chain
+	// commit. Without this, the leader's highQC lags behind its own
+	// output: non-leader replicas learn the QC via the next round's
+	// proposal-Justify, but the leader would only catch up in round
+	// N+2 when someone else proposes. In a timeout scenario between
+	// round N and N+1, the ex-leader's NewView would carry a stale
+	// highQC, undermining the view-change selection rule.
+	r.processJustify(*qc)
 	return qc, nil
 }
 
@@ -309,9 +332,13 @@ func (r *Replica) HandleVote(v Vote) (*QC, error) {
 // current view. Caller is responsible for: (a) being the leader;
 // (b) having collected the justify QC for the parent block.
 //
-// Session 1: the caller is the test harness. Session 2 wires this to
-// a view-advance timer and a mempool of gemot operations to batch
-// into the payload.
+// Session 2 addition: if 2f+1 NewView messages have been collected
+// for the current view (via HandleNewView), the caller's (parent,
+// justify) arguments are overridden with the highest-view QC from
+// that collected set. This is the HotStuff safety requirement for
+// view change — the new leader MUST extend the highest QC known to
+// the honest majority, otherwise a locked branch could be silently
+// abandoned and safety violated.
 //
 // Propose refuses to emit a second proposal in the same view. A leader
 // that has already proposed must AdvanceView before proposing again.
@@ -328,6 +355,15 @@ func (r *Replica) Propose(parent Hash, payload []byte, justify QC) (*Proposal, e
 	}
 	if r.proposedInView >= r.view {
 		return nil, ErrDoublePropose
+	}
+	// View-change override: if 2f+1 NewViews have been collected for
+	// r.view, the new leader must extend the highest QC among them.
+	// Silently overrides caller's (parent, justify) — the caller is
+	// the transport layer or test harness and doesn't need to know
+	// whether this is a happy-path or post-timeout proposal.
+	if vcQC, ok := r.viewChangeHighQC[r.view]; ok {
+		parent = vcQC.BlockHash
+		justify = vcQC
 	}
 	// Determine block height: parent's height + 1, or 1 if parent is
 	// genesis.
@@ -381,6 +417,115 @@ func (r *Replica) AdvanceView(v View) error {
 			delete(r.pendingVotes, key)
 		}
 	}
+	return nil
+}
+
+// Timeout abandons the current view and emits a NewView message
+// targeting view+1, carrying this replica's current highQC. Broadcasts
+// to all peers (including the new leader) and advances local view.
+//
+// Session 2 uses manual trigger (tests call Timeout explicitly); the
+// view-synchronizer timer that fires Timeout on a real wall clock is
+// session-4 work (needs a time.Timer wired into the service loop).
+//
+// Returns the NewView that was broadcast so callers (tests) can
+// inspect it. Advances local view regardless of whether the new
+// leader ultimately collects 2f+1 NewViews — if not, this replica
+// will eventually timeout again in view+1 and chain further.
+func (r *Replica) Timeout() (*NewView, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	nextView := r.view + 1
+	nv := &NewView{
+		View:   nextView,
+		HighQC: r.highQC,
+		Sender: r.ID,
+	}
+	nv.Sig = r.signer.Sign(newViewDigest(nextView, r.highQC.View, r.highQC.BlockHash))
+
+	if err := r.transport.Broadcast(Message{NewView: nv}); err != nil {
+		return nil, fmt.Errorf("bft: broadcast NewView: %w", err)
+	}
+	// Advance local view after broadcasting. GC stale pending-vote
+	// buckets from the abandoned view — they can never reach quorum
+	// since 2f+1 replicas have now timed out.
+	r.view = nextView
+	for key := range r.pendingVotes {
+		if key.view < nextView {
+			delete(r.pendingVotes, key)
+		}
+	}
+	return nv, nil
+}
+
+// HandleNewView processes a NewView from a peer. Verifies the sender
+// signature and the carried highQC (via verifyQC, which enforces 2f+1
+// signer threshold). Accumulates messages in pendingNewViews keyed by
+// target view. When 2f+1 unique senders have been collected for a
+// target view, selects the highest-view QC among the collected set and
+// stores it in viewChangeHighQC so the leader of that view — when it
+// calls Propose — transparently extends the correct branch.
+//
+// Stale NewViews (targeting a view already passed by this replica) are
+// rejected with ErrStaleNewView so the tally buckets don't accumulate
+// unbounded state. Byzantine-sender NewViews with forged QCs fail
+// verifyQC and never enter the bucket.
+func (r *Replica) HandleNewView(nv NewView) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if nv.View < r.view {
+		// Already past this target view — stale. Note: nv.View == r.view
+		// is valid and collected, because the replica may have already
+		// self-advanced via its own Timeout and is now accumulating the
+		// 2f+1 evidence that the rest of the network followed.
+		return ErrStaleNewView
+	}
+	digest := newViewDigest(nv.View, nv.HighQC.View, nv.HighQC.BlockHash)
+	if err := r.signer.Verify(nv.Sender, digest, nv.Sig); err != nil {
+		return fmt.Errorf("%w: %v", ErrBadNewViewSig, err)
+	}
+	// Reject NewViews whose carried highQC fails threshold verification.
+	// Genesis QC (View=0, zero hash) is the special-case valid empty QC.
+	if !nv.HighQC.IsGenesis() {
+		if err := r.verifyQC(nv.HighQC); err != nil {
+			return fmt.Errorf("%w: %v", ErrBadNewViewQC, err)
+		}
+	}
+
+	bucket := r.pendingNewViews[nv.View]
+	if bucket == nil {
+		bucket = make(map[ReplicaID]NewView)
+		r.pendingNewViews[nv.View] = bucket
+	}
+	if _, dup := bucket[nv.Sender]; dup {
+		// Duplicate from same sender for same target view — ignore.
+		return nil
+	}
+	bucket[nv.Sender] = nv
+
+	if len(bucket) < r.Quorum() {
+		return nil
+	}
+	// 2f+1 collected. Select the highest-view QC in the bucket. This
+	// is the HotStuff view-change rule: the new leader extends the
+	// highest QC among 2f+1 NewViews. Because 2f+1 intersects with
+	// any prior 2f+1 quorum in at least one honest replica, the
+	// selected QC is guaranteed to be at least as new as the highest
+	// QC any honest replica had locked before the view change —
+	// preserving the locked-QC safety invariant.
+	var highest QC
+	for _, msg := range bucket {
+		if msg.HighQC.View > highest.View {
+			highest = msg.HighQC
+		}
+	}
+	r.viewChangeHighQC[nv.View] = highest
+	// Free the bucket — one selection per target view. Any late
+	// NewViews for this view will be rejected as stale once the
+	// replica advances past nv.View.
+	delete(r.pendingNewViews, nv.View)
 	return nil
 }
 

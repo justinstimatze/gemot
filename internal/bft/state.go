@@ -5,8 +5,8 @@ import (
 	"sync"
 )
 
-// Replica is the per-node state of a HotStuff replica. Session 1
-// holds this state in memory only; session 2 backs it with a durable
+// Replica is the per-node state of a HotStuff replica. Sessions 1-2
+// hold this state in memory only; session 4 backs it with a durable
 // append-only log in Postgres and replays on restart.
 //
 // All state mutation happens under mu. The public Handle* methods
@@ -20,7 +20,7 @@ type Replica struct {
 	F int
 
 	// view is the current logical view number. Advances on QC formation
-	// (session 1) or on view-change timeout (session 2).
+	// (happy path) or on Timeout (view-change path).
 	view View
 	// highQC is the highest-view QC this replica has observed. Seeded
 	// to genesis at construction.
@@ -52,6 +52,19 @@ type Replica struct {
 	// leader can detect when 2f+1 has been collected and form a QC.
 	pendingVotes map[voteKey]map[ReplicaID]Signature
 
+	// pendingNewViews groups incoming NewView messages by (targetView,
+	// sender) so the new leader can detect when 2f+1 has been collected
+	// and know it may propose in targetView. Session 2 view-change.
+	pendingNewViews map[View]map[ReplicaID]NewView
+	// viewChangeHighQC[v] is the highest-view QC seen across the 2f+1
+	// collected NewViews for target view v. Populated by HandleNewView
+	// when quorum is reached. Consumed by Propose on the new leader,
+	// which must extend it to preserve safety across the view change.
+	// Non-leader replicas also populate this map but never read from it;
+	// the memory cost is O(views-view-changed) which is bounded by the
+	// protocol's real-time progress.
+	viewChangeHighQC map[View]QC
+
 	signer    Signer
 	transport Transport
 	roster    []ReplicaID
@@ -80,22 +93,24 @@ func NewReplica(id ReplicaID, n, f int, signer Signer, transport Transport, rost
 	}
 	genesis := QC{} // View=0, BlockHash=zero, no signers, no sig.
 	r := &Replica{
-		ID:             id,
-		N:              n,
-		F:              f,
-		view:           1,
-		highQC:         genesis,
-		lockedQC:       genesis,
-		preparedQC:     genesis,
-		lastVotedView:  0,
-		proposedInView: 0,
-		knownBlocks:    make(map[Hash]Block),
-		committed:      make(map[Hash]bool),
-		committedLog:   []Hash{{}},
-		pendingVotes:   make(map[voteKey]map[ReplicaID]Signature),
-		signer:         signer,
-		transport:      transport,
-		roster:         append([]ReplicaID{}, roster...),
+		ID:               id,
+		N:                n,
+		F:                f,
+		view:             1,
+		highQC:           genesis,
+		lockedQC:         genesis,
+		preparedQC:       genesis,
+		lastVotedView:    0,
+		proposedInView:   0,
+		knownBlocks:      make(map[Hash]Block),
+		committed:        make(map[Hash]bool),
+		committedLog:     []Hash{{}},
+		pendingVotes:     make(map[voteKey]map[ReplicaID]Signature),
+		pendingNewViews:  make(map[View]map[ReplicaID]NewView),
+		viewChangeHighQC: make(map[View]QC),
+		signer:           signer,
+		transport:        transport,
+		roster:           append([]ReplicaID{}, roster...),
 	}
 	// Genesis is committed by construction — every replica agrees on it.
 	var zero Hash

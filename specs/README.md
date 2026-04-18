@@ -16,13 +16,13 @@ mechanically checked and, later, refined against the implementation.
 - `Deliberation.tla` / `Deliberation.cfg` — the deliberation state
   machine module and its TLC configuration.
 - `HotStuff.tla` — the chained-HotStuff sequence-agreement module.
-  Session 1 of the BFT implementation; see `hotstuff-design.md` for
-  the protocol design.
+  Covers sessions 1 (happy path) and 2 (view change); see
+  `hotstuff-design.md` for the protocol design.
 - `HotStuff.cfg` / `HotStuff_stress.cfg` — tight and stress TLC
-  configurations for the HotStuff spec. The tight cfg runs in <1s
+  configurations for the HotStuff spec. The tight cfg runs in ~2s
   and is the PR-check target; the stress cfg covers bounds high
-  enough to exercise the locked-QC vote constraint under
-  adversarial scenarios.
+  enough to exercise the locked-QC vote constraint under view
+  change plus Byzantine stale-NewView scenarios.
 - `hotstuff-design.md` — design document for the `internal/bft/`
   HotStuff implementation: adversary model, message types, state
   machine, commit rule, storage design, deferred items.
@@ -117,10 +117,12 @@ Liveness (under fairness):
 
 `HotStuff.tla` models the chained-HotStuff core as implemented in
 `internal/bft/`: block proposal, replica voting, quorum-certificate
-(QC) formation at the 2f+1 threshold, and the two-chain commit rule.
-Session 1 scope is the happy-path state machine; view change and
-real threshold signatures are tracked for session 2. See
-`hotstuff-design.md` for the design-level discussion.
+(QC) formation at the 2f+1 threshold, the two-chain commit rule, and
+the session-2 view-change flow (timeout → NewView collection →
+view advance → new leader proposes extending the highest collected
+QC). Real threshold signatures and service-layer integration are
+tracked for sessions 3+. See `hotstuff-design.md` for the
+design-level discussion.
 
 ### Properties checked
 
@@ -138,47 +140,66 @@ Safety invariants:
 - `QCRequiresQuorum` — every QC has 2f+1 distinct voters.
 - `CommitRequiresQC` — honest replicas only commit blocks with a QC.
 - `ByzantineBound` — the f < N/3 constant assumption holds.
+- `NewViewQCIsReal` (session 2) — every NewView's carried highQC
+  either references genesis or a block with an actual formed QC.
+  Byzantine senders cannot forge QCs (threshold-sig assumption);
+  this invariant pins the model to that assumption.
 
 Temporal safety (stuttering-insensitive `[][...]_vars`):
 
 - `CommittedMonotonic` — per-replica committed set is append-only.
 - `QCsMonotonic`, `VotesMonotonic`, `BlocksMonotonic` — the
   observable protocol histories are append-only.
+- `NewViewsMonotonic` (session 2) — the NewView message set is
+  append-only once sent.
+- `ViewMonotonic` (session 2) — the global view counter never
+  regresses. `FormQC` advances the view only when the quorum-forming
+  QC is for the current view (not a belatedly-formed stale-view QC),
+  so the happy-path view advance cannot race with `ViewChange`.
 
 ### Byzantine model
 
-The spec's Byzantine replicas may vote for any block in any view
-they have not yet voted in. This is deliberately weaker than a full
-adversarial model — intra-view equivocation (two votes in the same
-view), signature forgery (guarded by the threshold-sig assumption),
-and adversarial view-change manipulation are out of scope for
-session 1. Session 2's view-change implementation expands the
-adversarial model.
+The spec's Byzantine replicas may:
+
+- Vote for any block in any view they have not yet voted in
+  (subject to the `lastVotedView` guard — no intra-view equivocation).
+- Trigger timeout opportunistically, claiming any QC'd block as their
+  highQC (including stale QCs the honest majority has moved past).
+  Models the "stale-NewView attack" — the new leader's 2f+1
+  selection must resist picking the stale value.
+- Withhold proposals entirely (no fairness on Byzantine TriggerTimeout
+  or Propose).
+
+Out of scope: signature forgery (guarded by the threshold-sig
+assumption — `NewViewQCIsReal` pins this), intra-view equivocation,
+and a temporal liveness formula (see "What the HotStuff spec does
+not cover" below).
 
 ### Model bounds and generalization
 
 Two model configurations are committed:
 
 - `HotStuff.cfg` (PR check): `|Replicas|=4`, `|Byzantine|=1`,
-  `MaxView=2`, `MaxHeight=2`, `MaxBlocks=3`. TLC explores 510
-  distinct reachable states in well under a second and verifies
-  all safety invariants. Exercises the minimum commit pipeline:
-  height-1 block QC'd in view 1, height-2 block QC'd in view 2,
-  two-chain rule commits the height-1 block.
+  `MaxView=2`, `MaxHeight=2`, `MaxBlocks=3`. TLC explores ~14,000
+  distinct reachable states in ~2 seconds and verifies all safety
+  invariants. Exercises both the minimum commit pipeline and the
+  minimum view change: timeout in view 1 → 2f+1 NewView collection
+  → ViewChange(2) → proposal in view 2.
 
-- `HotStuff_stress.cfg` (nightly / pre-release): `MaxView=4`,
-  `MaxHeight=2`, `MaxBlocks=5`. TLC explores 62,017 distinct
-  reachable states in ~5 seconds. These bounds admit a potentially
-  conflicting height-1 block at view 3 plus a height-2 child in
-  view 4 whose QC would trigger commit on the conflicting branch.
-  An earlier draft of the spec — with `LockOn` modeled as an
-  optional action rather than coupled atomically into `FormQC` —
-  failed this configuration: TLC found an execution where honest
-  replicas committed two different blocks at height 1. That trace
-  motivated tying the honest-replica lock update into `FormQC`
-  itself, which is the current spec. The stress cfg is retained
-  as a regression harness against any future spec regression that
-  loosens the lock-update rule.
+- `HotStuff_stress.cfg` (nightly / pre-release): `MaxView=3`,
+  `MaxHeight=2`, `MaxBlocks=3`. TLC explores ~537,000 distinct
+  reachable states in ~10 seconds. These bounds admit view-change
+  paths layered on top of the session-1 locked-QC adversarial
+  scenarios. An earlier session-1 draft — with `LockOn` modeled as
+  an optional action rather than coupled atomically into `FormQC` —
+  failed the session-1 stress configuration: TLC found an execution
+  where honest replicas committed two different blocks at height 1.
+  That trace motivated tying the honest-replica lock update into
+  `FormQC` itself; session 2 further guards the view-advance clause
+  of `FormQC` with `v = view` so belatedly-formed stale-view QCs
+  cannot regress the global view counter. The stress cfg is
+  retained as a regression harness against any future spec
+  regression that loosens either rule.
 
 N=4 with f=1 is the minimum non-trivial HotStuff configuration
 (f < N/3 ⇒ N ≥ 4).
@@ -197,25 +218,34 @@ three-step argument as `Deliberation.tla` applies:
    constant constraint; any valid instantiation at higher N with
    the same ratio preserves it.
 
-Liveness is *not* checked in `HotStuff.cfg` — session 1 scopes to
-safety. Liveness under partial synchrony is a session-2 deliverable
-once the view-change protocol is implemented. The safety argument
-above is independent of liveness.
+Liveness is *not* checked in either cfg. Session 2 adds the
+`ViewMonotonic` temporal property (view never regresses) and models
+timeout / view-change actions that _enable_ progress under Byzantine
+leader failure, but does not encode an explicit `<>[]progress`
+formula. Under fairness assumptions this would state "eventually
+some honest replica commits"; TLC liveness checking at the current
+bounds would expand the state space beyond the 10-second PR-check
+budget. The session-2 Go adversarial tests
+(`internal/bft/adversarial_test.go`) cover liveness empirically —
+TestPartitionedMinority asserts non-progress under sub-quorum and
+progress on heal. A formal liveness check lands in a later session
+guarded by its own cfg.
 
 ### What the HotStuff spec does *not* cover
 
-- **View change.** Session 1 is happy-path only; no NewView message
-  or leader-timeout logic.
+- **Temporal liveness property.** See above — session 2 shows the
+  view-change actions are reachable and preserve safety; a formal
+  `<>[]progress` check is deferred.
 - **Real threshold signatures.** Modeled as an abstract QC set that
   forms at 2f+1 votes; the Go implementation uses placeholder sigs
-  in session 1 and wires real BLS in session 2.
+  through session 2 and wires real BLS in session 3.
 - **Network model.** Messages are modeled as a set of
   state-machine transitions; no explicit network layer, no dropped
   or reordered messages. Partial-synchrony assumptions live in the
   design doc, not the spec.
 - **Service-layer integration.** The spec models the protocol in
   isolation; the binding to gemot's `submit_position` / `vote` /
-  `analyze` operations is a session-3 deliverable.
+  `analyze` operations is a session-4 deliverable.
 
 ## Model bounds and the n-agent generalization argument
 

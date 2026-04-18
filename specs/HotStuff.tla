@@ -1,31 +1,54 @@
 ----------------------------- MODULE HotStuff -----------------------------
 (*
 
-Gemot BFT sequence-agreement protocol: TLA+ specification of the
-chained-HotStuff core as implemented in internal/bft/. Session 1
-scope: happy-path proposal/vote/QC/commit mechanics with honest-
-majority leader rotation. View change, real threshold-sig crypto,
-and service-layer integration are covered in sibling specs / later
-sessions — this spec is the safety proof for the core state machine.
+Gemot BFT sequence-agreement protocol: TLA+ specification of chained-
+HotStuff as implemented in internal/bft/. Covers happy-path safety
+(session 1) plus view change under Byzantine leader failure (session 2).
+Real threshold-sig crypto and service-layer integration are later-
+session sibling specs — this file is the safety proof for the core
+state machine.
 
 Scope & intent
-  The spec tracks blocks, votes, QCs, and per-replica locked/high QC
-  + committed log. Safety invariant: no two honest replicas ever
-  commit different blocks at the same height. Liveness invariant
-  (bounded): under fairness on the happy-path actions, the committed
-  log reaches MaxCommit within the bound.
+  The spec tracks blocks, votes, QCs, NewView messages, per-replica
+  locked/high QC, per-replica timeout set, and per-replica committed
+  log. Safety invariant (both sessions): no two honest replicas ever
+  commit different blocks at the same height.
 
-  Byzantine replicas in this spec may vote for any block in any view
-  they have not voted in before (including conflicting blocks across
-  views). This is deliberately weaker than a full Byzantine model —
-  we do not model message replay, signature forgery (guarded by the
-  threshold-sig assumption), or view-change equivocation. A richer
-  adversarial model lands with session 2's view-change implementation.
+  Session 2 adds three protocol capabilities to the spec:
+    1. Timeout-driven NewView. Any replica can abandon the current
+       view and send a NewView(v+1, highQC) message carrying its
+       highest observed QC. Models a timer firing after the current
+       leader fails to produce a QC.
+    2. 2f+1-gated view advance. When 2f+1 replicas have sent NewView
+       for view v', the global view advances to v'. Captures the
+       view-synchronizer abstraction — the new leader now gets the
+       opportunity to propose.
+    3. Liveness branch in honest vote rule. An honest replica will
+       vote for a block whose parent (justify QC) is in a strictly
+       newer view than the replica's locked QC, even if the block
+       does not extend the locked block. Without this, a view
+       change can leave replicas locked on a stale branch forever.
+
+  Byzantine model (session 2):
+    - Vote for conflicting blocks across views (within the
+      lastVotedView guard).
+    - Send NewView in any view, claiming any QC they've seen —
+      including stale QCs that the honest majority has moved
+      past. Cannot forge QCs (threshold-sig assumption).
+    - Trigger timeout opportunistically. No fairness on Byzantine.
+
+  Deferred to session 3+: real BLS signatures (threshold assumption
+  replaced by cryptographic proof), service-layer integration,
+  durable log replay, multi-node deploy.
 
   Small-model check in HotStuff.cfg: Replicas={r0,r1,r2,r3},
-  Byzantine={r3}, MaxView=3, MaxHeight=3, MaxBlocks=4. TLC explores
-  a bounded reachable state space and verifies all safety properties
-  in well under the 30-second session-1 budget.
+  Byzantine={r3}, MaxView=2, MaxHeight=2, MaxBlocks=3. TLC explores
+  both happy-path and view-change executions within seconds.
+
+  Stress check in HotStuff_stress.cfg exercises longer chains with
+  view changes and retains the "two conflicting blocks at the same
+  height" counterexample harness that caught the session-1 locked-
+  advance bug.
 
 *)
 EXTENDS Integers, FiniteSets, Sequences, TLC
@@ -48,7 +71,7 @@ ASSUME
 Honest == Replicas \ Byzantine
 N == Cardinality(Replicas)
 F == Cardinality(Byzantine)
-Quorum == (2 * F) + 1     \* 2f+1 threshold for QC formation.
+Quorum == (2 * F) + 1     \* 2f+1 threshold for QC formation and view change.
 
 Views   == 1..MaxView
 Heights == 0..MaxHeight
@@ -58,8 +81,8 @@ BlockIDs == 0..(MaxBlocks - 1)
 Genesis == [id |-> 0, height |-> 0, parent |-> 0, view |-> 0]
 
 VARIABLES
-    view,           \* Current global view number (abstracts per-replica views
-                    \* — the happy-path model has all honest replicas in sync).
+    view,           \* Global view number. Advances via FormQC (happy
+                    \* path) or ViewChange (after 2f+1 NewViews).
     blocks,         \* Set of proposed blocks: [id, height, parent, view].
     votes,          \* Set of cast votes: [replica, view, blockID].
     qcs,            \* Set of formed QCs: [view, blockID].
@@ -67,15 +90,16 @@ VARIABLES
     highQC,         \* [Replicas -> blockID]: highest QC's block per replica.
     committed,      \* [Replicas -> SUBSET BlockIDs]: committed blocks per replica.
     lastVotedView,  \* [Replicas -> view]: anti-equivocation guard.
-    nextBlockID     \* Monotonic block-ID counter.
+    nextBlockID,    \* Monotonic block-ID counter.
+    newViews,       \* Set of NewView messages: [sender, view, highQCblock].
+    timedOut        \* [Replicas -> SUBSET Views]: views r has timed out on.
 
 vars == <<view, blocks, votes, qcs, locked, highQC, committed,
-          lastVotedView, nextBlockID>>
+          lastVotedView, nextBlockID, newViews, timedOut>>
 
 \* Look up a block by ID. Total function: returns Genesis for id=0 and for
 \* any id not in blocks (defensive default so TLC doesn't evaluate CHOOSE
-\* over an empty set). Callers that care about existence check explicitly
-\* via `\E b \in blocks : b.id = X` patterns.
+\* over an empty set).
 BlockOf(bid) ==
     IF bid = 0 THEN Genesis
     ELSE IF \E b \in blocks : b.id = bid
@@ -83,20 +107,13 @@ BlockOf(bid) ==
          ELSE Genesis
 
 \* Block b extends ancestor a iff we can walk b.parent chain and hit a.
-\* Bounded by height to keep the fixpoint finite for TLC. Iterates over
-\* blocks explicitly to avoid undefined CHOOSE on orphan parent IDs.
+\* Bounded by iterating over blocks so orphan parent IDs terminate.
 RECURSIVE ExtendsChain(_, _)
 ExtendsChain(childID, ancestorID) ==
     \/ childID = ancestorID
     \/ /\ childID /= 0
        /\ \E b \in blocks :
               b.id = childID /\ ExtendsChain(b.parent, ancestorID)
-
-\* Leader of view v (rotation: view mod N over a fixed ordering).
-\* Abstracted as any replica in the spec since TLC will enumerate.
-IsLeader(r, v) == TRUE  \* Any replica may be the proposer in a given view.
-                         \* Real implementation uses deterministic rotation;
-                         \* safety does not require it.
 
 TypeOK ==
     /\ view \in Views
@@ -108,6 +125,8 @@ TypeOK ==
     /\ committed \in [Replicas -> SUBSET BlockIDs]
     /\ lastVotedView \in [Replicas -> Views \cup {0}]
     /\ nextBlockID \in 1..MaxBlocks
+    /\ newViews \subseteq [sender: Replicas, view: Views, highQCblock: BlockIDs]
+    /\ timedOut \in [Replicas -> SUBSET Views]
 
 Init ==
     /\ view = 1
@@ -119,13 +138,17 @@ Init ==
     /\ committed = [r \in Replicas |-> {0}]      \* genesis committed
     /\ lastVotedView = [r \in Replicas |-> 0]
     /\ nextBlockID = 1
+    /\ newViews = {}
+    /\ timedOut = [r \in Replicas |-> {}]
 
 (* ---------------------------- Actions ----------------------------------- *)
 
-\* Leader proposes a new block extending some replica's highQC view.
-\* Any replica may propose (the spec does not pin leader rotation, since
-\* safety is independent of leader choice — liveness needs it, but we
-\* bound view and verify safety holds across all leader orderings).
+\* Leader proposes a new block in the current view. Parent may be any
+\* known block ID (or genesis). Block's view is set to the current
+\* global view — captures "leader proposes in the view it is leader of."
+\* Safety is independent of leader choice (locked-QC rule); liveness
+\* needs honest-leader rotation but we don't bind a rotation function
+\* here.
 Propose(leader, parentID, h) ==
     /\ nextBlockID < MaxBlocks
     /\ h \in 1..MaxHeight
@@ -136,15 +159,22 @@ Propose(leader, parentID, h) ==
                   {[id |-> nextBlockID, height |-> h,
                     parent |-> parentID, view |-> view]}
     /\ nextBlockID' = nextBlockID + 1
-    /\ UNCHANGED <<view, votes, qcs, locked, highQC, committed, lastVotedView>>
+    /\ UNCHANGED <<view, votes, qcs, locked, highQC, committed,
+                   lastVotedView, newViews, timedOut>>
 
-\* Honest vote rule: replica has not voted in this view, and block either
-\* extends the locked block OR the block's own view > lockedView.
-\* Simplified for session 1: we enforce extends-locked only (stronger, safe).
+\* Honest vote rule (HotStuff §4). Accept block b iff:
+\*   (a) safety branch: b extends the locked block, OR
+\*   (b) liveness branch: b's parent was proposed in a view strictly
+\*       newer than the view the replica is locked in.
+\* The liveness branch lets replicas unlock after a view change —
+\* without it, replicas that locked on a stale QC would refuse every
+\* post-view-change proposal.
 HonestCanVote(r, b) ==
     /\ r \in Honest
     /\ lastVotedView[r] < b.view
-    /\ ExtendsChain(b.id, locked[r])
+    /\ \/ ExtendsChain(b.id, locked[r])
+       \/ \E parent \in blocks :
+              parent.id = b.parent /\ parent.view > BlockOf(locked[r]).view
 
 \* Byzantine replicas can vote for anything in any view > last voted.
 ByzantineCanVote(r, b) ==
@@ -157,23 +187,18 @@ CastVote(r, b) ==
     /\ (HonestCanVote(r, b) \/ ByzantineCanVote(r, b))
     /\ votes' = votes \cup {[replica |-> r, view |-> b.view, blockID |-> b.id]}
     /\ lastVotedView' = [lastVotedView EXCEPT ![r] = b.view]
-    /\ \* Honest replicas update highQC-tracking state on valid votes; the
-       \* locked update happens on QC receipt, not on vote cast.
-       IF r \in Honest
-       THEN UNCHANGED <<view, blocks, qcs, locked, highQC, committed, nextBlockID>>
-       ELSE UNCHANGED <<view, blocks, qcs, locked, highQC, committed, nextBlockID>>
+    /\ UNCHANGED <<view, blocks, qcs, locked, highQC, committed,
+                   nextBlockID, newViews, timedOut>>
 
-\* Form a QC when 2f+1 votes exist for a block in its view. This action
-\* is atomic with the honest-replica lock update: in the real protocol,
-\* every honest replica that sees a QC on a new block updates its
-\* lockedQC and highQC to point at that block (if its view is newer
-\* than the current lock). Modeling these as separate actions — which
-\* the earlier draft did via an optional LockOn — allowed TLC to
-\* explore executions where no honest replica ever locked, making the
-\* ExtendsChain constraint in HonestCanVote trivially satisfiable.
-\* That masked the safety property the spec is supposed to verify.
-\* Session-1 fix: couple the lock update into FormQC so every honest
-\* replica's view of the lock advances monotonically on QC formation.
+\* Form a QC when 2f+1 votes exist for a block in its view. Atomic with
+\* the honest-replica lock and highQC update: an honest replica that
+\* sees a QC on a new block advances its locked/high QC to point at
+\* that block if its view is newer than the currently locked/high one.
+\*
+\* The view-advance clause only fires when v equals the current global
+\* view, not any stale view with belatedly-quorumed votes. Without this
+\* guard, a QC that forms on a view < current view would regress the
+\* global view counter.
 FormQC(bid, v) ==
     /\ [view |-> v, blockID |-> bid] \notin qcs
     /\ LET voters == {w.replica : w \in {x \in votes : x.blockID = bid /\ x.view = v}}
@@ -183,11 +208,12 @@ FormQC(bid, v) ==
            IF r \in Honest /\ v > BlockOf(highQC[r]).view THEN bid ELSE highQC[r]]
     /\ locked'  = [r \in Replicas |->
            IF r \in Honest /\ v > BlockOf(locked[r]).view THEN bid ELSE locked[r]]
-    /\ view' = IF v + 1 <= MaxView THEN v + 1 ELSE view
-    /\ UNCHANGED <<blocks, votes, committed, lastVotedView, nextBlockID>>
+    /\ view' = IF v = view /\ v + 1 <= MaxView THEN v + 1 ELSE view
+    /\ UNCHANGED <<blocks, votes, committed, lastVotedView, nextBlockID,
+                   newViews, timedOut>>
 
-\* Two-chain commit rule: honest replica commits block b when there are QCs
-\* on both b and a direct child of b in consecutive views.
+\* Two-chain commit rule: honest replica commits block b when there are
+\* QCs on both b and a direct child of b in consecutive views.
 Commit(r, bid) ==
     /\ r \in Honest
     /\ bid /= 0
@@ -199,7 +225,41 @@ Commit(r, bid) ==
            /\ [view |-> c.view, blockID |-> c.id] \in qcs
            /\ c.view = b.view + 1         \* direct consecutive views
     /\ committed' = [committed EXCEPT ![r] = @ \cup {bid}]
-    /\ UNCHANGED <<view, blocks, votes, qcs, locked, highQC, lastVotedView, nextBlockID>>
+    /\ UNCHANGED <<view, blocks, votes, qcs, locked, highQC,
+                   lastVotedView, nextBlockID, newViews, timedOut>>
+
+\* TriggerTimeout: replica r abandons the current view and sends a
+\* NewView(view+1, claimedQC) message. Honest replicas report their
+\* true highQC; Byzantine replicas may claim any QC'd block they have
+\* seen — modeling stale-NewView attacks without allowing signature
+\* forgery. Once r times out in a view, it cannot timeout again in
+\* that same view (idempotent).
+TriggerTimeout(r, claimedQC) ==
+    /\ view \notin timedOut[r]
+    /\ view + 1 \in Views
+    /\ claimedQC \in ({0} \cup {qc.blockID : qc \in qcs})
+    /\ \/ r \in Honest /\ claimedQC = highQC[r]
+       \/ r \in Byzantine
+    /\ newViews' = newViews \cup
+           {[sender |-> r, view |-> view + 1, highQCblock |-> claimedQC]}
+    /\ timedOut' = [timedOut EXCEPT ![r] = @ \cup {view}]
+    /\ UNCHANGED <<view, blocks, votes, qcs, locked, highQC, committed,
+                   lastVotedView, nextBlockID>>
+
+\* ViewChange: once 2f+1 replicas have sent NewView for view v, the
+\* global view advances to v. Captures the view-synchronizer
+\* abstraction: the new leader of v now has standing to propose.
+\*
+\* Safety: this action doesn't read locked/highQC — it only advances
+\* view. The locked-QC vote rule on CastVote prevents conflicting
+\* commits even if the new leader proposes extending a stale QC.
+ViewChange(v) ==
+    /\ v > view
+    /\ v \in Views
+    /\ Cardinality({nv.sender : nv \in {x \in newViews : x.view = v}}) >= Quorum
+    /\ view' = v
+    /\ UNCHANGED <<blocks, votes, qcs, locked, highQC, committed,
+                   lastVotedView, nextBlockID, newViews, timedOut>>
 
 Next ==
     \/ \E leader \in Replicas, parentID \in BlockIDs, h \in 1..MaxHeight:
@@ -207,6 +267,8 @@ Next ==
     \/ \E r \in Replicas, b \in blocks: CastVote(r, b)
     \/ \E bid \in BlockIDs, v \in Views: FormQC(bid, v)
     \/ \E r \in Replicas, bid \in BlockIDs: Commit(r, bid)
+    \/ \E r \in Replicas, cqc \in BlockIDs: TriggerTimeout(r, cqc)
+    \/ \E v \in Views: ViewChange(v)
 
 Spec == Init /\ [][Next]_vars
 
@@ -216,15 +278,14 @@ Spec == Init /\ [][Next]_vars
 TypeInvariant == TypeOK
 
 \* Anti-equivocation: a replica votes at most once per view.
-\* (Byzantine can vote across views but not twice in the same view under
-\* this model — a weaker honest majority model would allow intra-view
-\* equivocation; we cover that in session 2's adversarial model.)
 NoDoubleVoteInView ==
     \A v1, v2 \in votes:
         (v1.replica = v2.replica /\ v1.view = v2.view) => v1 = v2
 
-\* No two honest replicas ever commit conflicting blocks at the same height.
-\* This is the core HotStuff safety property (Yin et al. §5, Theorem 1).
+\* No two honest replicas ever commit conflicting blocks at the same
+\* height. HotStuff's core safety property (Yin et al. §5 Theorem 1).
+\* Must continue to hold across view changes — that is the point of
+\* the session-2 spec update.
 AgreementAtHeight ==
     \A r1 \in Honest:
         \A r2 \in Honest:
@@ -232,15 +293,15 @@ AgreementAtHeight ==
                 \A b2 \in committed[r1] \cap committed[r2]:
                     (BlockOf(b1).height = BlockOf(b2).height) => b1 = b2
 
-\* No honest replica commits a block whose parent chain breaks. Every
-\* committed block above genesis must have a committed ancestor at every
-\* lower height on its chain.
+\* Every committed block above genesis must have a committed ancestor
+\* at every lower height on its chain.
 CommittedChainConsistent ==
     \A r \in Honest:
         \A bid \in committed[r]:
-            bid = 0 \/ \E pid \in committed[r]: ExtendsChain(bid, pid) /\ BlockOf(pid).height = 0
+            bid = 0 \/ \E pid \in committed[r]:
+                           ExtendsChain(bid, pid) /\ BlockOf(pid).height = 0
 
-\* QCs only form at quorum. Check that every QC has 2f+1 distinct voters.
+\* QCs only form at quorum. Every QC has 2f+1 distinct voters.
 QCRequiresQuorum ==
     \A qc \in qcs:
         Cardinality({w.replica : w \in {x \in votes : x.blockID = qc.blockID /\ x.view = qc.view}}) >= Quorum
@@ -251,31 +312,33 @@ CommitRequiresQC ==
         \A bid \in committed[r]:
             bid = 0 \/ \E qc \in qcs: qc.blockID = bid
 
-\* f < N/3 assumption continues to hold (checked on constants; trivial).
+\* f < N/3 (checked on constants; trivial).
 ByzantineBound == 3 * Cardinality(Byzantine) < Cardinality(Replicas)
+
+\* NewView integrity: every NewView carries a highQC referring either to
+\* genesis or to a block with a real QC. No forged QC references.
+NewViewQCIsReal ==
+    \A nv \in newViews:
+        nv.highQCblock = 0 \/ \E qc \in qcs: qc.blockID = nv.highQCblock
 
 (* ---------------------------- Monotonicity ------------------------------ *)
 
-\* Committed set only grows (checked per-replica).
+\* View only advances (new in session 2 — ViewChange never regresses,
+\* and FormQC's guard v = view prevents stale-QC regression).
+ViewMonotonic == [][view' >= view]_vars
+
 CommittedMonotonic ==
     [][\A r \in Replicas: committed[r] \subseteq (committed')[r]]_vars
-
-\* QC set only grows.
 QCsMonotonic == [][qcs \subseteq qcs']_vars
-
-\* Votes set only grows.
 VotesMonotonic == [][votes \subseteq votes']_vars
-
-\* Blocks set only grows.
 BlocksMonotonic == [][blocks \subseteq blocks']_vars
+NewViewsMonotonic == [][newViews \subseteq newViews']_vars
 
 (* ---------------------------- Symmetry ---------------------------------- *)
 
-\* Partition-preserving permutations (same argument as Deliberation.tla):
-\* permutations of Replicas that map Honest → Honest and Byzantine →
-\* Byzantine. Sound for safety-only runs at larger bounds. HotStuff.cfg
-\* omits symmetry because TLC warns symmetry may mask liveness violations
-\* and we want safety proofs in a single run.
+\* Partition-preserving permutations: same approach as Deliberation.tla.
+\* HotStuff.cfg omits symmetry — TLC warns symmetry may mask liveness
+\* violations, and session-2 wants safety proofs clean in a single run.
 Symmetry ==
     {p \in Permutations(Replicas) :
         /\ \A r \in Honest: p[r] \in Honest
