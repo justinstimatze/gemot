@@ -328,7 +328,6 @@ CREATE TABLE IF NOT EXISTS agent_trust_edges (
     PRIMARY KEY (from_agent, to_agent, deliberation_id)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_trust_edges_from ON agent_trust_edges(from_agent);
-CREATE INDEX IF NOT EXISTS idx_agent_trust_edges_delib ON agent_trust_edges(deliberation_id);
 
 -- Migrate pre-v5 databases: existing rows have the v4 (from, to) PK
 -- and no deliberation_id column. ADD COLUMN is a no-op on fresh v5
@@ -336,7 +335,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_trust_edges_delib ON agent_trust_edges(deli
 -- the old constraint's actual existence via a pg_constraint lookup
 -- so it doesn't trip on fresh databases. Existing rows adopt
 -- deliberation_id='' from the DEFAULT — preserves the global graph
--- across the migration.
+-- across the migration. The ADD COLUMN must run BEFORE any index on
+-- deliberation_id or the CREATE INDEX errors on pre-v5 DBs (the
+-- column doesn't exist yet).
 ALTER TABLE agent_trust_edges
     ADD COLUMN IF NOT EXISTS deliberation_id TEXT NOT NULL DEFAULT '';
 DO $$ BEGIN
@@ -351,6 +352,7 @@ DO $$ BEGIN
             ADD PRIMARY KEY (from_agent, to_agent, deliberation_id);
     END IF;
 END $$;
+CREATE INDEX IF NOT EXISTS idx_agent_trust_edges_delib ON agent_trust_edges(deliberation_id);
 
 -- Schema v4: pubkey-bound reputation identity.
 -- `agent_reputation.agent_id` and `agent_trust_edges.from_agent` /
