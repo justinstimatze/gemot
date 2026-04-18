@@ -1,6 +1,7 @@
 package bft
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -152,8 +153,12 @@ func (r *Replica) HandleProposal(p Proposal) error {
 	// Process the justify QC side-effects (advance highQC, lock, try
 	// commit) before sending the vote. The order doesn't affect
 	// correctness but it keeps the commit path inline with the
-	// message that triggered it.
-	r.processJustify(p.Justify)
+	// message that triggered it. A log-append failure aborts the vote
+	// — the replica must not acknowledge a block whose prior-block
+	// commit it could not persist.
+	if err := r.processJustify(p.Justify); err != nil {
+		return err
+	}
 
 	if err := r.transport.Send(expectedLeader, Message{Vote: &vote}); err != nil {
 		return fmt.Errorf("bft: send vote: %w", err)
@@ -185,10 +190,12 @@ func (r *Replica) safeProposal(p Proposal) bool {
 // processJustify applies a proposal's or vote's justify QC to the
 // replica's state: updates highQC, potentially locks on the justified
 // block's grand-parent, and tries to commit under the two-chain rule.
-// Must be called with r.mu held.
-func (r *Replica) processJustify(qc QC) {
+// Must be called with r.mu held. Returns an error if the commit path
+// failed to persist — callers propagate through HandleProposal /
+// HandleVote so the replica halts rather than diverging from the log.
+func (r *Replica) processJustify(qc QC) error {
 	if qc.IsGenesis() {
-		return
+		return nil
 	}
 	if qc.View > r.highQC.View {
 		r.highQC = qc
@@ -198,8 +205,8 @@ func (r *Replica) processJustify(qc QC) {
 	justified, ok := r.knownBlocks[qc.BlockHash]
 	if !ok {
 		// Can't look up the justified block — we'll catch up when we
-		// see the block directly. Session 2 adds explicit block sync.
-		return
+		// see the block directly. Session 5 adds explicit block sync.
+		return nil
 	}
 	if parentBlock, ok := r.knownBlocks[justified.Parent]; ok {
 		parentQC := QC{View: parentBlock.View, BlockHash: justified.Parent}
@@ -208,57 +215,53 @@ func (r *Replica) processJustify(qc QC) {
 		}
 		// Two-chain commit rule: when we see a QC on `justified` whose
 		// parent block has a view exactly one less, commit the parent
-		// block. The subsequent QC at justified.View is the second
-		// chain link that locks in parentBlock's QC as committable.
-		// Yin et al. PODC 2019 §5, the chained-HotStuff commit rule.
+		// block. `justified.Justify` is the QC on parentBlock — that's
+		// the QC we persist along with the commit. Yin et al. PODC 2019
+		// §5, the chained-HotStuff commit rule.
 		if justified.View == parentBlock.View+1 {
-			r.commitBlock(parentBlock)
+			return r.commitBlock(parentBlock, justified.Justify)
 		}
 	}
+	return nil
 }
 
-// commitBlock extends committedLog with b (and any prior unseen
-// ancestors). Idempotent.
+// commitBlock marks b as committed and, if a durable log is attached,
+// persists (Block, QC) before updating in-memory state. qc is the QC
+// that formed on b — available at the caller site as
+// `justified.Justify` under the chained-HotStuff two-chain rule.
 //
-// If the ancestor chain can't be walked all the way back to a
-// committed block (because an intermediate ancestor isn't in
-// knownBlocks — e.g., this replica joined mid-protocol or missed a
-// proposal), commitBlock refuses to commit rather than leave a gap
-// in committedLog. A future proposal that includes the missing
-// ancestor, or session 2's explicit log-replay, will retry and
-// succeed. Violating CommittedChainConsistent by committing a block
-// with unknown ancestors would break the spec invariant.
-func (r *Replica) commitBlock(b Block) {
+// Idempotent: re-committing an already-committed block is a no-op.
+// Refuses to commit if b's parent is not yet committed (and b is not
+// a direct child of genesis) — preserves the
+// CommittedChainConsistent invariant. A missed-ancestor scenario is
+// resolved by session-5 block-sync; session 4 just refuses the
+// out-of-order commit so the log never contains a gap.
+//
+// Persistence order: log-append FIRST, then in-memory update. If the
+// log append fails, the in-memory state does not advance — the
+// replica returns an error and the caller (HandleProposal /
+// HandleVote) propagates, halting protocol progress until the log
+// is recovered. Reversing this order would let an in-memory commit
+// advance past the persisted tail, causing divergence on restart.
+func (r *Replica) commitBlock(b Block, qc QC) error {
 	h := b.Hash()
 	if r.committed[h] {
-		return
+		return nil
 	}
-	// Walk ancestors in reverse chain order, stopping when we reach
-	// genesis or a committed block. If we hit an unknown ancestor,
-	// refuse the commit.
-	var toCommit []Block
-	cur := b
-	for !r.committed[cur.Hash()] {
-		toCommit = append([]Block{cur}, toCommit...)
-		if cur.Parent == (Hash{}) {
-			// Reached genesis; it's already committed at init.
-			break
-		}
-		parentBlock, ok := r.knownBlocks[cur.Parent]
-		if !ok {
-			// Chain broken — refuse to commit rather than create a gap.
-			return
-		}
-		cur = parentBlock
+	// Parent must be already committed (or be genesis). Otherwise
+	// committing b would leave a gap — safety violation of
+	// CommittedChainConsistent.
+	if b.Parent != (Hash{}) && !r.committed[b.Parent] {
+		return nil
 	}
-	for _, blk := range toCommit {
-		bh := blk.Hash()
-		if r.committed[bh] {
-			continue
+	if r.log != nil {
+		if err := r.log.Append(context.Background(), LogEntry{Block: b, QC: qc}); err != nil {
+			return fmt.Errorf("bft: commit log append height %d: %w", b.Height, err)
 		}
-		r.committed[bh] = true
-		r.committedLog = append(r.committedLog, bh)
 	}
+	r.committed[h] = true
+	r.committedLog = append(r.committedLog, h)
+	return nil
 }
 
 // HandleVote is invoked on the leader when a vote arrives from a
@@ -320,7 +323,9 @@ func (r *Replica) HandleVote(v Vote) (*QC, error) {
 	// N+2 when someone else proposes. In a timeout scenario between
 	// round N and N+1, the ex-leader's NewView would carry a stale
 	// highQC, undermining the view-change selection rule.
-	r.processJustify(*qc)
+	if err := r.processJustify(*qc); err != nil {
+		return nil, err
+	}
 	return qc, nil
 }
 

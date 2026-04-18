@@ -386,9 +386,32 @@ DO $$ BEGIN
 EXCEPTION WHEN undefined_table THEN NULL;
 END $$;
 
+-- HotStuff BFT commit log (session 4). Each row is one committed
+-- block plus the QC that formed on it, serialized as JSON. Height is
+-- the primary key so the log is append-ordered and height-unique by
+-- construction — a second (different) block at a height already
+-- present is caught via post-insert hash compare in
+-- PostgresLogStore.Append.
+--
+-- The log is currently unused by service.go (session 4 is
+-- persistence-layer only; service wiring lands in session 5 alongside
+-- multi-node deploy). An empty bft_log has no runtime cost.
+--
+-- block_bytes and qc_bytes are BYTEA-encoded JSON — chosen for MVP
+-- debuggability. Session 5 may migrate to a deterministic binary
+-- format if log size becomes an operational concern.
+CREATE TABLE IF NOT EXISTS bft_log (
+    height BIGINT PRIMARY KEY,
+    block_hash BYTEA NOT NULL,
+    block_bytes BYTEA NOT NULL,
+    qc_bytes BYTEA NOT NULL,
+    committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_bft_log_hash ON bft_log (block_hash);
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (5) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (6) ON CONFLICT DO NOTHING;
