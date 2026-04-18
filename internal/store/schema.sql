@@ -409,9 +409,26 @@ CREATE TABLE IF NOT EXISTS bft_log (
 );
 CREATE INDEX IF NOT EXISTS idx_bft_log_hash ON bft_log (block_hash);
 
+-- HotStuff BFT anti-equivocation vote history (session 5a). One row
+-- per replica records the highest view in which that replica has
+-- emitted a vote and the highest view in which it has emitted a
+-- proposal. These counters are persisted BEFORE the vote or proposal
+-- is broadcast, so a crash-and-restart cannot resurrect a voting
+-- right the replica already used — closing the safety gap left by
+-- session 4 where these counters were memory-only.
+--
+-- Writes are monotonic at the SQL level (GREATEST-based UPSERT in
+-- PostgresVoteHistoryStore). Fresh replicas read (0, 0).
+CREATE TABLE IF NOT EXISTS bft_vote_history (
+    replica_id TEXT PRIMARY KEY,
+    last_voted_view BIGINT NOT NULL DEFAULT 0,
+    last_proposed_view BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (6) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (7) ON CONFLICT DO NOTHING;

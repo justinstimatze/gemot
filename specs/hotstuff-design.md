@@ -1,20 +1,24 @@
-# HotStuff SMR for Gemot: Design (Sessions 1–4)
+# HotStuff SMR for Gemot: Design (Sessions 1–5a)
 
 ## Status
 
-**Session 4 of N.** Session 1 shipped the happy-path state machine,
+**Session 5a of N.** Session 1 shipped the happy-path state machine,
 the TLA+ spec, and the protocol-core Go skeleton. Session 2 added view
 change and a Byzantine adversarial test suite. Session 3 replaced
 the placeholder signer with real BLS12-381 multi-signatures via
-`gnark-crypto`. **Session 4 adds the durable commit log**: a
-`LogStore` interface with in-memory + Postgres implementations, a
-`bft_log` schema-v6 table, a `Replay` helper that reconstructs
-committed state on replica restart, and commit-path persistence
-(`commitBlock` writes log-first-then-memory so the in-memory state
-never advances past the persisted tail). Service-layer integration
-(routing `submit_position`/`vote`/`analyze` through the BFT state
-machine), multi-node deploy, and client-side proof verification
-remain deferred — see "Not in Session 4" below.
+`gnark-crypto`. Session 4 added the durable commit log. **Session 5a
+closes the session-4 anti-equivocation gap**: a `VoteHistoryStore`
+interface with in-memory + Postgres implementations, a
+`bft_vote_history` schema-v7 table, and protocol-path persistence
+(`HandleProposal` saves `lastVotedView` BEFORE emitting a vote;
+`Propose` saves `proposedInView` BEFORE returning the proposal).
+`RestoreVoteHistory` lifts the persisted counters into a fresh
+replica on restart, so a crash-and-restart cannot resurrect a voting
+right the replica already used — safe even under a Byzantine peer
+racing the restart. Service-layer integration (routing
+`submit_position`/`vote`/`analyze` through the BFT state machine),
+multi-node deploy, and client-side proof verification remain
+deferred — see "Not in Session 5a" below.
 
 Deliverable of DARPA-PS-26-09 Track 1 M8 ("Byzantine-tolerant sequence
 agreement," abstract §3).
@@ -411,12 +415,16 @@ acceptance criteria written down here so scope creep is visible.
    attaches a log; `commitBlock` persists (Block, QC) before
    advancing in-memory state. `Replay` reconstructs knownBlocks,
    committed, committedLog, view, highQC, lockedQC from the log.
-   **Known gap**: `lastVotedView` and `proposedInView` are NOT
-   persisted — a crashed-and-restarted replica could equivocate
-   under a Byzantine peer racing the restart. Safe for single-
-   honest-replica crash recovery (which is the current deployment
-   posture); session 5 adds a durable vote-history side-table before
-   the multi-node deploy.
+3a. ~~**Durable vote history.**~~ **Delivered in session 5a.**
+   `VoteHistoryStore` interface + `InMemoryVoteHistoryStore` +
+   `PostgresVoteHistoryStore` (schema v7 `bft_vote_history` table).
+   `HandleProposal` persists `lastVotedView` BEFORE emitting a vote;
+   `Propose` persists `proposedInView` BEFORE returning the proposal.
+   `RestoreVoteHistory` loads the counters into a fresh replica on
+   restart. Monotonic UPSERT (`GREATEST`) prevents stale writes from
+   regressing stored values. Closes the session-4 known gap: a
+   crash-restart can no longer resurrect a voting right the replica
+   already used.
 3. **Service-layer integration.** Sessions 1–2 ship `internal/bft/`
    as an independent package. Session 4 routes
    `internal/deliberation/service.go` writes through the BFT state
