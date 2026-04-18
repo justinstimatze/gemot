@@ -17,3 +17,6 @@ mcp-publisher
 .mcp.json
 /calendar-scheduling
 /diplomacy
+
+# TLA+ model-checker scratch dir
+specs/states/
