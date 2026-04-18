@@ -1344,7 +1344,7 @@ func (a *TextAnalyzer) getCrux(ctx context.Context, deliberationTopic, topicName
 		"required": []string{"crux_claim", "agree", "disagree", "no_clear_position", "explanation", "stances"},
 	}
 
-	// Extract unique participant IDs from claims text (speaker="N" attributes)
+	// Extract unique participant IDs from claims text (participant="N" attributes)
 	participantIDs := extractParticipantIDs(claimsText)
 
 	// Multi-candidate crux generation: generate 3 candidates, pick the most balanced
@@ -1946,11 +1946,17 @@ func (a *TextAnalyzer) filterPlatitudes(ctx context.Context, topic string, state
 	return filtered
 }
 
-// extractParticipantIDs extracts unique speaker IDs from claims XML text (speaker="N" attributes).
+// extractParticipantIDs extracts unique participant IDs from claims XML text
+// (participant="N" attributes emitted by formatClaimsForCrux). The returned
+// comma-joined list feeds the {{PARTICIPANT_IDS}} template variable in the
+// crux-generation prompt, constraining the LLM to assign only real IDs to
+// agree/disagree/no_clear_position/stances fields — an empty list here means
+// the LLM is free to hallucinate participant IDs, which degrades synthesis
+// and was the case historically when this regex targeted the wrong attribute.
 func extractParticipantIDs(claimsText string) string {
 	seen := map[string]bool{}
 	var ids []string
-	for _, match := range regexp.MustCompile(`speaker="(\d+)"`).FindAllStringSubmatch(claimsText, -1) {
+	for _, match := range regexp.MustCompile(`participant="(\d+)"`).FindAllStringSubmatch(claimsText, -1) {
 		if !seen[match[1]] {
 			seen[match[1]] = true
 			ids = append(ids, match[1])
