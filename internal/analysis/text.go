@@ -770,7 +770,11 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	correlationWeightsEarly := CorrelationDiscountedWeights(votes, agents)
 	var reputationWeights map[string]float64
 	if a.Reputation != nil {
-		reputationWeights = a.Reputation.WeightsFor(ctx, agents)
+		rw, err := a.Reputation.WeightsFor(ctx, agents)
+		if err != nil {
+			return nil, fmt.Errorf("reputation weights: %w", err)
+		}
+		reputationWeights = rw
 	}
 	// Effective weights: trust × correlation × reputation × sqrt(conviction × time_weight)
 	// Conviction voting: agents who sustain positions across rounds gain weight.

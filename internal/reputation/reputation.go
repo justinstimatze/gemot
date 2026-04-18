@@ -27,7 +27,18 @@ type Config struct {
 	ColdCap       float64
 	ColdThreshold int
 	Iterations    int
+	// DBFail is "open" (default, preserves legacy behaviour) or
+	// "closed". Under "closed", a LoadReputation failure propagates as
+	// an error from WeightsFor, aborting the round. Under "open", the
+	// weigher falls back to unit weights with a slog.Warn — which in a
+	// Byzantine context silently neutralizes the cold-start defense if
+	// an attacker can DoS Postgres. Hosted deployments should set
+	// GEMOT_EIGENTRUST_DB_FAIL=closed.
+	DBFail string
 }
+
+// DBFailClosed is the sentinel that activates fail-closed semantics.
+const DBFailClosed = "closed"
 
 // Weigher composes the persisted reputation state with the cold-start
 // cap to produce per-agent multipliers for the effective-weight chain
@@ -66,22 +77,33 @@ func NewWeigher(s Store, cfg Config) *Weigher {
 //
 // Reads from the DB on every call; one call per analysis is the
 // current rate. Batching scales as a tracked item in THREAT_MODEL.
-func (r *Weigher) WeightsFor(ctx context.Context, agents []string) map[string]float64 {
+//
+// Returns an error only under Config.DBFail="closed" when the store
+// read fails. Under the default fail-open mode, a store error is
+// logged and the result is unit weights — preserves availability at
+// the cost of stripping the cold-start cap during DB outages.
+func (r *Weigher) WeightsFor(ctx context.Context, agents []string) (map[string]float64, error) {
 	out := make(map[string]float64, len(agents))
 	if len(agents) == 0 {
-		return out
+		return out, nil
 	}
 	reps, err := r.store.LoadReputation(ctx, agents)
 	if err != nil {
+		if r.cfg.DBFail == DBFailClosed {
+			// Fail closed: abort the round rather than silently strip
+			// the cold-start defense. Caller propagates via text.go →
+			// service.Analyze, so the deliberation surfaces an error.
+			return nil, fmt.Errorf("reputation load failed (fail-closed): %w", err)
+		}
 		// Fail open: unit weights keep the deliberation running. This
 		// is the wrong default for a Byzantine-context attacker who can
-		// DoS the DB to strip cold-start; a fail-closed toggle is
-		// tracked in THREAT_MODEL.
+		// DoS the DB to strip cold-start — hence the DBFail="closed"
+		// toggle above.
 		slog.Warn("reputation load failed — falling back to unit weights", "err", err)
 		for _, a := range agents {
 			out[a] = 1.0
 		}
-		return out
+		return out, nil
 	}
 
 	var maxScore float64
@@ -104,7 +126,7 @@ func (r *Weigher) WeightsFor(ctx context.Context, agents []string) map[string]fl
 		normalized := rep.Score / maxScore
 		out[a] = r.cfg.ColdCap + normalized*(1.0-r.cfg.ColdCap)
 	}
-	return out
+	return out, nil
 }
 
 // minDistinctAgreers is the number of distinct non-self agents whose
