@@ -1,15 +1,19 @@
-# HotStuff SMR for Gemot: Design (Session 1)
+# HotStuff SMR for Gemot: Design (Sessions 1–2)
 
 ## Status
 
-**Session 1 of N.** This document specifies the target design.
-Session 1 ships: the design doc you are reading, a TLA+ specification
-(`HotStuff.tla` + `HotStuff.cfg`) model-checked at minimal bounds, and
-a Go protocol-core skeleton (`internal/bft/`) implementing the
-happy-path state transitions behind a placeholder signature scheme
-and an in-memory transport. View change, real threshold signatures,
-service-layer integration, multi-node deploy, and client-side proof
-verification are explicitly deferred — see "Not in Session 1" below.
+**Session 2 of N.** Session 1 shipped the happy-path state machine,
+the TLA+ spec, and the protocol-core Go skeleton. Session 2 adds view
+change — `Timeout()` and `HandleNewView()` methods, pending-NewView
+tallies, domain-separated NewView signatures — and extends the TLA+
+spec with `TriggerTimeout`/`ViewChange` actions, the liveness branch
+of the honest vote rule, and a `ViewMonotonic` property. A dedicated
+adversarial test suite (`internal/bft/adversarial_test.go`) covers
+Byzantine leader stall, cross-view equivocation, partitioned-minority
+liveness, and stale-NewView selection. Real threshold signatures,
+service-layer integration, durable log, multi-node deploy, and
+client-side proof verification remain deferred — see "Not in Session 2"
+below.
 
 Deliverable of DARPA-PS-26-09 Track 1 M8 ("Byzantine-tolerant sequence
 agreement," abstract §3).
@@ -182,9 +186,32 @@ drive a decision. Before GST (or under a Byzantine leader that
 stalls), the view synchronizer times out and triggers NewView, which
 drives view change.
 
-**View change is not in session 1.** Session 1 tests the happy path
-with rotating honest leaders. Session 2 implements view change and
-Byzantine leader tolerance.
+### View Change (Session 2)
+
+A replica that observes no QC in its current view calls `Timeout()`,
+which broadcasts `NewView(view+1, highQC)` signed with domain byte
+`0x03` and advances the replica's local view. Any replica that
+receives 2f+1 NewView messages for a target view `v'` records the
+**highest-view QC among the collected set** as the authoritative
+"view-change justify" for `v'`. When the leader of `v'` subsequently
+calls `Propose`, the protocol transparently substitutes the
+caller-supplied `(parent, justify)` with the collected
+highest-view QC.
+
+This selection rule is the core safety argument for view change (Yin
+et al. §5): the 2f+1 NewView set intersects with any prior 2f+1 vote
+quorum in at least f+1 replicas, so the selected highQC is at least
+as recent as any QC an honest replica had locked. Extending it
+preserves the locked-QC invariant. A Byzantine sender who contributes
+a stale NewView cannot regress the selection — the highest-view QC
+among 2f+1 wins, and the honest majority's NewViews dominate.
+
+The TLA+ spec models this as `TriggerTimeout(r, claimedQC)` and
+`ViewChange(v)`, plus the liveness branch of `HonestCanVote` (vote
+for `b` if `b`'s parent was proposed in a view strictly newer than
+the locked QC's view, even if `b` does not extend the locked block).
+Without the liveness branch, a view change would leave honest
+replicas locked on the pre-timeout branch forever.
 
 ## Threshold Signatures
 
@@ -201,11 +228,13 @@ proposal/vote signature paths end-to-end.
 
 Message-layer domain separation is enforced independently of the
 signer: vote digests are prefixed with `0x01`, proposal digests with
-`0x02`. Under a real threshold-sig scheme this prevents a vote
-signature over `(view, blockhash)` from being replayed as a proposal
-signature (or vice versa). The session-1 placeholder follows the same
-domain boundaries so session 2's swap to real BLS is a pure
-signer-implementation replacement, not a protocol change.
+`0x02`, NewView digests with `0x03` (session-2 addition). Under a
+real threshold-sig scheme these prefixes prevent any one domain's
+signature over `(view, blockhash)` from being replayed as another —
+a vote cannot become a proposal, a NewView cannot impersonate a
+vote. The placeholder follows the same domain boundaries so session
+3's swap to real BLS is a pure signer-implementation replacement,
+not a protocol change.
 
 This is deliberate: we want session-1 protocol tests to fail loudly
 when protocol logic is wrong, not when a crypto library is missing.
@@ -213,7 +242,7 @@ The `PlaceholderSigner` constructor is loudly labeled
 "DO NOT SHIP THIS TO PRODUCTION" and a CI grep for the type name in
 non-test builds catches accidental reuse.
 
-### Real scheme (Session 2+)
+### Real scheme (Session 3+)
 
 **Constraint: no cgo.** The gemot Dockerfile builds with
 `CGO_ENABLED=0`. Adding cgo would break the Fly container build.
@@ -235,7 +264,7 @@ This eliminates the two most popular Go BLS libraries:
 
 **Decision (preliminary):** `gnark-crypto`. ConsenSys maintenance,
 broad adoption in Ethereum ecosystem, minimal additional dependency
-graph beyond what we already pull. Finalize in session 2.
+graph beyond what we already pull. Finalize in session 3.
 
 ### Scheme
 
@@ -291,80 +320,101 @@ Operations that do **not** go through BFT:
 - Envelope nonce cache writes — orthogonal; handled by the existing
   `envelope_nonces` shared-Postgres path.
 
-## What's Not in Session 1
+## What's Not in Session 2
 
-Explicitly deferred. Each item is tracked for session 2+ with
+Explicitly deferred. Each item is tracked for session 3+ with
 acceptance criteria written down here so scope creep is visible.
 
-1. **View change.** Happy-path-only session. Session 2 implements
-   NewView message handling, view synchronizer timer, leader
-   rotation. Acceptance: Byzantine leader stall test (replica 0
-   stops sending proposals in view v; view synchronizer fires;
-   replica 1 becomes leader for view v+1 and drives commit).
-2. **Real threshold signatures.** Placeholder in session 1. Session
-   2 wires `gnark-crypto` (or the finalized scheme), implements
+1. ~~**View change.**~~ **Delivered in session 2.** `Timeout()` +
+   `HandleNewView()` drive view change under Byzantine leader failure;
+   `TestLeaderStall` exercises the canonical case (replica 0 silent,
+   replica 1 becomes leader of view 2, protocol resumes).
+2. **Real threshold signatures.** Placeholder in sessions 1–2. Session
+   3 wires `gnark-crypto` (or the finalized scheme), implements
    distributed key generation or out-of-band key distribution, and
    re-runs protocol tests under real verification.
-3. **Service-layer integration.** Session 1 ships `internal/bft/`
-   as an independent package. Session 3+ routes
+3. **Service-layer integration.** Sessions 1–2 ship `internal/bft/`
+   as an independent package. Session 4 routes
    `internal/deliberation/service.go` writes through the BFT state
    machine. Acceptance: `SubmitPosition` returns a QC proof to the
    client; `Analyze` round close is driven by committed log order,
    not wall-clock.
-4. **Log replay from Postgres.** Session 1 tests use in-memory
-   replicas. Session 2+ implements `bft_log` table + replay on
+4. **Log replay from Postgres.** Sessions 1–2 tests use in-memory
+   replicas. Session 4 implements `bft_log` table + replay on
    replica restart. Acceptance: crash replica 0 mid-view, restart,
    verify it catches up to log head and participates correctly.
-5. **Multi-node deployment.** Session 1 uses
-   `InMemoryTransport` in tests only. Session 4+ implements
-   `HTTPTransport`, configures Fly to run N machines as BFT
-   replicas (or uses a separate replica fleet), adds health checks
-   and replica-roster config.
-6. **Client-side proof verification.** Session 1: replicas form
-   QCs but don't expose them to clients. Session 3: `SubmitPosition`
+5. **Multi-node deployment.** Sessions 1–2 use `InMemoryTransport`
+   in tests only. Session 5 implements `HTTPTransport`, configures
+   Fly to run N machines as BFT replicas (or uses a separate replica
+   fleet), adds health checks and replica-roster config, and wires a
+   real wall-clock `time.Timer` for view-change timeout (session 2
+   tests drive `Timeout()` manually via direct call).
+6. **Client-side proof verification.** Sessions 1–2: replicas form
+   QCs but don't expose them to clients. Session 5: `SubmitPosition`
    response includes a threshold-signed QC; clients verify
    independently using the replica group's public key. Acceptance:
    unit test where a client with the group public key and a QC
    accepts a committed submission and rejects a forged one.
-7. **Byzantine adversarial tests.** Session 1 tests happy path only
-   (all replicas honest). Session 2+ adds tests simulating
-   equivocating leaders, colluding Byzantine replicas, message
-   drop/reorder, and network partition.
+7. **Temporal liveness property in TLA+.** Session 2's spec adds
+   `ViewMonotonic` (a safety-like temporal property stating the view
+   counter never regresses) and models timeout / view-change actions,
+   but does not encode an explicit `<>[]progress` liveness formula.
+   Under fairness assumptions this would express "eventually some
+   honest replica commits," but TLC liveness checking at the current
+   bounds expands state space beyond the 10-second PR-check budget.
+   The session-2 test suite covers liveness empirically; a formal
+   liveness check lands with session 3 or later, guarded by a
+   separate cfg.
 
-## Session 1 Acceptance
+## Session 2 Acceptance
 
-Session 1 ships iff:
+Session 2 ships iff:
 
-1. `specs/hotstuff-design.md` (this doc) exists and covers adversary
-   model, protocol choice rationale, happy-path state machine,
-   commit rule, storage design, deferred list.
-2. `specs/HotStuff.tla` + `HotStuff.cfg` model-check to completion
-   under TLC in under 5 seconds. All safety invariants hold.
-   Stress bounds (`HotStuff_stress.cfg`, `MaxView=4, MaxHeight=2,
-   MaxBlocks=5`) also pass in under 10 seconds and are retained as
-   a regression harness — an earlier draft that modeled `LockOn` as
-   optional failed the stress cfg, motivating the atomic-lock
-   coupling into `FormQC` in the current spec.
-3. `specs/README.md` is updated with a HotStuff entry mirroring the
-   Deliberation spec's section structure, including the
-   generalization-to-arbitrary-n argument.
-4. `internal/bft/` package compiles (`go build ./...`) and all
-   happy-path unit tests pass (`go test ./internal/bft/...`).
-5. Unit tests cover: single-shot commit (N=4, f=1, all honest),
-   pipelined commits (4 rounds commit blocks 1 and 2), safety
-   (replica refuses to vote for a conflicting proposal in the same
-   view), vote threshold (QC forms at 2f+1, not at f+1 or 2f),
-   proposal-sender verification (non-leader sender rejected),
-   proposal-signature verification (tampered signature rejected),
-   leader-side double-propose guard.
+1. `specs/HotStuff.tla` extends session 1 with `newViews`/`timedOut`
+   state, `TriggerTimeout`/`ViewChange` actions, the liveness branch
+   of `HonestCanVote`, a `ViewMonotonic` temporal property, and
+   `NewViewQCIsReal` invariant. TLC passes both tight
+   (`HotStuff.cfg`: `MaxView=2, MaxHeight=2, MaxBlocks=3` —
+   ~14k states, <5s) and stress
+   (`HotStuff_stress.cfg`: `MaxView=3, MaxHeight=2, MaxBlocks=3` —
+   ~540k states, ~10s) with no safety violations.
+2. `internal/bft/` adds `Replica.Timeout()` and
+   `Replica.HandleNewView()`; `pendingNewViews` and
+   `viewChangeHighQC` state; `domainNewView = 0x03` domain byte;
+   `Propose` transparently extends the view-change-selected highQC
+   when acting as post-timeout leader; `HandleVote` integrates the
+   formed QC into the leader's own state so a post-vote timeout
+   carries the correct highQC.
+3. `internal/bft/adversarial_test.go` ships four tests:
+   `TestLeaderStall` (view-change canonical case),
+   `TestLeaderEquivocatesAcrossViews` (safety under Byzantine
+   leader), `TestPartitionedMinority` (no progress without quorum,
+   progress on heal), `TestStaleNewView` (Byzantine stale-highQC
+   loses selection to honest real-highQC). Existing 9 session-1
+   tests continue to pass.
+4. `specs/hotstuff-design.md` (this doc) promotes view change from
+   deferred to delivered and updates the deferred list to
+   sessions 3+.
+5. `specs/README.md` documents the session-2 spec additions.
 6. `THREAT_MODEL.md` row "Byzantine-tolerant sequence agreement"
-   moved from Planned → Partially Implemented with explicit
-   deferred-items caveat.
-7. `CHANGELOG.md` Unreleased entry documents the session-1 scope
-   and lists deferred items so the DARPA bid language does not
-   misrepresent partial BFT as production BFT.
-8. Commit + push to main. **No production deploy** — package is not
-   wired into the service, so nothing changes for prod.
+   remains Partially Implemented, with the sub-caveat updated to
+   reflect view-change + adversarial tests shipping and the
+   remaining deferrals (real sigs, service integration, multi-node
+   deploy, client proof).
+7. `CHANGELOG.md` Unreleased entry documents the session-2 additions.
+8. Commit + push to main. **No production deploy** — `internal/bft/`
+   is still not wired into the service layer, so nothing changes
+   for prod.
+
+## Session 1 Acceptance (historical)
+
+Session 1 shipped at commit `e2a557a` + review fixes at `99b8021`
+with: design doc, TLA+ spec at minimal bounds, Go protocol-core
+happy-path, 9 unit tests, placeholder signer, in-memory transport,
+THREAT\_MODEL and CHANGELOG updates. See the git log for the detailed
+review-fix record (critical: TLA+ spec under-constrained re.
+locked-advance; authentication gaps on proposals; digest domain
+separation).
 
 ## References
 

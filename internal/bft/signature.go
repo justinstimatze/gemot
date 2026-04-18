@@ -15,6 +15,24 @@ import (
 // which silently folded larger IDs under modulo into collisions.
 const placeholderIDLen = 4
 
+// newViewDigest is the byte sequence a replica signs when emitting a
+// NewView message during a view change. Domain byte 0x03 separates it
+// from vote (0x01) and proposal (0x02) signatures; without this, a
+// real signature scheme would let a vote signature be replayed as a
+// NewView. Signs over (newViewTargetView, highQC.View, highQC.BlockHash)
+// — the view the sender is advancing INTO plus the highQC it carries.
+func newViewDigest(targetView View, highQCView View, highQCHash Hash) []byte {
+	out := make([]byte, 0, 1+8+8+len(highQCHash))
+	out = append(out, domainNewView)
+	var buf [8]byte
+	bigEndian8(buf[:], uint64(targetView))
+	out = append(out, buf[:]...)
+	bigEndian8(buf[:], uint64(highQCView))
+	out = append(out, buf[:]...)
+	out = append(out, highQCHash[:]...)
+	return out
+}
+
 // placeholderSigLen is the total byte length of one per-replica
 // placeholder signature: the 4-byte replica ID followed by the 32-byte
 // SHA-256 of the signed message.
