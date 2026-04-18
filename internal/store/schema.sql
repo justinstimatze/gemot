@@ -299,14 +299,58 @@ CREATE TABLE IF NOT EXISTS agent_reputation (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Schema v5: per-deliberation trust-edge partitioning. Rows with
+-- deliberation_id = '' are GLOBAL edges emitted by open/link delibs
+-- and feed the globally-visible EigenTrust eigenvector. Rows with
+-- deliberation_id = <uuid> are PRIVATE edges scoped to that one
+-- deliberation, fed into a per-delib EigenTrust computed on-the-fly
+-- at WeightsFor time. Private-scoped edges do NOT leak into the
+-- global recompute — LoadTrustEdges(ctx, "") filters to '' only.
+--
+-- Private deliberations' WeightsFor call loads WHERE delib_id IN
+-- ('', <uuid>): the global graph is visible to private EigenTrust
+-- (a seasoned agent carries their reputation in), but the private
+-- graph stays isolated from the global one and from other private
+-- delibs.
+--
+-- The PK is (from, to, delib_id) so the same (from, to) pair can
+-- have distinct rows in global and one or more private delib scopes.
+-- Rolling deploys are NOT safe across this PK change: a machine
+-- still running v4 code against v5 schema will ERROR on ON CONFLICT
+-- (from_agent, to_agent). Accept a brief (~30s) maintenance window
+-- for the deploy.
 CREATE TABLE IF NOT EXISTS agent_trust_edges (
     from_agent TEXT NOT NULL,
     to_agent TEXT NOT NULL,
     weight DOUBLE PRECISION DEFAULT 0,
+    deliberation_id TEXT NOT NULL DEFAULT '',
     last_updated TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (from_agent, to_agent)
+    PRIMARY KEY (from_agent, to_agent, deliberation_id)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_trust_edges_from ON agent_trust_edges(from_agent);
+CREATE INDEX IF NOT EXISTS idx_agent_trust_edges_delib ON agent_trust_edges(deliberation_id);
+
+-- Migrate pre-v5 databases: existing rows have the v4 (from, to) PK
+-- and no deliberation_id column. ADD COLUMN is a no-op on fresh v5
+-- creates (the column is already present); the PK swap is gated on
+-- the old constraint's actual existence via a pg_constraint lookup
+-- so it doesn't trip on fresh databases. Existing rows adopt
+-- deliberation_id='' from the DEFAULT — preserves the global graph
+-- across the migration.
+ALTER TABLE agent_trust_edges
+    ADD COLUMN IF NOT EXISTS deliberation_id TEXT NOT NULL DEFAULT '';
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'agent_trust_edges_pkey'
+          AND conrelid = 'agent_trust_edges'::regclass
+          AND array_length(conkey, 1) = 2
+    ) THEN
+        ALTER TABLE agent_trust_edges DROP CONSTRAINT agent_trust_edges_pkey;
+        ALTER TABLE agent_trust_edges
+            ADD PRIMARY KEY (from_agent, to_agent, deliberation_id);
+    END IF;
+END $$;
 
 -- Schema v4: pubkey-bound reputation identity.
 -- `agent_reputation.agent_id` and `agent_trust_edges.from_agent` /
@@ -345,4 +389,4 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (4) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (5) ON CONFLICT DO NOTHING;

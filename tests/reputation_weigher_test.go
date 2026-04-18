@@ -23,8 +23,10 @@ import (
 // (cold-start state), AccumulateTrustEdges sums weights,
 // PersistEigenTrustScores upserts.
 type fakeReputationStore struct {
-	reps   map[string]store.Reputation
-	edges  map[[2]string]float64
+	reps map[string]store.Reputation
+	// edges: key [from, to, delibID] → cumulative weight. delibID=""
+	// is the global partition; non-empty is a private-delib partition.
+	edges  map[[3]string]float64
 	scores map[string]float64
 	// keys pins symbolic agent → active agent_keys.id for the pubkey-
 	// binding tests. Empty for tests that don't care about key identity;
@@ -36,7 +38,7 @@ type fakeReputationStore struct {
 func newFakeRepStore() *fakeReputationStore {
 	return &fakeReputationStore{
 		reps:   map[string]store.Reputation{},
-		edges:  map[[2]string]float64{},
+		edges:  map[[3]string]float64{},
 		scores: map[string]float64{},
 		keys:   map[string]string{},
 	}
@@ -73,20 +75,33 @@ func (f *fakeReputationStore) LoadReputation(ctx context.Context, agents []strin
 	return out, nil
 }
 
-func (f *fakeReputationStore) LoadTrustEdges(_ context.Context) ([]analysis.Edge, error) {
+// LoadTrustEdges in the fake honors the delib-partition convention:
+// delibID="" returns edges whose scope is ""; delibID=<id> returns
+// edges scoped to "" OR that id (mirrors the real store's private-
+// delib union semantics).
+func (f *fakeReputationStore) LoadTrustEdges(_ context.Context, delibID string) ([]analysis.Edge, error) {
 	out := make([]analysis.Edge, 0, len(f.edges))
 	for k, w := range f.edges {
+		if delibID == "" {
+			if k[2] != "" {
+				continue
+			}
+		} else {
+			if k[2] != "" && k[2] != delibID {
+				continue
+			}
+		}
 		out = append(out, analysis.Edge{From: k[0], To: k[1], Weight: w})
 	}
 	return out, nil
 }
 
-func (f *fakeReputationStore) AccumulateTrustEdges(_ context.Context, edges []analysis.Edge, cap float64) error {
+func (f *fakeReputationStore) AccumulateTrustEdges(_ context.Context, edges []analysis.Edge, cap float64, delibID string) error {
 	for _, e := range edges {
 		if e.Weight <= 0 {
 			continue
 		}
-		key := [2]string{e.From, e.To}
+		key := [3]string{e.From, e.To, delibID}
 		sum := f.edges[key] + e.Weight
 		if cap > 0 && sum > cap {
 			sum = cap
@@ -98,12 +113,12 @@ func (f *fakeReputationStore) AccumulateTrustEdges(_ context.Context, edges []an
 
 // ApplyDisputeEdges subtracts weight (mirroring Postgres semantics:
 // negatives allowed; EigenTrust clamps non-positive at input).
-func (f *fakeReputationStore) ApplyDisputeEdges(_ context.Context, edges []analysis.Edge) error {
+func (f *fakeReputationStore) ApplyDisputeEdges(_ context.Context, edges []analysis.Edge, delibID string) error {
 	for _, e := range edges {
 		if e.Weight <= 0 {
 			continue
 		}
-		f.edges[[2]string{e.From, e.To}] -= e.Weight
+		f.edges[[3]string{e.From, e.To, delibID}] -= e.Weight
 	}
 	return nil
 }
@@ -124,6 +139,11 @@ func (f *fakeReputationStore) DecayTrustEdges(_ context.Context, _ time.Duration
 	}
 	return nil
 }
+
+// edgeKey is a test helper: fabricate the [from, to, delibID] tuple
+// used to index the fake store's edge map. delibID defaults to the
+// global partition ("") for tests that pre-date the v5 partitioning.
+func edgeKey(from, to string) [3]string { return [3]string{from, to, ""} }
 
 func (f *fakeReputationStore) IncrementSurvivedCounts(_ context.Context, agents []string) error {
 	for _, a := range agents {
@@ -232,20 +252,20 @@ func TestUpdateFromRoundAccumulatesEdgesAndSurvived(t *testing.T) {
 		"p-alice": "alice",
 	}
 
-	if err := w.UpdateFromRound(context.Background(), cruxes, authors, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 
 	if fs.reps[idV("alice")].SurvivedCount != 1 {
 		t.Fatalf("alice survived_count=%d, want 1", fs.reps[idV("alice")].SurvivedCount)
 	}
-	if fs.edges[[2]string{idV("bob"), idV("alice")}] != 1 {
-		t.Fatalf("expected bob→alice edge weight 1, got %f", fs.edges[[2]string{idV("bob"), idV("alice")}])
+	if fs.edges[edgeKey(idV("bob"), idV("alice"))] != 1 {
+		t.Fatalf("expected bob→alice edge weight 1, got %f", fs.edges[edgeKey(idV("bob"), idV("alice"))])
 	}
-	if fs.edges[[2]string{idV("carol"), idV("alice")}] != 1 {
-		t.Fatalf("expected carol→alice edge weight 1, got %f", fs.edges[[2]string{idV("carol"), idV("alice")}])
+	if fs.edges[edgeKey(idV("carol"), idV("alice"))] != 1 {
+		t.Fatalf("expected carol→alice edge weight 1, got %f", fs.edges[edgeKey(idV("carol"), idV("alice"))])
 	}
-	if _, ok := fs.edges[[2]string{idV("alice"), idV("alice")}]; ok {
+	if _, ok := fs.edges[edgeKey(idV("alice"), idV("alice"))]; ok {
 		t.Fatalf("unexpected self-endorsement edge")
 	}
 	if fs.scores[idV("alice")] <= 0 {
@@ -270,12 +290,12 @@ func TestUpdateFromRoundDedupAgreers(t *testing.T) {
 	}
 	authors := map[string]string{"p-alice": "alice"}
 
-	if err := w.UpdateFromRound(context.Background(), cruxes, authors, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
-	if fs.edges[[2]string{idV("bob"), idV("alice")}] != 1 {
+	if fs.edges[edgeKey(idV("bob"), idV("alice"))] != 1 {
 		t.Fatalf("dup agreers must not double-count; bob→alice weight=%f, want 1",
-			fs.edges[[2]string{idV("bob"), idV("alice")}])
+			fs.edges[edgeKey(idV("bob"), idV("alice"))])
 	}
 }
 
@@ -297,7 +317,7 @@ func TestUpdateFromRoundBlocksSybilPair(t *testing.T) {
 	}
 	authors := map[string]string{"p-A": "A", "p-B": "B"}
 
-	if err := w.UpdateFromRound(context.Background(), cruxes, authors, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 	if fs.reps[idV("A")].SurvivedCount != 0 {

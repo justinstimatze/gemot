@@ -31,7 +31,7 @@ func TestDecayPrunesBelowFloor(t *testing.T) {
 		t.Fatalf("DecayTrustEdges: %v", err)
 	}
 
-	loaded, err := db.LoadTrustEdges(ctx)
+	loaded, err := db.LoadTrustEdges(ctx, "")
 	if err != nil {
 		t.Fatalf("LoadTrustEdges: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestDecayFloorZeroDisablesPruning(t *testing.T) {
 		t.Fatalf("DecayTrustEdges: %v", err)
 	}
 
-	loaded, err := db.LoadTrustEdges(ctx)
+	loaded, err := db.LoadTrustEdges(ctx, "")
 	if err != nil {
 		t.Fatalf("LoadTrustEdges: %v", err)
 	}
@@ -98,12 +98,12 @@ func TestAccumulateCapClamps(t *testing.T) {
 
 	edge := []analysis.Edge{{From: "a", To: "b", Weight: 1.0}}
 	for i := 0; i < 20; i++ {
-		if err := db.AccumulateTrustEdges(ctx, edge, 10.0); err != nil {
+		if err := db.AccumulateTrustEdges(ctx, edge, 10.0, ""); err != nil {
 			t.Fatalf("AccumulateTrustEdges iter %d: %v", i, err)
 		}
 	}
 
-	loaded, err := db.LoadTrustEdges(ctx)
+	loaded, err := db.LoadTrustEdges(ctx, "")
 	if err != nil {
 		t.Fatalf("LoadTrustEdges: %v", err)
 	}
@@ -126,12 +126,12 @@ func TestAccumulateCapZeroDisabled(t *testing.T) {
 
 	edge := []analysis.Edge{{From: "a", To: "b", Weight: 1.0}}
 	for i := 0; i < 15; i++ {
-		if err := db.AccumulateTrustEdges(ctx, edge, 0); err != nil {
+		if err := db.AccumulateTrustEdges(ctx, edge, 0, ""); err != nil {
 			t.Fatalf("AccumulateTrustEdges iter %d: %v", i, err)
 		}
 	}
 
-	loaded, err := db.LoadTrustEdges(ctx)
+	loaded, err := db.LoadTrustEdges(ctx, "")
 	if err != nil {
 		t.Fatalf("LoadTrustEdges: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestDisputeEdgesIgnoreCap(t *testing.T) {
 	// Seed a capped endorsement at 10.0.
 	endorse := []analysis.Edge{{From: "a", To: "b", Weight: 1.0}}
 	for i := 0; i < 20; i++ {
-		if err := db.AccumulateTrustEdges(ctx, endorse, 10.0); err != nil {
+		if err := db.AccumulateTrustEdges(ctx, endorse, 10.0, ""); err != nil {
 			t.Fatalf("accumulate iter %d: %v", i, err)
 		}
 	}
@@ -165,12 +165,12 @@ func TestDisputeEdgesIgnoreCap(t *testing.T) {
 	// Pile 50 disputes of weight 1.0 each. Final weight should be 10 - 50 = -40.
 	dispute := []analysis.Edge{{From: "a", To: "b", Weight: 1.0}}
 	for i := 0; i < 50; i++ {
-		if err := db.ApplyDisputeEdges(ctx, dispute); err != nil {
+		if err := db.ApplyDisputeEdges(ctx, dispute, ""); err != nil {
 			t.Fatalf("dispute iter %d: %v", i, err)
 		}
 	}
 
-	loaded, err := db.LoadTrustEdges(ctx)
+	loaded, err := db.LoadTrustEdges(ctx, "")
 	if err != nil {
 		t.Fatalf("LoadTrustEdges: %v", err)
 	}

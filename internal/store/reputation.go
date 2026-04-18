@@ -140,7 +140,14 @@ func (s *DB) IncrementSurvivedCounts(ctx context.Context, agents []string) error
 // accumulation — ApplyDisputeEdges intentionally has no cap because
 // disputes can go arbitrarily negative (EigenTrust clamps non-positive
 // edges to zero at input).
-func (s *DB) AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, cap float64) error {
+//
+// delibID scopes edges to a partition: "" writes GLOBAL edges (from
+// open/link delibs — feed the globally-visible eigenvector); non-empty
+// writes edges scoped to that deliberation alone (from private delibs —
+// feed a per-delib EigenTrust without leaking into the global graph).
+// The PK is (from, to, delib_id), so the same (from, to) pair can
+// exist in global and one or more private scopes without collision.
+func (s *DB) AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, cap float64, delibID string) error {
 	if len(edges) == 0 {
 		return nil
 	}
@@ -160,40 +167,63 @@ func (s *DB) AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, ca
 	}
 	if cap > 0 {
 		_, err := s.db.ExecContext(ctx,
-			`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, last_updated)
-			 SELECT f, t, LEAST(w, $4), NOW()
+			`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, deliberation_id, last_updated)
+			 SELECT f, t, LEAST(w, $4), $5, NOW()
 			 FROM unnest($1::text[], $2::text[], $3::float8[]) AS u(f, t, w)
-			 ON CONFLICT (from_agent, to_agent) DO UPDATE
+			 ON CONFLICT (from_agent, to_agent, deliberation_id) DO UPDATE
 			 SET weight = LEAST(agent_trust_edges.weight + EXCLUDED.weight, $4),
 			     last_updated = NOW()`,
-			froms, tos, weights, cap)
+			froms, tos, weights, cap, delibID)
 		if err != nil {
 			return fmt.Errorf("accumulate trust edges: %w", err)
 		}
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, last_updated)
-		 SELECT f, t, w, NOW()
+		`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, deliberation_id, last_updated)
+		 SELECT f, t, w, $4, NOW()
 		 FROM unnest($1::text[], $2::text[], $3::float8[]) AS u(f, t, w)
-		 ON CONFLICT (from_agent, to_agent) DO UPDATE
+		 ON CONFLICT (from_agent, to_agent, deliberation_id) DO UPDATE
 		 SET weight = agent_trust_edges.weight + EXCLUDED.weight,
 		     last_updated = NOW()`,
-		froms, tos, weights)
+		froms, tos, weights, delibID)
 	if err != nil {
 		return fmt.Errorf("accumulate trust edges: %w", err)
 	}
 	return nil
 }
 
-// LoadTrustEdges returns the full trust graph. For deployments with
-// many agents this is not scalable long-term — a future version should
-// load only the subgraph reachable from the current cohort. For now
-// power iteration over the full graph is cheap enough (O(V + E)) that
-// a full load is fine at the scales this reaches.
-func (s *DB) LoadTrustEdges(ctx context.Context) ([]analysis.Edge, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT from_agent, to_agent, weight FROM agent_trust_edges`)
+// LoadTrustEdges returns a slice of the trust graph for EigenTrust
+// recomputation.
+//
+// delibID controls the partition:
+//   - "" (empty): GLOBAL graph only. Rows with deliberation_id=” —
+//     the globally-visible eigenvector used for open/link delibs and
+//     returned from WeightsFor for seasoned agents.
+//   - non-empty:  GLOBAL ∪ that delib's private edges. A private
+//     delib's EigenTrust sees the global reputation landscape as
+//     prior (so a seasoned agent carries their reputation in) plus
+//     the delib-scoped edges (so intra-delib patterns matter), but
+//     never another private delib's edges.
+//
+// For deployments with many agents this is not scalable long-term — a
+// future version should load only the subgraph reachable from the
+// current cohort (see THREAT_MODEL: Subgraph-scoped LoadTrustEdges).
+// For now power iteration over the full graph is cheap enough
+// (O(V + E)) that a full load is fine at the scales this reaches.
+func (s *DB) LoadTrustEdges(ctx context.Context, delibID string) ([]analysis.Edge, error) {
+	var rows *sql.Rows
+	var err error
+	if delibID == "" {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT from_agent, to_agent, weight FROM agent_trust_edges
+			 WHERE deliberation_id = ''`)
+	} else {
+		rows, err = s.db.QueryContext(ctx,
+			`SELECT from_agent, to_agent, weight FROM agent_trust_edges
+			 WHERE deliberation_id = '' OR deliberation_id = $1`,
+			delibID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("load trust edges: %w", err)
 	}
@@ -216,7 +246,10 @@ func (s *DB) LoadTrustEdges(ctx context.Context) ([]analysis.Edge, error) {
 // allowed to go negative; EigenTrust clamps non-positive edges to zero
 // at input, so negative storage means "inbound trust mass is cancelled
 // out until disputes are balanced by fresh endorsements."
-func (s *DB) ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge) error {
+//
+// delibID scopes the dispute to the same partition as the edges it
+// cancels: ” for global, <uuid> for a specific private delib.
+func (s *DB) ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge, delibID string) error {
 	if len(edges) == 0 {
 		return nil
 	}
@@ -240,12 +273,12 @@ func (s *DB) ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge) error
 	// refresh, so decay should continue to see the true age of the
 	// inbound-trust signal (the previous endorsement).
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, last_updated)
-		 SELECT f, t, -w, NOW()
+		`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, deliberation_id, last_updated)
+		 SELECT f, t, -w, $4, NOW()
 		 FROM unnest($1::text[], $2::text[], $3::float8[]) AS u(f, t, w)
-		 ON CONFLICT (from_agent, to_agent) DO UPDATE
+		 ON CONFLICT (from_agent, to_agent, deliberation_id) DO UPDATE
 		 SET weight = agent_trust_edges.weight + EXCLUDED.weight`,
-		froms, tos, weights)
+		froms, tos, weights, delibID)
 	if err != nil {
 		return fmt.Errorf("apply dispute edges: %w", err)
 	}
