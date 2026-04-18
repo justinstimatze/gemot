@@ -308,9 +308,41 @@ CREATE TABLE IF NOT EXISTS agent_trust_edges (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_trust_edges_from ON agent_trust_edges(from_agent);
 
+-- Schema v4: pubkey-bound reputation identity.
+-- `agent_reputation.agent_id` and `agent_trust_edges.from_agent` /
+-- `to_agent` now carry a namespaced vertex string:
+--   "key:<agent_keys.id>" when the agent had an active registered key at
+--                         edge-emission / score-persistence time
+--   "id:<agent_id>"       otherwise (unsigned deployments, or agents
+--                         with no registered key)
+-- Binding the vertex to the key-row id (not the symbolic agent_id) at
+-- write time defeats the rename attack: re-registering "alice" under a
+-- different pubkey yields a new `agent_keys.id`, and the new vertex is
+-- distinct from the prior owner's accumulated reputation.
+--
+-- Legit key rotation is also identity-reset: the rotated key gets a fresh
+-- vertex with no accumulated score. This is the intended defense against
+-- a compromised K1 transferring rep to its replacement K2.
+--
+-- The prefixes "key:" and "id:" are reserved; bare agent_ids never go into
+-- these columns — they're always wrapped by the reputation layer.
+--
+-- One-time migration: existing pre-v4 rows use the old bare-agent_id
+-- format which would collide with the new prefix convention. Rather than
+-- attempt an in-place rename (which has rolling-deploy PK-collision
+-- hazards), the v4 migration resets accumulated reputation state. Fresh
+-- rounds after v4 populate in the new format. Document in CHANGELOG.
+DO $$ BEGIN
+    IF (SELECT COALESCE(MAX(version), 0) FROM schema_version) < 4 THEN
+        DELETE FROM agent_reputation;
+        DELETE FROM agent_trust_edges;
+    END IF;
+EXCEPTION WHEN undefined_table THEN NULL;
+END $$;
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (3) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (4) ON CONFLICT DO NOTHING;

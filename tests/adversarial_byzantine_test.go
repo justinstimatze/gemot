@@ -444,17 +444,24 @@ func TestByzantineColdStartFlooding(t *testing.T) {
 	h := newByzantineHarness(t, 5, byzantineMockLLM(types))
 
 	// Seed the legit agents as graduated with moderate scores.
+	// Write-side reputation APIs take vertex-form strings (schema v4);
+	// none of these agents have registered keys so they all resolve to
+	// "id:<name>".
 	ctx := context.Background()
-	if err := h.db.IncrementSurvivedCounts(ctx, legit); err != nil {
+	legitVertices := make([]string, len(legit))
+	for i, a := range legit {
+		legitVertices[i] = idV(a)
+	}
+	if err := h.db.IncrementSurvivedCounts(ctx, legitVertices); err != nil {
 		t.Fatalf("seed legit: %v", err)
 	}
 	for i := 0; i < 5; i++ {
-		if err := h.db.IncrementSurvivedCounts(ctx, legit); err != nil {
+		if err := h.db.IncrementSurvivedCounts(ctx, legitVertices); err != nil {
 			t.Fatalf("seed legit iter %d: %v", i, err)
 		}
 	}
 	if err := h.db.PersistEigenTrustScores(ctx, map[string]float64{
-		"legit-0": 0.5, "legit-1": 0.5,
+		idV("legit-0"): 0.5, idV("legit-1"): 0.5,
 	}); err != nil {
 		t.Fatalf("persist seeds: %v", err)
 	}
@@ -517,9 +524,10 @@ func TestByzantineReputationLaundering(t *testing.T) {
 	h := newByzantineHarness(t, 3, byzantineMockLLM(types))
 	ctx := context.Background()
 
-	// Pre-seed the cycler as already graduated.
+	// Pre-seed the cycler as already graduated. IncrementSurvivedCounts
+	// takes vertex-form strings (schema v4); unsigned agents get "id:" prefix.
 	for i := 0; i < 5; i++ {
-		if err := h.db.IncrementSurvivedCounts(ctx, []string{"cycler"}); err != nil {
+		if err := h.db.IncrementSurvivedCounts(ctx, []string{idV("cycler")}); err != nil {
 			t.Fatalf("seed cycler: %v", err)
 		}
 	}

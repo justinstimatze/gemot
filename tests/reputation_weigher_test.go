@@ -14,14 +14,22 @@ import (
 )
 
 // fakeReputationStore is an in-memory ReputationStore for unit tests.
-// Mirrors the Postgres semantics: LoadReputation returns only rows that
-// exist (missing agents are absent from the map, not present with
-// zero values), AccumulateTrustEdges sums weights, PersistEigenTrustScores
-// upserts.
+// Mirrors the Postgres semantics after schema v4: the reps/edges/scores
+// maps are keyed on *vertex strings* ("id:<agent>" for unsigned agents,
+// "key:<keyID>" for agents with an active key). The LoadReputation
+// surface takes symbolic agent names and resolves them through the
+// ResolveVertices helper so callers see the same key-agnostic API as
+// in production. Missing rows are absent from LoadReputation's output
+// (cold-start state), AccumulateTrustEdges sums weights,
+// PersistEigenTrustScores upserts.
 type fakeReputationStore struct {
-	reps      map[string]store.Reputation
-	edges     map[[2]string]float64
-	scores    map[string]float64
+	reps   map[string]store.Reputation
+	edges  map[[2]string]float64
+	scores map[string]float64
+	// keys pins symbolic agent → active agent_keys.id for the pubkey-
+	// binding tests. Empty for tests that don't care about key identity;
+	// in that case every agent resolves to its "id:<agent>" form.
+	keys      map[string]string
 	decayCall int
 }
 
@@ -30,13 +38,35 @@ func newFakeRepStore() *fakeReputationStore {
 		reps:   map[string]store.Reputation{},
 		edges:  map[[2]string]float64{},
 		scores: map[string]float64{},
+		keys:   map[string]string{},
 	}
 }
 
-func (f *fakeReputationStore) LoadReputation(_ context.Context, agents []string) (map[string]store.Reputation, error) {
+// idV is the vertex string for an agent with no active key. Used by
+// tests to assert against stored rows without re-deriving the prefix.
+func idV(agent string) string { return store.VertexIDPrefix + agent }
+
+// keyV is the vertex string for an agent bound to a specific key id.
+func keyV(keyID string) string { return store.VertexKeyPrefix + keyID }
+
+func (f *fakeReputationStore) ResolveVertices(_ context.Context, agents []string) (map[string]string, error) {
+	out := make(map[string]string, len(agents))
+	for _, a := range agents {
+		if keyID, ok := f.keys[a]; ok && keyID != "" {
+			out[a] = keyV(keyID)
+		} else {
+			out[a] = idV(a)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeReputationStore) LoadReputation(ctx context.Context, agents []string) (map[string]store.Reputation, error) {
+	vertices, _ := f.ResolveVertices(ctx, agents)
 	out := map[string]store.Reputation{}
 	for _, a := range agents {
-		if r, ok := f.reps[a]; ok {
+		if r, ok := f.reps[vertices[a]]; ok {
+			r.AgentID = a
 			out[a] = r
 		}
 	}
@@ -110,8 +140,8 @@ func TestColdStartCapClampsNewAgents(t *testing.T) {
 	fs := newFakeRepStore()
 	// Seed: "seasoned" has high score and graduated survived_count.
 	// "newcomer" has the same score but zero survived_count.
-	fs.reps["seasoned"] = store.Reputation{AgentID: "seasoned", Score: 0.5, SurvivedCount: 10}
-	fs.reps["newcomer"] = store.Reputation{AgentID: "newcomer", Score: 0.5, SurvivedCount: 0}
+	fs.reps[idV("seasoned")] = store.Reputation{AgentID: idV("seasoned"), Score: 0.5, SurvivedCount: 10}
+	fs.reps[idV("newcomer")] = store.Reputation{AgentID: idV("newcomer"), Score: 0.5, SurvivedCount: 0}
 
 	w := reputation.NewWeigher(fs, reputation.Config{
 		Enabled:       true,
@@ -147,8 +177,8 @@ func TestGraduationIsMonotonicWithinCohort(t *testing.T) {
 	fs := newFakeRepStore()
 	// Two agents both at survived_count = threshold - 1 and = threshold,
 	// with the same score. The second graduated, the first did not.
-	fs.reps["pre"] = store.Reputation{AgentID: "pre", Score: 0.0, SurvivedCount: 4}
-	fs.reps["post"] = store.Reputation{AgentID: "post", Score: 0.0, SurvivedCount: 5}
+	fs.reps[idV("pre")] = store.Reputation{AgentID: idV("pre"), Score: 0.0, SurvivedCount: 4}
+	fs.reps[idV("post")] = store.Reputation{AgentID: idV("post"), Score: 0.0, SurvivedCount: 5}
 
 	w := reputation.NewWeigher(fs, reputation.Config{
 		Enabled:       true,
@@ -194,20 +224,20 @@ func TestUpdateFromRoundAccumulatesEdgesAndSurvived(t *testing.T) {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 
-	if fs.reps["alice"].SurvivedCount != 1 {
-		t.Fatalf("alice survived_count=%d, want 1", fs.reps["alice"].SurvivedCount)
+	if fs.reps[idV("alice")].SurvivedCount != 1 {
+		t.Fatalf("alice survived_count=%d, want 1", fs.reps[idV("alice")].SurvivedCount)
 	}
-	if fs.edges[[2]string{"bob", "alice"}] != 1 {
-		t.Fatalf("expected bob→alice edge weight 1, got %f", fs.edges[[2]string{"bob", "alice"}])
+	if fs.edges[[2]string{idV("bob"), idV("alice")}] != 1 {
+		t.Fatalf("expected bob→alice edge weight 1, got %f", fs.edges[[2]string{idV("bob"), idV("alice")}])
 	}
-	if fs.edges[[2]string{"carol", "alice"}] != 1 {
-		t.Fatalf("expected carol→alice edge weight 1, got %f", fs.edges[[2]string{"carol", "alice"}])
+	if fs.edges[[2]string{idV("carol"), idV("alice")}] != 1 {
+		t.Fatalf("expected carol→alice edge weight 1, got %f", fs.edges[[2]string{idV("carol"), idV("alice")}])
 	}
-	if _, ok := fs.edges[[2]string{"alice", "alice"}]; ok {
+	if _, ok := fs.edges[[2]string{idV("alice"), idV("alice")}]; ok {
 		t.Fatalf("unexpected self-endorsement edge")
 	}
-	if fs.scores["alice"] <= 0 {
-		t.Fatalf("alice should have positive score after round, got %f", fs.scores["alice"])
+	if fs.scores[idV("alice")] <= 0 {
+		t.Fatalf("alice should have positive score after round, got %f", fs.scores[idV("alice")])
 	}
 }
 
@@ -231,9 +261,9 @@ func TestUpdateFromRoundDedupAgreers(t *testing.T) {
 	if err := w.UpdateFromRound(context.Background(), cruxes, authors, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
-	if fs.edges[[2]string{"bob", "alice"}] != 1 {
+	if fs.edges[[2]string{idV("bob"), idV("alice")}] != 1 {
 		t.Fatalf("dup agreers must not double-count; bob→alice weight=%f, want 1",
-			fs.edges[[2]string{"bob", "alice"}])
+			fs.edges[[2]string{idV("bob"), idV("alice")}])
 	}
 }
 
@@ -258,13 +288,13 @@ func TestUpdateFromRoundBlocksSybilPair(t *testing.T) {
 	if err := w.UpdateFromRound(context.Background(), cruxes, authors, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
-	if fs.reps["A"].SurvivedCount != 0 {
+	if fs.reps[idV("A")].SurvivedCount != 0 {
 		t.Fatalf("Sybil A must not graduate on a pair ring; survived_count=%d",
-			fs.reps["A"].SurvivedCount)
+			fs.reps[idV("A")].SurvivedCount)
 	}
-	if fs.reps["B"].SurvivedCount != 0 {
+	if fs.reps[idV("B")].SurvivedCount != 0 {
 		t.Fatalf("Sybil B must not graduate on a pair ring; survived_count=%d",
-			fs.reps["B"].SurvivedCount)
+			fs.reps[idV("B")].SurvivedCount)
 	}
 }
 
@@ -278,12 +308,12 @@ func TestSybilRingStarvedByColdCap(t *testing.T) {
 	// Sybils have pumped their score to 0.9 via internal edges, but
 	// their survived_count is 0 because no external agent has validated
 	// any of their positions.
-	fs.reps["S1"] = store.Reputation{AgentID: "S1", Score: 0.9, SurvivedCount: 0}
-	fs.reps["S2"] = store.Reputation{AgentID: "S2", Score: 0.9, SurvivedCount: 0}
-	fs.reps["S3"] = store.Reputation{AgentID: "S3", Score: 0.9, SurvivedCount: 0}
+	fs.reps[idV("S1")] = store.Reputation{AgentID: idV("S1"), Score: 0.9, SurvivedCount: 0}
+	fs.reps[idV("S2")] = store.Reputation{AgentID: idV("S2"), Score: 0.9, SurvivedCount: 0}
+	fs.reps[idV("S3")] = store.Reputation{AgentID: idV("S3"), Score: 0.9, SurvivedCount: 0}
 	// Legit agent has lower raw score but has accumulated validations
 	// across many deliberations.
-	fs.reps["legit"] = store.Reputation{AgentID: "legit", Score: 0.3, SurvivedCount: 20}
+	fs.reps[idV("legit")] = store.Reputation{AgentID: idV("legit"), Score: 0.3, SurvivedCount: 20}
 
 	w := reputation.NewWeigher(fs, reputation.Config{
 		Enabled:       true,
