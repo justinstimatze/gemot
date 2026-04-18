@@ -15,6 +15,7 @@ import (
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/llm"
 	"github.com/justinstimatze/gemot/internal/mcp"
+	"github.com/justinstimatze/gemot/internal/reputation"
 	"github.com/justinstimatze/gemot/internal/store"
 )
 
@@ -52,6 +53,16 @@ func cmdServe(httpMode bool, addr string) {
 	// Cost tracker
 	tracker := cost.NewTracker()
 
+	// EigenTrust reputation weigher — nil when the feature is disabled.
+	// Wired into both the synthesizer (reads scores during analysis) and
+	// the service (writes edges/survived counts after each round).
+	repWeigher := reputation.NewWeigher(db, reputation.Config{
+		Enabled:       cfg.EigenTrustEnabled,
+		ColdCap:       cfg.EigenTrustColdCap,
+		ColdThreshold: cfg.EigenTrustColdThreshold,
+		Iterations:    cfg.EigenTrustIterations,
+	})
+
 	var analyzer deliberation.Analyzer
 	if cfg.AnthropicKey != "" {
 		client := llm.NewClient(cfg.AnthropicKey, cfg.Model)
@@ -75,6 +86,9 @@ func cmdServe(httpMode bool, addr string) {
 			synth.SetStabilityCheckSamples(cfg.StabilitySamples)
 			fmt.Fprintf(os.Stderr, "gemot: crux-stability re-sampling enabled (N=%d) — each generated crux will incur ~%d extra LLM calls\n", cfg.StabilitySamples, cfg.StabilitySamples*2)
 		}
+		if repWeigher != nil {
+			synth.SetReputation(repWeigher)
+		}
 		analyzer = synth
 	} else {
 		fmt.Fprintf(os.Stderr, "Warning: ANTHROPIC_API_KEY not set, analysis will not be available\n")
@@ -85,6 +99,9 @@ func cmdServe(httpMode bool, addr string) {
 	if synth, ok := analyzer.(*analysis.Synthesizer); ok {
 		svc.SetCompromiseGenerator(synth)
 		svc.SetReframer(synth)
+	}
+	if repWeigher != nil {
+		svc.SetReputationUpdater(repWeigher)
 	}
 	// LLM content screening (Haiku classifier for position moderation)
 	if cfg.AnthropicKey != "" {

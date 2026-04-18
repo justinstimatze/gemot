@@ -14,6 +14,7 @@ import (
 
 	"github.com/justinstimatze/gemot/internal/auth"
 	"github.com/justinstimatze/gemot/internal/sanitize"
+	"github.com/justinstimatze/gemot/types"
 )
 
 // ErrAgentKeyNotFound is returned by AgentKeyStore.GetActiveAgentKey when the agent
@@ -233,12 +234,21 @@ func WithSignature(sig []byte) PositionOption {
 }
 
 // Service orchestrates deliberation operations.
+// RoundReputationUpdater is the narrow contract the service needs for
+// updating the reputation layer after each round. Defined here (not in
+// the reputation package) to avoid a deliberation → reputation →
+// analysis → deliberation import cycle.
+type RoundReputationUpdater interface {
+	UpdateFromRound(ctx context.Context, cruxes []types.Crux, positionAuthors map[string]string) error
+}
+
 type Service struct {
 	store             Store
 	analyzer          Analyzer
 	compromiser       CompromiseGenerator
 	reframer          Reframer
 	contentClassifier sanitize.Classifier
+	reputation        RoundReputationUpdater
 	events            *EventBus // nil = no event emission
 
 	// Active analysis cancellation: deliberation_id → cancel func.
@@ -291,6 +301,13 @@ func (s *Service) resolutionLock(deliberationID string) *sync.Mutex {
 // SetContentClassifier sets the LLM content screening function.
 func (s *Service) SetContentClassifier(c sanitize.Classifier) {
 	s.contentClassifier = c
+}
+
+// SetReputationUpdater wires the persistent EigenTrust + cold-start
+// reputation layer. The service calls UpdateFromRound after each
+// successful round analysis. Pass nil to disable.
+func (s *Service) SetReputationUpdater(r RoundReputationUpdater) {
+	s.reputation = r
 }
 
 // SetEventBus enables event emission for state changes.
@@ -1234,6 +1251,20 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	if err := s.store.SaveAnalysisResult(ctx, deliberationID, d.Round, result); err != nil {
 		resetStatus()
 		return nil, err
+	}
+
+	// Reputation: update edges + survived_count from this round's cruxes,
+	// then recompute the global EigenTrust eigenvector. Non-fatal on
+	// failure — reputation is a signal, not a correctness property, so
+	// a DB hiccup here should not abort the round.
+	if s.reputation != nil {
+		positionAuthors := make(map[string]string, len(positions))
+		for _, p := range positions {
+			positionAuthors[p.ID] = p.AgentID
+		}
+		if err := s.reputation.UpdateFromRound(ctx, result.Cruxes, positionAuthors); err != nil {
+			slog.Warn("reputation update failed", "deliberation", deliberationID, "err", err)
+		}
 	}
 
 	if err := s.store.AdvanceRound(ctx, deliberationID); err != nil {

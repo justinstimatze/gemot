@@ -36,6 +36,13 @@ func (s *Synthesizer) SetStabilityCheckSamples(n int) {
 	s.text.StabilityCheckSamples = n
 }
 
+// SetReputation wires the persistent EigenTrust + cold-start reputation
+// layer into the effective-weight chain. Pass nil (or leave unset) to
+// keep the feature disabled — this is the default.
+func (s *Synthesizer) SetReputation(r ReputationWeigher) {
+	s.text.Reputation = r
+}
+
 // GenerateCompromise produces a compromise statement from analysis results.
 func (s *Synthesizer) GenerateCompromise(ctx context.Context, topic string, result *deliberation.AnalysisResult) (string, error) {
 	return s.text.GenerateCompromise(ctx, topic, result)
