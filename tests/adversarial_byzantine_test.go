@@ -480,7 +480,10 @@ func TestByzantineColdStartFlooding(t *testing.T) {
 	// 1.0. Other factors (trust, correlation, conviction, time) in the
 	// effective-weight chain can scale this up or down, but the
 	// reputation lever is the one we're measuring.
-	reps := h.weigher.WeightsFor(ctx, agents)
+	reps, err := h.weigher.WeightsFor(ctx, agents)
+	if err != nil {
+		t.Fatalf("WeightsFor: %v", err)
+	}
 	var sybilRepSum float64
 	for _, a := range sybils {
 		sybilRepSum += reps[a]
@@ -589,7 +592,10 @@ func TestByzantineCruxPoisoning(t *testing.T) {
 	// this does NOT retroactively sanitize the already-warned cruxes.
 	// The cap only multiplies into the effective-weight chain at the
 	// consensus/bridging stage.
-	weights := h.weigher.WeightsFor(context.Background(), agents)
+	weights, err := h.weigher.WeightsFor(context.Background(), agents)
+	if err != nil {
+		t.Fatalf("WeightsFor: %v", err)
+	}
 	if weights["poisoner-3"] != 0.1 {
 		t.Fatalf("poisoner should be cold-capped at 0.1, got %f", weights["poisoner-3"])
 	}
@@ -647,7 +653,10 @@ func TestByzantineGraduationCliff(t *testing.T) {
 		}
 	}
 
-	weights := h.weigher.WeightsFor(ctx, sybils)
+	weights, err := h.weigher.WeightsFor(ctx, sybils)
+	if err != nil {
+		t.Fatalf("WeightsFor: %v", err)
+	}
 	var ringSum float64
 	for _, s := range sybils {
 		ringSum += weights[s]
@@ -660,7 +669,7 @@ func TestByzantineGraduationCliff(t *testing.T) {
 				s, weights[s])
 		}
 	}
-	t.Logf("[cliff] DOCUMENTED LIMITATION: N>=3 mutual-endorsement ring defeats " +
+	t.Logf("[cliff] DOCUMENTED LIMITATION: N>=3 mutual-endorsement ring defeats "+
 		"minDistinctAgreers=%d. Motivates agent_trust_edges decay + dispute-signal ingestion.",
 		2)
 }
@@ -703,7 +712,10 @@ func TestByzantineReframingAttack(t *testing.T) {
 			}
 		}
 	}
-	weights := h.weigher.WeightsFor(context.Background(), agents)
+	weights, err := h.weigher.WeightsFor(context.Background(), agents)
+	if err != nil {
+		t.Fatalf("WeightsFor: %v", err)
+	}
 	t.Logf("[framing] reputation weights: honest=%.3f framer=%.3f (both cold-capped)",
 		weights["honest-0"], weights["framer-1"])
 	t.Logf("[framing] reputation does not defend against framing; cross-family " +

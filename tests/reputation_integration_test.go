@@ -126,7 +126,10 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 	// Cohort weights after round 1. Nobody has graduated (threshold=2,
 	// alice has survived_count=1).
 	agents := []string{"alice", "bob", "carol"}
-	weights := w.WeightsFor(ctx, agents)
+	weights, err := w.WeightsFor(ctx, agents)
+	if err != nil {
+		t.Fatalf("round 1 WeightsFor: %v", err)
+	}
 	for _, a := range agents {
 		if weights[a] != 0.1 {
 			t.Fatalf("round 1: %s should be cold-capped at 0.1, got %f", a, weights[a])
@@ -145,7 +148,10 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 
 	// After round 2: alice has survived_count=2 (graduated). bob and
 	// carol are still cold. Alice's weight should exceed 0.1.
-	weights = w.WeightsFor(ctx, agents)
+	weights, err = w.WeightsFor(ctx, agents)
+	if err != nil {
+		t.Fatalf("round 2 WeightsFor: %v", err)
+	}
 	if weights["alice"] <= 0.1 {
 		t.Fatalf("round 2: alice should be graduated (weight > 0.1), got %f", weights["alice"])
 	}

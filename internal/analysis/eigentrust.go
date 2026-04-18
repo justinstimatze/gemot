@@ -16,7 +16,11 @@ import "context"
 // config (for the cold-start threshold and cap). Defining the interface
 // here avoids a store → analysis dependency.
 type ReputationWeigher interface {
-	WeightsFor(ctx context.Context, agents []string) map[string]float64
+	// WeightsFor returns the per-agent weight map. A non-nil error
+	// signals the implementation is in fail-closed mode and the
+	// backing store was unreachable — callers must abort the analysis
+	// rather than proceed with neutralized reputation.
+	WeightsFor(ctx context.Context, agents []string) (map[string]float64, error)
 }
 
 // EigenTrust implements the global trust-eigenvector computation of

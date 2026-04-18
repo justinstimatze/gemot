@@ -33,6 +33,11 @@ type Config struct {
 	EigenTrustColdCap       float64 // default 0.1
 	EigenTrustColdThreshold int     // default 5
 	EigenTrustIterations    int     // default 50
+	// EigenTrustDBFail is "open" (default) or "closed". Under
+	// "closed", a reputation DB read failure aborts the analysis round
+	// rather than silently degrading to unit weights. Recommended for
+	// hosted / Byzantine-context deployments; see THREAT_MODEL.md.
+	EigenTrustDBFail string
 }
 
 // Load reads configuration from environment variables (and optional .env file).
@@ -49,6 +54,7 @@ func Load() *Config {
 		EigenTrustColdCap:       envFloat("GEMOT_EIGENTRUST_COLD_CAP", 0.1),
 		EigenTrustColdThreshold: envInt("GEMOT_EIGENTRUST_COLD_THRESHOLD", 5),
 		EigenTrustIterations:    envInt("GEMOT_EIGENTRUST_ITERATIONS", 50),
+		EigenTrustDBFail:        envDBFailMode("GEMOT_EIGENTRUST_DB_FAIL", "open"),
 	}
 
 	// Validate model is in known set
@@ -68,8 +74,8 @@ func Load() *Config {
 
 	if cfg.EigenTrustEnabled {
 		fmt.Fprintf(os.Stderr,
-			"gemot: EigenTrust reputation enabled (cold_cap=%.2f, cold_threshold=%d, iterations=%d)\n",
-			cfg.EigenTrustColdCap, cfg.EigenTrustColdThreshold, cfg.EigenTrustIterations)
+			"gemot: EigenTrust reputation enabled (cold_cap=%.2f, cold_threshold=%d, iterations=%d, db_fail=%s)\n",
+			cfg.EigenTrustColdCap, cfg.EigenTrustColdThreshold, cfg.EigenTrustIterations, cfg.EigenTrustDBFail)
 	}
 
 	return cfg
@@ -91,6 +97,22 @@ func envBool(key string, fallback bool) bool {
 		return false
 	default:
 		fmt.Fprintf(os.Stderr, "gemot: WARNING: %s=%q is not a boolean, using default %v\n", key, raw, fallback)
+		return fallback
+	}
+}
+
+// envDBFailMode reads a fail-mode env var. Accepts "open" or "closed".
+// Unrecognized values warn and fall back to the default.
+func envDBFailMode(key, fallback string) string {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if raw == "" {
+		return fallback
+	}
+	switch raw {
+	case "open", "closed":
+		return raw
+	default:
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: %s=%q must be open|closed, using default %q\n", key, raw, fallback)
 		return fallback
 	}
 }

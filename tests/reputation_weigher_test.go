@@ -2,6 +2,8 @@ package tests
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
@@ -93,7 +95,10 @@ func TestColdStartCapClampsNewAgents(t *testing.T) {
 		ColdThreshold: 5,
 		Iterations:    50,
 	})
-	weights := w.WeightsFor(context.Background(), []string{"seasoned", "newcomer"})
+	weights, err := w.WeightsFor(context.Background(), []string{"seasoned", "newcomer"})
+	if err != nil {
+		t.Fatalf("WeightsFor: %v", err)
+	}
 
 	if weights["newcomer"] != 0.1 {
 		t.Fatalf("cold-start agent must receive exactly cold_cap=0.1, got %f", weights["newcomer"])
@@ -127,7 +132,10 @@ func TestGraduationIsMonotonicWithinCohort(t *testing.T) {
 		ColdThreshold: 5,
 		Iterations:    50,
 	})
-	weights := w.WeightsFor(context.Background(), []string{"pre", "post"})
+	weights, err := w.WeightsFor(context.Background(), []string{"pre", "post"})
+	if err != nil {
+		t.Fatalf("WeightsFor: %v", err)
+	}
 
 	if weights["post"] < weights["pre"] {
 		t.Fatalf("graduation must be non-decreasing: pre=%f post=%f",
@@ -259,7 +267,10 @@ func TestSybilRingStarvedByColdCap(t *testing.T) {
 		ColdThreshold: 5,
 		Iterations:    50,
 	})
-	weights := w.WeightsFor(context.Background(), []string{"S1", "S2", "S3", "legit"})
+	weights, err := w.WeightsFor(context.Background(), []string{"S1", "S2", "S3", "legit"})
+	if err != nil {
+		t.Fatalf("WeightsFor: %v", err)
+	}
 
 	// All Sybils clamped to ColdCap.
 	for _, s := range []string{"S1", "S2", "S3"} {
@@ -283,5 +294,77 @@ func TestDisabledReputationReturnsNil(t *testing.T) {
 	w := reputation.NewWeigher(fs, reputation.Config{Enabled: false})
 	if w != nil {
 		t.Fatalf("disabled config must yield nil weigher, got %+v", w)
+	}
+}
+
+// failingRepStore wraps fakeReputationStore and forces LoadReputation
+// to return an error. Other methods delegate so tests can still
+// exercise the non-load paths if needed.
+type failingRepStore struct {
+	*fakeReputationStore
+	err error
+}
+
+func (f *failingRepStore) LoadReputation(_ context.Context, _ []string) (map[string]store.Reputation, error) {
+	return nil, f.err
+}
+
+// TestWeightsForFailsClosedOnDBError: under DBFail="closed" a store
+// read failure must propagate as an error so the caller aborts the
+// analysis round rather than silently neutralizing the cold-start
+// defense. This is the Byzantine-context fix the adversarial test
+// suite surfaced — an attacker who can DoS Postgres would otherwise
+// strip all reputation weighting.
+func TestWeightsForFailsClosedOnDBError(t *testing.T) {
+	stubErr := errors.New("simulated postgres outage")
+	fs := &failingRepStore{fakeReputationStore: newFakeRepStore(), err: stubErr}
+
+	w := reputation.NewWeigher(fs, reputation.Config{
+		Enabled:       true,
+		ColdCap:       0.1,
+		ColdThreshold: 5,
+		Iterations:    50,
+		DBFail:        reputation.DBFailClosed,
+	})
+
+	weights, err := w.WeightsFor(context.Background(), []string{"alice", "bob"})
+	if err == nil {
+		t.Fatalf("DBFail=closed must propagate store error, got weights=%v err=nil", weights)
+	}
+	if weights != nil {
+		t.Fatalf("DBFail=closed must return nil weights on error, got %v", weights)
+	}
+	if !errors.Is(err, stubErr) {
+		t.Fatalf("returned error must wrap underlying store error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "fail-closed") {
+		t.Fatalf("error message should mention fail-closed for operator diagnosis, got %q", err.Error())
+	}
+}
+
+// TestWeightsForFailsOpenOnDBError: default (DBFail unset / "open")
+// preserves legacy behaviour — a store read failure degrades to unit
+// weights with a slog.Warn. Keeps availability as the default when
+// operators have not opted into fail-closed.
+func TestWeightsForFailsOpenOnDBError(t *testing.T) {
+	fs := &failingRepStore{fakeReputationStore: newFakeRepStore(), err: errors.New("db down")}
+
+	w := reputation.NewWeigher(fs, reputation.Config{
+		Enabled:       true,
+		ColdCap:       0.1,
+		ColdThreshold: 5,
+		Iterations:    50,
+		// DBFail left empty → default fail-open.
+	})
+
+	agents := []string{"alice", "bob"}
+	weights, err := w.WeightsFor(context.Background(), agents)
+	if err != nil {
+		t.Fatalf("DBFail=open must swallow store error, got %v", err)
+	}
+	for _, a := range agents {
+		if weights[a] != 1.0 {
+			t.Fatalf("fail-open must return unit weights, got %s=%f", a, weights[a])
+		}
 	}
 }

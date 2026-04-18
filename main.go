@@ -61,6 +61,7 @@ func cmdServe(httpMode bool, addr string) {
 		ColdCap:       cfg.EigenTrustColdCap,
 		ColdThreshold: cfg.EigenTrustColdThreshold,
 		Iterations:    cfg.EigenTrustIterations,
+		DBFail:        cfg.EigenTrustDBFail,
 	})
 
 	var analyzer deliberation.Analyzer
