@@ -6,24 +6,28 @@ import (
 )
 
 // BootstrapSingleNode constructs a ready-to-serve single-node BFT
-// engine: generates a fresh BLS keypair (single-node — key rotation
-// across restarts is harmless because there is no external client
-// verifying QCs across boots yet), constructs the replica with the
-// provided log + vote history stores, replays the log + restores the
-// vote-history counters, and returns the engine.
+// engine: loads (or generates on first boot) the replica's BLS
+// keypair from keyStore, constructs the replica with the provided
+// log + vote history stores, replays the log + restores the
+// vote-history counters, and returns the engine. Passing a durable
+// keyStore (e.g., PostgresReplicaKeyStore) is required for QCs to
+// remain verifiable across restarts — session 5b's fresh-per-boot
+// keys broke that contract, and session 5c fixes it via persisted
+// keys.
 //
-// Fresh-key-per-boot is a single-node simplification. A multi-node or
-// client-verifiable configuration MUST persist the keypair so the
-// replica's public key is stable across restarts; otherwise a QC
-// issued under boot-N's key cannot be verified after boot-N+1.
-// Session 5c wires persisted keys (DB-stored or file-stored) when
-// client-side QC verification becomes a real requirement.
-func BootstrapSingleNode(ctx context.Context, log LogStore, voteHist VoteHistoryStore) (*Engine, error) {
-	keys, pubRoster, err := GenerateBLSKeyset(1)
-	if err != nil {
-		return nil, fmt.Errorf("bft: generate BLS keypair: %w", err)
+// A nil keyStore falls back to a process-local in-memory store —
+// this is test-only and reproduces the pre-5c behavior where QCs
+// from a prior boot cannot be verified after restart.
+func BootstrapSingleNode(ctx context.Context, log LogStore, voteHist VoteHistoryStore, keyStore ReplicaKeyStore) (*Engine, error) {
+	if keyStore == nil {
+		keyStore = NewInMemoryReplicaKeyStore()
 	}
-	signer, err := NewBLSSigner(0, keys[0], pubRoster)
+	myKey, err := keyStore.LoadOrGenerate(ctx, ReplicaID(0))
+	if err != nil {
+		return nil, fmt.Errorf("bft: load replica keypair: %w", err)
+	}
+	pubRoster := []BLSPublicKey{myKey.Public}
+	signer, err := NewBLSSigner(0, myKey, pubRoster)
 	if err != nil {
 		return nil, fmt.Errorf("bft: construct signer: %w", err)
 	}

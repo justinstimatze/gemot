@@ -80,6 +80,40 @@ type BLSKeypair struct {
 	Public  BLSPublicKey
 }
 
+// Marshal returns the keypair's private + public bytes suitable for
+// durable storage. The private half is a 32-byte canonical scalar
+// (fr.Element.Marshal); the public half is the 96-byte compressed
+// G2 encoding. Keep the private bytes secret — they are the signing
+// key.
+func (kp BLSKeypair) Marshal() (priv []byte, pub []byte) {
+	return kp.Private.Marshal(), kp.Public.Marshal()
+}
+
+// UnmarshalBLSKeypair reconstructs a keypair from its marshaled
+// byte representation and verifies the public key matches
+// priv*g2 — so a tampered private/public pair fails loudly at load
+// rather than producing signatures no one can verify.
+func UnmarshalBLSKeypair(priv, pub []byte) (BLSKeypair, error) {
+	var privScalar fr.Element
+	if err := privScalar.SetBytesCanonical(priv); err != nil {
+		return BLSKeypair{}, fmt.Errorf("bft: BLS private key unmarshal: %w", err)
+	}
+	pubKey, err := UnmarshalBLSPublicKey(pub)
+	if err != nil {
+		return BLSKeypair{}, err
+	}
+	// Verify pub = priv * g2 so a mismatched (priv, pub) pair cannot
+	// silently load. Cheap: one scalar-mult, one equality.
+	var privBI big.Int
+	privScalar.BigInt(&privBI)
+	var derivedPub bls12381.G2Affine
+	derivedPub.ScalarMultiplicationBase(&privBI)
+	if !derivedPub.Equal(&pubKey.point) {
+		return BLSKeypair{}, errors.New("bft: BLS keypair unmarshal: public key does not match private key")
+	}
+	return BLSKeypair{Private: privScalar, Public: pubKey}, nil
+}
+
 // GenerateBLSKeypair produces a fresh BLS12-381 keypair. Uses
 // gnark-crypto's fr.Element.SetRandom, which draws from crypto/rand.
 // Test-only: session 5 swaps in the DKG protocol.

@@ -115,7 +115,8 @@ func cmdServe(httpMode bool, addr string) {
 	// but exercises the same path a multi-node deploy will use.
 	bftLog := store.NewPostgresLogStore(db)
 	bftVoteHist := store.NewPostgresVoteHistoryStore(db, bft.ReplicaID(0))
-	bftEngine, err := bft.BootstrapSingleNode(context.Background(), bftLog, bftVoteHist)
+	bftKeys := store.NewPostgresReplicaKeyStore(db)
+	bftEngine, err := bft.BootstrapSingleNode(context.Background(), bftLog, bftVoteHist, bftKeys)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error bootstrapping BFT engine: %v\n", err)
 		os.Exit(1)

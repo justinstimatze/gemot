@@ -1,27 +1,26 @@
-# HotStuff SMR for Gemot: Design (Sessions 1–5b)
+# HotStuff SMR for Gemot: Design (Sessions 1–5c)
 
 ## Status
 
-**Session 5b of N.** Session 5b wires the BFT package into the
-service layer: `main.go` constructs a single-node `bft.Engine` at
-startup (N=1, F=0, Postgres log + vote history, fresh BLS keypair);
-`service.go.SubmitPosition` routes through `engine.Submit` so each
-position is ordered via propose → self-vote → QC; the returned
-`Position` carries the prepared QC as `BFTProof`. This is degenerate
-BFT (quorum=1, no meaningful Byzantine tolerance at N=1) but
-exercises the full state machine: propose, vote, QC formation,
-two-chain commit, durable log, vote-history persistence. Cross-boot
-Submit currently fails because BLS keys are generated fresh per boot
-(prior-boot QCs cannot be verified under the new roster) — the
-committed log still survives restart; only extending the chain
-post-restart is blocked until session 5c adds key persistence.
+**Session 5c of N.** Session 5c closes the cross-boot gap logged in
+session 5b: a new `ReplicaKeyStore` interface (in-memory +
+Postgres `bft_replica_keys` v8 table) persists the replica's BLS
+keypair, so `BootstrapSingleNode` reuses the same key across
+restarts and QCs signed under an earlier boot verify under the new
+boot's roster. The restored `TestBFTEngineResumesAcrossBoot` test
+drives the chain, restarts, and extends — which was impossible in
+5b. `Marshal`/`UnmarshalBLSKeypair` helpers round-trip (priv, pub)
+bytes with a priv*g2 equality check so a tampered pair fails loudly
+at load.
 
 **Previous sessions:** Session 1 shipped the happy-path state
 machine, TLA+ spec, and Go skeleton. Session 2 added view change +
 Byzantine adversarial tests. Session 3 replaced the placeholder
 signer with real BLS12-381 multi-signatures via `gnark-crypto`.
 Session 4 added the durable commit log. Session 5a closed the
-anti-equivocation gap with a durable `VoteHistoryStore`.
+anti-equivocation gap with a durable `VoteHistoryStore`. Session 5b
+wired the package into the service layer so `SubmitPosition` returns
+a QC proof.
 
 Deliverable of DARPA-PS-26-09 Track 1 M8 ("Byzantine-tolerant sequence
 agreement," abstract §3).

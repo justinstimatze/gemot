@@ -426,9 +426,24 @@ CREATE TABLE IF NOT EXISTS bft_vote_history (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- HotStuff BFT replica keypair persistence (session 5c). One row per
+-- replica. Without this, fresh BLS keypairs are generated on every
+-- boot and QCs signed under a prior boot's key cannot be verified
+-- under the new roster — cross-boot chain extension was blocked in
+-- session 5b. private_key is the 32-byte canonical fr.Element scalar;
+-- public_key is the 96-byte compressed G2 point. Treat this table
+-- like any other secret store — access to private_key is equivalent
+-- to controlling the replica's signing authority.
+CREATE TABLE IF NOT EXISTS bft_replica_keys (
+    replica_id TEXT PRIMARY KEY,
+    private_key BYTEA NOT NULL,
+    public_key BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (7) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (8) ON CONFLICT DO NOTHING;
