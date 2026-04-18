@@ -1,8 +1,11 @@
 package analysis
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"sort"
+	"strings"
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 )
@@ -121,15 +124,234 @@ func validateCruxProvenance(cruxes []deliberation.Crux) []string {
 	return warnings
 }
 
-// validateAnalysisModelConsistency will re-run a sampled slice of analysis on a
-// second model family and flag semantic drift. Adversarial inputs can produce
-// stable-but-wrong outputs within a single model family (correlated training data);
-// cross-family comparison is the defense.
+// defaultCrossFamilySampleK is the number of highest-controversy
+// cruxes the cross-family consistency check re-scores on the secondary
+// family. Each sampled crux costs one secondary-LLM call (stances for
+// all involved agents in one structured response), so at K=5 the
+// per-round overhead is ~5 Gemini-Flash-tier calls — a single-digit
+// cent on current pricing.
+const defaultCrossFamilySampleK = 5
+
+// driftFlipRatio is the per-crux threshold at which CROSS_FAMILY_DRIFT
+// fires. Strict majority of agents on a given crux must flip sign
+// between primary and secondary — a lower bar would fire on noise
+// (one agent wobbling on wording differences), a higher bar would
+// miss real drift where the secondary fundamentally disagrees.
+const driftFlipRatio = 0.5
+
+// validateAnalysisModelConsistency re-scores the top-K highest-
+// controversy cruxes on a secondary model family and emits
+// CROSS_FAMILY_DRIFT when strict majority of agents flip sign. No-op
+// when a.SecondaryLLM is nil, which keeps the feature off-by-default
+// and preserves zero-cost behaviour for deployments that haven't
+// configured a secondary.
 //
-// TODO(darpa-track1): wire a secondary LLM client (Gemini/GPT) and implement.
-// Stub exists so the call site and threat-model entry are real.
-func validateAnalysisModelConsistency(_ []deliberation.Crux) []string {
-	return nil
+// This is the Track 1 OOD mitigation called out in §3 of the
+// DARPA-PS-26-09 abstract: adversarial inputs can produce stable-but-
+// wrong outputs that defeat variance-based ensemble detection inside
+// a single model family. Cross-family comparison — same structured
+// question asked of a model with a different pretraining mix — is the
+// intended defense. Independence between frontier labs is imperfect
+// (shared benchmark corpora, convergent RLHF); the caveat is recorded
+// in THREAT_MODEL.
+func (a *TextAnalyzer) validateAnalysisModelConsistency(
+	ctx context.Context,
+	cruxes []deliberation.Crux,
+	positions []deliberation.Position,
+) []string {
+	if a.SecondaryLLM == nil || len(cruxes) == 0 {
+		return nil
+	}
+
+	k := a.SecondarySampleK
+	if k <= 0 {
+		k = defaultCrossFamilySampleK
+	}
+
+	// Latest position per agent: cross-family re-scoring asks the
+	// secondary to judge stance against the most recent articulation,
+	// matching the source-of-truth the primary would have used.
+	latest := latestPositionByAgent(positions)
+
+	sampled := selectDriftSampleCruxes(cruxes, k)
+
+	var warnings []string
+	for _, c := range sampled {
+		primary := primaryStances(c)
+		if len(primary) < 2 {
+			continue
+		}
+		secondary, err := a.scoreCruxStancesSecondary(ctx, c, primary, latest)
+		if err != nil {
+			slog.Warn("cross-family consistency call failed",
+				"provider", a.SecondaryLLM.Provider(),
+				"model", a.SecondaryLLM.Model(),
+				"err", err)
+			continue
+		}
+		flips := 0
+		compared := 0
+		for agent, p := range primary {
+			s, ok := secondary[agent]
+			if !ok {
+				continue
+			}
+			compared++
+			if p != 0 && s != 0 && p != s {
+				flips++
+			}
+		}
+		if compared == 0 {
+			continue
+		}
+		ratio := float64(flips) / float64(compared)
+		if ratio > driftFlipRatio {
+			warnings = append(warnings, fmt.Sprintf(
+				"CROSS_FAMILY_DRIFT: secondary model %q (via %s) flipped %d/%d agent stances on crux %q — primary-family output may be an artifact of correlated training data",
+				a.SecondaryLLM.Model(), a.SecondaryLLM.Provider(),
+				flips, compared, truncateClaim(c.Claim, 80),
+			))
+		}
+	}
+	return warnings
+}
+
+// latestPositionByAgent picks the highest-round, most-recent position
+// per agent. Earlier rounds are returned only when no later position
+// exists — matches the source-of-truth the primary analysis pipeline
+// uses when constructing cruxes over multi-round deliberations.
+func latestPositionByAgent(positions []deliberation.Position) map[string]deliberation.Position {
+	out := map[string]deliberation.Position{}
+	for _, p := range positions {
+		cur, ok := out[p.AgentID]
+		if !ok {
+			out[p.AgentID] = p
+			continue
+		}
+		if p.Round > cur.Round || (p.Round == cur.Round && p.CreatedAt.After(cur.CreatedAt)) {
+			out[p.AgentID] = p
+		}
+	}
+	return out
+}
+
+// selectDriftSampleCruxes returns up to k cruxes ordered by descending
+// controversy. Degenerate and sub-threshold cruxes are skipped — they
+// carry no useful drift signal.
+func selectDriftSampleCruxes(cruxes []deliberation.Crux, k int) []deliberation.Crux {
+	candidates := make([]deliberation.Crux, 0, len(cruxes))
+	for _, c := range cruxes {
+		if c.Degenerate {
+			continue
+		}
+		if len(c.AgreeAgents)+len(c.DisagreeAgents) < 2 {
+			continue
+		}
+		candidates = append(candidates, c)
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].ControversyScore > candidates[j].ControversyScore
+	})
+	if len(candidates) > k {
+		candidates = candidates[:k]
+	}
+	return candidates
+}
+
+// primaryStances reduces a crux's AgreeAgents / DisagreeAgents into a
+// per-agent sign map used as the ground-truth side of the comparison.
+// NoClearPosition agents are omitted so they can't mask a real flip.
+func primaryStances(c deliberation.Crux) map[string]int {
+	out := map[string]int{}
+	for _, a := range c.AgreeAgents {
+		out[a] = 1
+	}
+	for _, a := range c.DisagreeAgents {
+		out[a] = -1
+	}
+	return out
+}
+
+// crossFamilySystemPrompt and crossFamilyUserPrompt are kept short and
+// T3C-style: anonymize agents to numeric IDs, ask for structured
+// per-agent stance. The secondary need not reproduce the primary's
+// crux taxonomy — just judge agreement against the specific claim.
+const crossFamilySystemPrompt = `You are an impartial stance classifier. You will be given a single claim and a list of numbered participants with their positions. For each participant, decide whether their position agrees, disagrees, or is unclear relative to the claim. Do not invent agreement; if a participant's text does not clearly take a side, mark it as unclear.`
+
+func (a *TextAnalyzer) scoreCruxStancesSecondary(
+	ctx context.Context,
+	c deliberation.Crux,
+	primary map[string]int,
+	latest map[string]deliberation.Position,
+) (map[string]int, error) {
+	// Anonymize: secondary should judge stance without any bias from
+	// agent naming or ordering leakage.
+	numToAgent := map[string]string{}
+	var lines []string
+	idx := 0
+	for agent := range primary {
+		pos, ok := latest[agent]
+		if !ok || strings.TrimSpace(pos.Content) == "" {
+			continue
+		}
+		num := fmt.Sprintf("%d", idx)
+		numToAgent[num] = agent
+		lines = append(lines, fmt.Sprintf("Participant %s:\n%s", num, strings.TrimSpace(pos.Content)))
+		idx++
+	}
+	if len(lines) < 2 {
+		return nil, fmt.Errorf("insufficient positions for cross-family stance scoring")
+	}
+
+	prompt := fmt.Sprintf("Claim:\n%s\n\n%s",
+		strings.TrimSpace(c.Claim),
+		strings.Join(lines, "\n\n"),
+	)
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"stances": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"participant": map[string]any{"type": "string"},
+						"stance":      map[string]any{"type": "string", "enum": []string{"agree", "disagree", "unclear"}},
+					},
+					"required": []string{"participant", "stance"},
+				},
+			},
+		},
+		"required": []string{"stances"},
+	}
+
+	var out struct {
+		Stances []struct {
+			Participant string `json:"participant"`
+			Stance      string `json:"stance"`
+		} `json:"stances"`
+	}
+	if err := a.SecondaryLLM.StructuredOutput(ctx, crossFamilySystemPrompt, prompt, schema, &out); err != nil {
+		return nil, err
+	}
+
+	result := map[string]int{}
+	for _, s := range out.Stances {
+		agent, ok := numToAgent[s.Participant]
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(s.Stance) {
+		case "agree":
+			result[agent] = 1
+		case "disagree":
+			result[agent] = -1
+		default:
+			result[agent] = 0
+		}
+	}
+	return result, nil
 }
 
 // validateCruxAgents checks that every agent listed in a crux's agree/disagree/no_clear_position

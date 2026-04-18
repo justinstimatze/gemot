@@ -90,6 +90,14 @@ func cmdServe(httpMode bool, addr string) {
 		if repWeigher != nil {
 			synth.SetReputation(repWeigher)
 		}
+		if cfg.ConsistencyModel != "" && cfg.ConsistencyKey != "" {
+			secondary, err := llm.NewSecondary(cfg.ConsistencyModel, cfg.ConsistencyKey)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "gemot: WARNING: cross-family secondary init failed: %v\n", err)
+			} else if secondary != nil {
+				synth.SetSecondary(secondary, cfg.ConsistencySampleK)
+			}
+		}
 		analyzer = synth
 	} else {
 		fmt.Fprintf(os.Stderr, "Warning: ANTHROPIC_API_KEY not set, analysis will not be available\n")

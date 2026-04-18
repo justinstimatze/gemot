@@ -49,6 +49,19 @@ type TextAnalyzer struct {
 	// effective-weight chain alongside TrustWeights and correlation.
 	// Nil means reputation is disabled (the default); weights are unity.
 	Reputation ReputationWeigher
+
+	// SecondaryLLM, when non-nil, enables the cross-family OOD
+	// consistency check: top-K highest-controversy cruxes get re-scored
+	// on the secondary (typically Gemini against a Claude primary), and
+	// a strict-majority sign flip on any sampled crux emits a
+	// CROSS_FAMILY_DRIFT warning. Off by default; wired via SetSecondary
+	// at startup when GEMOT_CONSISTENCY_MODEL + GEMOT_CONSISTENCY_KEY
+	// are set. Adds roughly K secondary-LLM calls per analysis.
+	SecondaryLLM llm.SecondaryStructuredOutput
+	// SecondarySampleK caps cross-family sampling. 0 uses the default
+	// (defaultCrossFamilySampleK = 5). Larger values tighten coverage
+	// at linear cost.
+	SecondarySampleK int
 }
 
 func NewTextAnalyzer(client *llm.Client) *TextAnalyzer {
@@ -63,6 +76,13 @@ func NewTextAnalyzerWithFunc(fn llm.StructuredOutputFunc) *TextAnalyzer {
 // SetCache enables LLM response caching for claim extraction.
 func (a *TextAnalyzer) SetCache(c ClaimCache) {
 	a.cache = c
+}
+
+// SetSecondary wires the cross-family OOD consistency check. Pass nil
+// to disable. sampleK <= 0 falls back to the default (5).
+func (a *TextAnalyzer) SetSecondary(s llm.SecondaryStructuredOutput, sampleK int) {
+	a.SecondaryLLM = s
+	a.SecondarySampleK = sampleK
 }
 
 // GenerateCompromise produces a compromise statement based on analysis results.
@@ -704,9 +724,11 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	// when TextAnalyzer.StabilityCheckSamples > 1 (see cruxStabilityWarning),
 	// so each warning can be attributed to the subtopic that generated it.
 
-	// Integrity: cross-model consistency check — stub until secondary-family
-	// client is wired (Track 1 / DARPA-PS-26-09 LLM defenses).
-	warnings = append(warnings, validateAnalysisModelConsistency(cruxes)...)
+	// Integrity: cross-family OOD consistency check. No-op when
+	// a.SecondaryLLM is nil (off-by-default). Re-scores the top-K
+	// highest-controversy cruxes on the secondary and emits
+	// CROSS_FAMILY_DRIFT on majority sign flip.
+	warnings = append(warnings, a.validateAnalysisModelConsistency(ctx, cruxes, positions)...)
 
 	// Integrity: check for Sybil-like voting patterns
 	warnings = append(warnings, validateVoteSimilarity(votes, agents)...)
