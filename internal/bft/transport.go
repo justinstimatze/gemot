@@ -1,9 +1,6 @@
 package bft
 
-import (
-	"fmt"
-	"sync"
-)
+import "fmt"
 
 // Message is the union of all protocol message types. Session 1 uses
 // pointer-nil-or-set discrimination; session 2 may switch to a
@@ -85,29 +82,27 @@ func NewInMemoryNetwork(roster []ReplicaID, bufSize int) map[ReplicaID]*InMemory
 	return result
 }
 
-// HTTPTransport is a session-2+ placeholder. The design doc
-// (specs/hotstuff-design.md) tracks the binding to Fly multi-machine
-// deployment. Kept as a declared type so session-1 tests can assert
-// the Transport interface is extensible without breaking API changes.
-type HTTPTransport struct {
-	self   ReplicaID
-	roster []ReplicaID
-	mu     sync.Mutex
-}
+// HTTPTransport is a session-5 placeholder: multi-node Fly deployment
+// wires replicas together over HTTP. The design doc
+// (specs/hotstuff-design.md) tracks the shape. The struct is
+// intentionally empty — fields (self, roster, mu) land alongside their
+// first use so the unused-field linter stays clean. Kept as a declared
+// type so session-1 tests can assert the Transport interface is
+// extensible without breaking API changes.
+type HTTPTransport struct{}
 
-// Send is unimplemented in session 1. Calling it panics — this is the
-// loud-failure contract so accidental reuse of this type outside tests
-// is caught immediately.
+// Send is unimplemented. Returns a loud error so accidental reuse
+// outside tests is caught immediately.
 func (t *HTTPTransport) Send(to ReplicaID, msg Message) error {
-	return fmt.Errorf("bft: HTTPTransport.Send unimplemented (session 2 work — see specs/hotstuff-design.md)")
+	return fmt.Errorf("bft: HTTPTransport.Send unimplemented (session 5 work — see specs/hotstuff-design.md)")
 }
 
-// Broadcast is unimplemented in session 1.
+// Broadcast is unimplemented.
 func (t *HTTPTransport) Broadcast(msg Message) error {
-	return fmt.Errorf("bft: HTTPTransport.Broadcast unimplemented (session 2 work)")
+	return fmt.Errorf("bft: HTTPTransport.Broadcast unimplemented (session 5 work)")
 }
 
-// Recv is unimplemented in session 1.
+// Recv is unimplemented.
 func (t *HTTPTransport) Recv() <-chan Message {
 	ch := make(chan Message)
 	close(ch)
