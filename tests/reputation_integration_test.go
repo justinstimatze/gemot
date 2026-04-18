@@ -59,14 +59,14 @@ func TestReputationStoreRoundTripPostgres(t *testing.T) {
 		{From: idV("carol"), To: idV("alice"), Weight: 1},
 		{From: idV("alice"), To: idV("carol"), Weight: 0.5},
 	}
-	if err := db.AccumulateTrustEdges(ctx, edges, 0); err != nil {
+	if err := db.AccumulateTrustEdges(ctx, edges, 0, ""); err != nil {
 		t.Fatalf("AccumulateTrustEdges (insert): %v", err)
 	}
 	// Accumulate the same edges again — should double the weights.
-	if err := db.AccumulateTrustEdges(ctx, edges, 0); err != nil {
+	if err := db.AccumulateTrustEdges(ctx, edges, 0, ""); err != nil {
 		t.Fatalf("AccumulateTrustEdges (update): %v", err)
 	}
-	loaded, err := db.LoadTrustEdges(ctx)
+	loaded, err := db.LoadTrustEdges(ctx, "")
 	if err != nil {
 		t.Fatalf("LoadTrustEdges: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 		{SourcePositionIDs: []string{"p-alice-r1"}, AgreeAgents: []string{"bob", "carol"}},
 	}
 	authors1 := map[string]string{"p-alice-r1": "alice"}
-	if err := w.UpdateFromRound(ctx, round1, authors1, nil); err != nil {
+	if err := w.UpdateFromRound(ctx, "", false, round1, authors1, nil); err != nil {
 		t.Fatalf("round 1 UpdateFromRound: %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 		{SourcePositionIDs: []string{"p-alice-r2"}, AgreeAgents: []string{"bob", "carol"}},
 	}
 	authors2 := map[string]string{"p-alice-r2": "alice"}
-	if err := w.UpdateFromRound(ctx, round2, authors2, nil); err != nil {
+	if err := w.UpdateFromRound(ctx, "", false, round2, authors2, nil); err != nil {
 		t.Fatalf("round 2 UpdateFromRound: %v", err)
 	}
 
@@ -193,7 +193,7 @@ func TestDecayTrustEdgesPostgres(t *testing.T) {
 	// Seed a fresh edge (will be skipped by the 1-hour-age guard).
 	if err := db.AccumulateTrustEdges(ctx, []analysis.Edge{
 		{From: "fresh-src", To: "fresh-dst", Weight: 1.0},
-	}, 0); err != nil {
+	}, 0, ""); err != nil {
 		t.Fatalf("seed fresh edge: %v", err)
 	}
 	// Seed a stale edge by back-dating last_updated 14 days. Postgres
@@ -208,7 +208,7 @@ func TestDecayTrustEdgesPostgres(t *testing.T) {
 	if err := db.DecayTrustEdges(ctx, 7*24*time.Hour, 0); err != nil {
 		t.Fatalf("DecayTrustEdges: %v", err)
 	}
-	loaded, err := db.LoadTrustEdges(ctx)
+	loaded, err := db.LoadTrustEdges(ctx, "")
 	if err != nil {
 		t.Fatalf("LoadTrustEdges: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestApplyDisputeEdgesPostgres(t *testing.T) {
 	// Seed a positive edge: bob endorsed alice.
 	if err := db.AccumulateTrustEdges(ctx, []analysis.Edge{
 		{From: "bob", To: "alice", Weight: 1.0},
-	}, 0); err != nil {
+	}, 0, ""); err != nil {
 		t.Fatalf("seed endorsement: %v", err)
 	}
 
@@ -250,11 +250,11 @@ func TestApplyDisputeEdgesPostgres(t *testing.T) {
 	if err := db.ApplyDisputeEdges(ctx, []analysis.Edge{
 		{From: "carol", To: "alice", Weight: 0.5},
 		{From: "bob", To: "alice", Weight: 0.4},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("ApplyDisputeEdges: %v", err)
 	}
 
-	loaded, err := db.LoadTrustEdges(ctx)
+	loaded, err := db.LoadTrustEdges(ctx, "")
 	if err != nil {
 		t.Fatalf("LoadTrustEdges: %v", err)
 	}

@@ -17,13 +17,24 @@ import (
 type Store interface {
 	LoadReputation(ctx context.Context, agents []string) (map[string]store.Reputation, error)
 	ResolveVertices(ctx context.Context, agents []string) (map[string]string, error)
-	LoadTrustEdges(ctx context.Context) ([]analysis.Edge, error)
-	AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, cap float64) error
-	ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge) error
+	// LoadTrustEdges: delibID="" returns global edges only (the
+	// public eigenvector graph); non-empty returns global ∪ that
+	// delib's private edges (for per-delib private EigenTrust).
+	LoadTrustEdges(ctx context.Context, delibID string) ([]analysis.Edge, error)
+	// AccumulateTrustEdges: delibID scopes the write partition.
+	// "" for global (open/link delibs), <uuid> for private delibs.
+	AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, cap float64, delibID string) error
+	// ApplyDisputeEdges: delibID scopes symmetrically.
+	ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge, delibID string) error
 	DecayTrustEdges(ctx context.Context, halfLife time.Duration, floor float64) error
 	IncrementSurvivedCounts(ctx context.Context, agents []string) error
 	PersistEigenTrustScores(ctx context.Context, scores map[string]float64) error
 }
+
+// Per-delib context plumbing for WeightsFor lives in types.DelibContext
+// so the service layer (in package deliberation) can attach it without
+// importing reputation — reputation → analysis → deliberation would be
+// a cycle.
 
 // Config captures the knobs read from env at startup.
 type Config struct {
@@ -141,6 +152,21 @@ func (r *Weigher) WeightsFor(ctx context.Context, agents []string) (map[string]f
 		return out, nil
 	}
 
+	// Private-delib path: the cohort is analyzing a private delib, so
+	// use a per-delib EigenTrust computed on-the-fly from the union of
+	// global edges and this delib's private edges. The global
+	// agent_reputation score is NOT used — it would leak a global
+	// summary into the private cohort's weighting — but survived_count
+	// IS used for the cold-start cap. Rationale: survived_count tracks
+	// cross-cohort graduation (a property of the agent, not of this
+	// delib); denying it in private would give fresh Sybils an easy
+	// ride inside a private ring, which is the attack the cold-start
+	// cap is designed to defeat.
+	dc := types.DelibFromContext(ctx)
+	if dc.IsPrivate && dc.ID != "" {
+		return r.weightsForPrivateDelib(ctx, agents, reps, dc.ID)
+	}
+
 	var maxScore float64
 	for _, a := range agents {
 		if reps[a].Score > maxScore {
@@ -164,6 +190,76 @@ func (r *Weigher) WeightsFor(ctx context.Context, agents []string) (map[string]f
 	return out, nil
 }
 
+// weightsForPrivateDelib computes an EigenTrust eigenvector over the
+// union of the global graph and this delib's private edges, then
+// produces cohort weights using the same cold-cap scaling as the
+// global path. Running power iteration on every WeightsFor call is
+// acceptable at current cohort sizes (tens of agents, hundreds of
+// edges); larger scale would motivate the subgraph-scoped load
+// tracked in THREAT_MODEL.
+//
+// agent_ids in the returned map are keyed by the originally-requested
+// symbolic form (same contract as the global path). Agents without a
+// row in agent_reputation (e.g., fresh accounts participating in their
+// first private delib) are cold-capped because survived_count defaults
+// to zero — the eigenvector's magnitude does not override cold-cap.
+func (r *Weigher) weightsForPrivateDelib(
+	ctx context.Context,
+	agents []string,
+	reps map[string]store.Reputation,
+	delibID string,
+) (map[string]float64, error) {
+	out := make(map[string]float64, len(agents))
+	edges, err := r.store.LoadTrustEdges(ctx, delibID)
+	if err != nil {
+		if r.cfg.DBFail == DBFailClosed {
+			return nil, fmt.Errorf("private delib edges load failed (fail-closed): %w", err)
+		}
+		slog.Warn("private delib edges load failed — falling back to unit weights", "err", err)
+		for _, a := range agents {
+			out[a] = 1.0
+		}
+		return out, nil
+	}
+	// Resolve symbolic agents to their current vertex form so the
+	// EigenTrust score lookup matches the key-bound identity used in
+	// edge storage.
+	vertices, err := r.store.ResolveVertices(ctx, agents)
+	if err != nil {
+		if r.cfg.DBFail == DBFailClosed {
+			return nil, fmt.Errorf("resolve vertices (fail-closed): %w", err)
+		}
+		slog.Warn("resolve vertices failed — falling back to unit weights", "err", err)
+		for _, a := range agents {
+			out[a] = 1.0
+		}
+		return out, nil
+	}
+	cfg := analysis.EigenTrustConfig{Iterations: r.cfg.Iterations}
+	scores := analysis.EigenTrust(edges, nil, cfg)
+
+	var maxScore float64
+	for _, a := range agents {
+		if s := scores[vertices[a]]; s > maxScore {
+			maxScore = s
+		}
+	}
+	for _, a := range agents {
+		rep := reps[a]
+		if rep.SurvivedCount < r.cfg.ColdThreshold {
+			out[a] = r.cfg.ColdCap
+			continue
+		}
+		if maxScore <= 0 {
+			out[a] = 1.0
+			continue
+		}
+		normalized := scores[vertices[a]] / maxScore
+		out[a] = r.cfg.ColdCap + normalized*(1.0-r.cfg.ColdCap)
+	}
+	return out, nil
+}
+
 // minDistinctAgreers is the number of distinct non-self agents whose
 // agreement must point at an author's surviving positions before the
 // author's survived_count increments for the round. Two blocks a
@@ -176,6 +272,18 @@ const minDistinctAgreers = 2
 // round and persists the reputation-layer state. Called by the service
 // layer after analysis succeeds.
 //
+// delibID + isPrivate partition the output:
+//   - isPrivate=false: edges are emitted into the GLOBAL partition
+//     (delib_id=”). survived_count increments; global EigenTrust
+//     eigenvector is recomputed. Legacy behaviour for open/link delibs.
+//   - isPrivate=true: edges are emitted into delib_id=<delibID> (the
+//     private partition). survived_count does NOT increment and the
+//     global eigenvector is NOT recomputed, so the private cohort's
+//     agreement patterns neither leak into the globally-readable
+//     agent_trust_edges nor graduate Sybils via a private-ring attack.
+//     WeightsFor computes the per-delib eigenvector on-the-fly at
+//     call time by reading delib_id IN (”, <delibID>).
+//
 // Signals consumed per round:
 //   - Trust edges: for each final crux, each distinct agent in
 //     AgreeAgents contributes a unit edge toward each author of a
@@ -185,12 +293,10 @@ const minDistinctAgreers = 2
 //   - survived_count: increments for an author only when they have
 //     received agreement from ≥ minDistinctAgreers distinct non-self
 //     agents across their surviving cruxes this round.
-//
-// After edge accumulation, the global EigenTrust eigenvector is
-// recomputed and persisted. Synchronous today; batching / debounced
-// recompute is tracked in THREAT_MODEL.
 func (r *Weigher) UpdateFromRound(
 	ctx context.Context,
+	delibID string,
+	isPrivate bool,
 	cruxes []types.Crux,
 	positionAuthors map[string]string,
 	disputes []types.Dispute,
@@ -303,14 +409,26 @@ func (r *Weigher) UpdateFromRound(
 		}
 	}
 
-	if err := r.store.IncrementSurvivedCounts(ctx, survivedAuthors); err != nil {
-		return fmt.Errorf("increment survived: %w", err)
+	// Private delibs never touch global state: no survived_count
+	// increments (denies the private-ring graduation attack) and no
+	// global eigenvector recompute (their agreement patterns stay in
+	// the scoped partition and are read on-the-fly at WeightsFor time).
+	edgePartition := ""
+	if isPrivate {
+		edgePartition = delibID
+	} else {
+		if err := r.store.IncrementSurvivedCounts(ctx, survivedAuthors); err != nil {
+			return fmt.Errorf("increment survived: %w", err)
+		}
 	}
-	if err := r.store.AccumulateTrustEdges(ctx, edges, r.cfg.EdgeCap); err != nil {
+	if err := r.store.AccumulateTrustEdges(ctx, edges, r.cfg.EdgeCap, edgePartition); err != nil {
 		return fmt.Errorf("accumulate edges: %w", err)
 	}
-	if err := r.store.ApplyDisputeEdges(ctx, disputeEdges); err != nil {
+	if err := r.store.ApplyDisputeEdges(ctx, disputeEdges, edgePartition); err != nil {
 		return fmt.Errorf("apply dispute edges: %w", err)
+	}
+	if isPrivate {
+		return nil
 	}
 	return r.recomputeGlobalScores(ctx)
 }
@@ -328,7 +446,7 @@ func (r *Weigher) recomputeGlobalScores(ctx context.Context) error {
 			slog.Warn("decay trust edges failed — continuing with undecayed weights", "err", err)
 		}
 	}
-	edges, err := r.store.LoadTrustEdges(ctx)
+	edges, err := r.store.LoadTrustEdges(ctx, "")
 	if err != nil {
 		return fmt.Errorf("load edges: %w", err)
 	}

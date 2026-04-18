@@ -241,7 +241,7 @@ func WithSignature(sig []byte) PositionOption {
 // the reputation package) to avoid a deliberation → reputation →
 // analysis → deliberation import cycle.
 type RoundReputationUpdater interface {
-	UpdateFromRound(ctx context.Context, cruxes []types.Crux, positionAuthors map[string]string, disputes []types.Dispute) error
+	UpdateFromRound(ctx context.Context, delibID string, isPrivate bool, cruxes []types.Crux, positionAuthors map[string]string, disputes []types.Dispute) error
 }
 
 type Service struct {
@@ -1225,6 +1225,12 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	})
 	analysisCtx = context.WithValue(analysisCtx, ContextKeyProgressFunc{}, progressFn)
 
+	// Thread delibID + isPrivate into the reputation layer's WeightsFor
+	// call via ctx.Value. When the delib is private, WeightsFor loads
+	// per-delib edges (union'd with global) and computes EigenTrust on
+	// the fly; otherwise it falls through to the global-score path.
+	analysisCtx = types.WithDelibContext(analysisCtx, deliberationID, d.Visibility == "private")
+
 	result, err := s.analyzer.Analyze(analysisCtx, positions, votes, agents)
 	if err != nil {
 		resetStatus()
@@ -1262,17 +1268,17 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	// reputation is a signal, not a correctness property, so a DB
 	// hiccup here should not abort the round.
 	//
-	// Private deliberations OPT OUT of the global trust graph entirely:
-	// the agreement patterns within a private deliberation are
-	// confidential to its participants and ACL, and emitting edges from
-	// them would leak those patterns into the globally-readable
-	// agent_trust_edges table. Tradeoff: private delibs neither
-	// contribute to nor benefit from reputation weighting. Per-delib
-	// private EigenTrust (partitioned edges) is a planned refinement
-	// tracked in THREAT_MODEL. "link" visibility is treated like "open"
-	// because a link-shared delib is still participating in the global
-	// graph — it's discoverable-by-token, not consent-limited.
-	if s.reputation != nil && d.Visibility != "private" {
+	// Private deliberations carry their edges in a partition scoped to
+	// the delib_id so the agreement patterns within never leak into
+	// the globally-readable agent_trust_edges. WeightsFor recomputes a
+	// per-delib eigenvector over (global ∪ delib-scoped) edges when
+	// the analyzer ctx carries IsPrivate=true — see WithDelibContext
+	// in the reputation package. Link-visibility delibs stay global
+	// (discoverable-by-token, not consent-limited). Private delibs
+	// skip survived_count increments so private-ring coordination
+	// cannot graduate Sybils out from under the cold-start cap.
+	if s.reputation != nil {
+		isPrivate := d.Visibility == "private"
 		positionAuthors := make(map[string]string, len(positions))
 		for _, p := range positions {
 			positionAuthors[p.ID] = p.AgentID
@@ -1281,7 +1287,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		if dErr != nil {
 			slog.Warn("fetch unprocessed disputes failed", "deliberation", deliberationID, "err", dErr)
 		}
-		if err := s.reputation.UpdateFromRound(ctx, result.Cruxes, positionAuthors, unprocessed); err != nil {
+		if err := s.reputation.UpdateFromRound(ctx, deliberationID, isPrivate, result.Cruxes, positionAuthors, unprocessed); err != nil {
 			slog.Warn("reputation update failed", "deliberation", deliberationID, "err", err)
 		} else if len(unprocessed) > 0 {
 			ids := make([]string, len(unprocessed))

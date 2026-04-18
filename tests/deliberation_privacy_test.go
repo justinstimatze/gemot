@@ -40,13 +40,16 @@ func (repAnalyzer) Analyze(_ context.Context, positions []deliberation.Position,
 }
 
 // TestPrivateDelibEmitsNoTrustEdges: a deliberation created with
-// WithVisibility("private") must not emit into agent_trust_edges at
-// round close. The global trust graph is publicly readable; private-
-// delib agreement patterns must not leak into it.
+// WithVisibility("private") must not emit into the GLOBAL partition
+// (delib_id=”) of agent_trust_edges at round close. Edges scoped to
+// the delib's own partition (delib_id=<delib.ID>) are expected — the
+// P4 FULL design partitions the trust graph so private delibs can
+// have per-delib EigenTrust without leaking into the globally-
+// readable eigenvector.
 //
 // Mirrors TestFullDeliberationLoop in flow but (a) flips visibility
-// private, (b) wires reputation, and (c) asserts the edges table is
-// empty after Analyze.
+// private, (b) wires reputation, and (c) asserts the GLOBAL partition
+// is untouched while the private partition carries this delib's edges.
 func TestPrivateDelibEmitsNoTrustEdges(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, repAnalyzer{})
@@ -87,24 +90,34 @@ func TestPrivateDelibEmitsNoTrustEdges(t *testing.T) {
 		t.Fatalf("Analyze: %v", err)
 	}
 
-	var count int
+	var globalCount int
 	if err := db.RawDB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM agent_trust_edges`).Scan(&count); err != nil {
-		t.Fatalf("count edges: %v", err)
+		`SELECT COUNT(*) FROM agent_trust_edges WHERE deliberation_id = ''`).Scan(&globalCount); err != nil {
+		t.Fatalf("count global edges: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("private delib leaked %d trust edges into global graph", count)
+	if globalCount != 0 {
+		t.Fatalf("private delib leaked %d trust edges into global graph", globalCount)
+	}
+
+	var scopedCount int
+	if err := db.RawDB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM agent_trust_edges WHERE deliberation_id = $1`, d.ID).Scan(&scopedCount); err != nil {
+		t.Fatalf("count scoped edges: %v", err)
+	}
+	if scopedCount == 0 {
+		t.Fatalf("private delib emitted no scoped edges; per-delib EigenTrust graph is empty")
 	}
 
 	// survived_count must also not increment — leaking survival on private
 	// delibs would let attackers graduate their Sybils out of the cold cap
 	// by running a private ring delib.
+	var repCount int
 	if err := db.RawDB().QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM agent_reputation WHERE survived_count > 0`).Scan(&count); err != nil {
+		`SELECT COUNT(*) FROM agent_reputation WHERE survived_count > 0`).Scan(&repCount); err != nil {
 		t.Fatalf("count reputation: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("private delib leaked %d survived_count increments", count)
+	if repCount != 0 {
+		t.Fatalf("private delib leaked %d survived_count increments", repCount)
 	}
 }
 

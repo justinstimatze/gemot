@@ -38,14 +38,14 @@ func TestUpdateFromRoundApplyDispute(t *testing.T) {
 		{AgentID: "carol", CruxClaim: "AI licensing is required."},
 	}
 
-	if err := w.UpdateFromRound(context.Background(), cruxes, authors, disputes); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, disputes); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 
-	if got := fs.edges[[2]string{idV("bob"), idV("alice")}]; got != 1 {
+	if got := fs.edges[edgeKey(idV("bob"), idV("alice"))]; got != 1 {
 		t.Fatalf("bob→alice expected 1, got %f", got)
 	}
-	if got := fs.edges[[2]string{idV("carol"), idV("alice")}]; got != -0.5 {
+	if got := fs.edges[edgeKey(idV("carol"), idV("alice"))]; got != -0.5 {
 		t.Fatalf("carol→alice expected -0.5, got %f", got)
 	}
 }
@@ -69,10 +69,10 @@ func TestDisputeCancelsPriorEndorsement(t *testing.T) {
 			AgreeAgents:       []string{"bob", "dave"},
 		},
 	}
-	if err := w.UpdateFromRound(context.Background(), r1, map[string]string{"p-alice": "alice"}, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, r1, map[string]string{"p-alice": "alice"}, nil); err != nil {
 		t.Fatalf("round 1: %v", err)
 	}
-	if got := fs.edges[[2]string{idV("bob"), idV("alice")}]; got != 1 {
+	if got := fs.edges[edgeKey(idV("bob"), idV("alice"))]; got != 1 {
 		t.Fatalf("after r1, bob→alice want 1, got %f", got)
 	}
 
@@ -87,10 +87,10 @@ func TestDisputeCancelsPriorEndorsement(t *testing.T) {
 	disputes := []types.Dispute{
 		{AgentID: "bob", CruxClaim: "Regulation stifles innovation."},
 	}
-	if err := w.UpdateFromRound(context.Background(), r2, map[string]string{"p-alice-2": "alice"}, disputes); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, r2, map[string]string{"p-alice-2": "alice"}, disputes); err != nil {
 		t.Fatalf("round 2: %v", err)
 	}
-	if got := fs.edges[[2]string{idV("bob"), idV("alice")}]; got != 0.4 {
+	if got := fs.edges[edgeKey(idV("bob"), idV("alice"))]; got != 0.4 {
 		t.Fatalf("net edge after dispute want 0.4, got %f", got)
 	}
 }
@@ -115,10 +115,10 @@ func TestDisputeSkipsSelf(t *testing.T) {
 	disputes := []types.Dispute{
 		{AgentID: "alice", CruxClaim: "Self-critique."},
 	}
-	if err := w.UpdateFromRound(context.Background(), cruxes, map[string]string{"p-alice": "alice"}, disputes); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, map[string]string{"p-alice": "alice"}, disputes); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
-	if _, ok := fs.edges[[2]string{idV("alice"), idV("alice")}]; ok {
+	if _, ok := fs.edges[edgeKey(idV("alice"), idV("alice"))]; ok {
 		t.Fatalf("unexpected self-dispute edge")
 	}
 }
@@ -145,7 +145,7 @@ func TestDisputeUnknownCruxIgnored(t *testing.T) {
 	disputes := []types.Dispute{
 		{AgentID: "carol", CruxClaim: "Unknown claim nobody made."},
 	}
-	if err := w.UpdateFromRound(context.Background(), cruxes, map[string]string{"p-alice": "alice"}, disputes); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, map[string]string{"p-alice": "alice"}, disputes); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 	// No edge should land for carol.
@@ -170,7 +170,7 @@ func TestDecayTrustEdgesCalledWhenConfigured(t *testing.T) {
 			AgreeAgents:       []string{"bob", "carol"},
 		},
 	}
-	if err := w.UpdateFromRound(context.Background(), cruxes, map[string]string{"p-alice": "alice"}, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, map[string]string{"p-alice": "alice"}, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 	if fs.decayCall != 1 {
@@ -195,7 +195,7 @@ func TestDecayTrustEdgesSkippedByDefault(t *testing.T) {
 			AgreeAgents:       []string{"bob", "carol"},
 		},
 	}
-	if err := w.UpdateFromRound(context.Background(), cruxes, map[string]string{"p-alice": "alice"}, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, map[string]string{"p-alice": "alice"}, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 	if fs.decayCall != 0 {
@@ -253,7 +253,7 @@ func TestDisputeAgainstSybilRingDampensScore(t *testing.T) {
 		Enabled: true, ColdCap: 0.1, ColdThreshold: 5, Iterations: 50,
 		DisputeWeight: 1.0,
 	})
-	if err := wPumped.UpdateFromRound(context.Background(), allCruxes, authors, nil); err != nil {
+	if err := wPumped.UpdateFromRound(context.Background(), "", false, allCruxes, authors, nil); err != nil {
 		t.Fatalf("pumped round: %v", err)
 	}
 	pumpedRingMin := fsPumped.scores[idV("s1")]
@@ -285,7 +285,7 @@ func TestDisputeAgainstSybilRingDampensScore(t *testing.T) {
 		{AgentID: "s1", CruxClaim: "Ring s3 claim."},
 		{AgentID: "s2", CruxClaim: "Ring s3 claim."},
 	}
-	if err := wDisputed.UpdateFromRound(context.Background(), allCruxes, authors, disputes); err != nil {
+	if err := wDisputed.UpdateFromRound(context.Background(), "", false, allCruxes, authors, disputes); err != nil {
 		t.Fatalf("disputed round: %v", err)
 	}
 	disputedRingMax := 0.0
