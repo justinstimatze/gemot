@@ -49,6 +49,18 @@ type Config struct {
 	// endorsement. Stored weight can go negative; EigenTrust ignores
 	// non-positive edges so inbound trust mass is effectively clamped.
 	EigenTrustDisputeWeight float64
+	// EigenTrustEdgeFloor prunes trust-edge rows whose decayed weight
+	// falls below this value. 0 (default) disables pruning. Bounds the
+	// trust graph's row count so open-federation scale can't blow up
+	// agent_trust_edges with edges that will never contribute
+	// meaningfully to EigenTrust. Recommended: 0.01.
+	EigenTrustEdgeFloor float64
+	// EigenTrustEdgeCap clamps the cumulative weight of any single
+	// (from, to) edge. 0 (default) disables — unbounded legacy
+	// accumulation. Recommended: 10.0. A Sybil pair that mutually
+	// endorses across many deliberations can push an edge to infinity
+	// without the cap, leaking into post-graduation EigenTrust mass.
+	EigenTrustEdgeCap float64
 
 	// ConsistencyModel + ConsistencyKey enable the cross-family OOD
 	// consistency check (DARPA-PS-26-09 Track 1, abstract §3). When
@@ -78,6 +90,8 @@ func Load() *Config {
 		EigenTrustDBFail:            envDBFailMode("GEMOT_EIGENTRUST_DB_FAIL", "open"),
 		EigenTrustDecayHalfLifeDays: envInt("GEMOT_EIGENTRUST_DECAY_HALFLIFE_DAYS", 0),
 		EigenTrustDisputeWeight:     envFloat("GEMOT_EIGENTRUST_DISPUTE_WEIGHT", 0.5),
+		EigenTrustEdgeFloor:         envFloat("GEMOT_EIGENTRUST_EDGE_FLOOR", 0),
+		EigenTrustEdgeCap:           envFloat("GEMOT_EIGENTRUST_EDGE_CAP", 0),
 		ConsistencyModel:            os.Getenv("GEMOT_CONSISTENCY_MODEL"),
 		ConsistencyKey:              envOr("GEMOT_CONSISTENCY_KEY", os.Getenv("GEMINI_API_KEY")),
 		ConsistencySampleK:          envInt("GEMOT_CONSISTENCY_SAMPLE_K", 5),
@@ -100,8 +114,8 @@ func Load() *Config {
 
 	if cfg.EigenTrustEnabled {
 		fmt.Fprintf(os.Stderr,
-			"gemot: EigenTrust reputation enabled (cold_cap=%.2f, cold_threshold=%d, iterations=%d, db_fail=%s, decay_halflife_days=%d, dispute_weight=%.2f)\n",
-			cfg.EigenTrustColdCap, cfg.EigenTrustColdThreshold, cfg.EigenTrustIterations, cfg.EigenTrustDBFail, cfg.EigenTrustDecayHalfLifeDays, cfg.EigenTrustDisputeWeight)
+			"gemot: EigenTrust reputation enabled (cold_cap=%.2f, cold_threshold=%d, iterations=%d, db_fail=%s, decay_halflife_days=%d, dispute_weight=%.2f, edge_floor=%.4f, edge_cap=%.2f)\n",
+			cfg.EigenTrustColdCap, cfg.EigenTrustColdThreshold, cfg.EigenTrustIterations, cfg.EigenTrustDBFail, cfg.EigenTrustDecayHalfLifeDays, cfg.EigenTrustDisputeWeight, cfg.EigenTrustEdgeFloor, cfg.EigenTrustEdgeCap)
 	}
 
 	if cfg.ConsistencyModel != "" && cfg.ConsistencyKey != "" {

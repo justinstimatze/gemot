@@ -59,11 +59,11 @@ func TestReputationStoreRoundTripPostgres(t *testing.T) {
 		{From: idV("carol"), To: idV("alice"), Weight: 1},
 		{From: idV("alice"), To: idV("carol"), Weight: 0.5},
 	}
-	if err := db.AccumulateTrustEdges(ctx, edges); err != nil {
+	if err := db.AccumulateTrustEdges(ctx, edges, 0); err != nil {
 		t.Fatalf("AccumulateTrustEdges (insert): %v", err)
 	}
 	// Accumulate the same edges again — should double the weights.
-	if err := db.AccumulateTrustEdges(ctx, edges); err != nil {
+	if err := db.AccumulateTrustEdges(ctx, edges, 0); err != nil {
 		t.Fatalf("AccumulateTrustEdges (update): %v", err)
 	}
 	loaded, err := db.LoadTrustEdges(ctx)
@@ -193,7 +193,7 @@ func TestDecayTrustEdgesPostgres(t *testing.T) {
 	// Seed a fresh edge (will be skipped by the 1-hour-age guard).
 	if err := db.AccumulateTrustEdges(ctx, []analysis.Edge{
 		{From: "fresh-src", To: "fresh-dst", Weight: 1.0},
-	}); err != nil {
+	}, 0); err != nil {
 		t.Fatalf("seed fresh edge: %v", err)
 	}
 	// Seed a stale edge by back-dating last_updated 14 days. Postgres
@@ -205,7 +205,7 @@ func TestDecayTrustEdgesPostgres(t *testing.T) {
 	}
 
 	// halfLife = 7 days. Stale edge aged 14d → 2 half-lives → factor 0.25.
-	if err := db.DecayTrustEdges(ctx, 7*24*time.Hour); err != nil {
+	if err := db.DecayTrustEdges(ctx, 7*24*time.Hour, 0); err != nil {
 		t.Fatalf("DecayTrustEdges: %v", err)
 	}
 	loaded, err := db.LoadTrustEdges(ctx)
@@ -241,7 +241,7 @@ func TestApplyDisputeEdgesPostgres(t *testing.T) {
 	// Seed a positive edge: bob endorsed alice.
 	if err := db.AccumulateTrustEdges(ctx, []analysis.Edge{
 		{From: "bob", To: "alice", Weight: 1.0},
-	}); err != nil {
+	}, 0); err != nil {
 		t.Fatalf("seed endorsement: %v", err)
 	}
 

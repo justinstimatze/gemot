@@ -64,6 +64,8 @@ func cmdServe(httpMode bool, addr string) {
 		DBFail:            cfg.EigenTrustDBFail,
 		DecayHalfLifeDays: cfg.EigenTrustDecayHalfLifeDays,
 		DisputeWeight:     cfg.EigenTrustDisputeWeight,
+		EdgeFloor:         cfg.EigenTrustEdgeFloor,
+		EdgeCap:           cfg.EigenTrustEdgeCap,
 	})
 
 	var analyzer deliberation.Analyzer

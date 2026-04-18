@@ -1261,7 +1261,18 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	// §3 defense against whitewashing). Non-fatal on failure —
 	// reputation is a signal, not a correctness property, so a DB
 	// hiccup here should not abort the round.
-	if s.reputation != nil {
+	//
+	// Private deliberations OPT OUT of the global trust graph entirely:
+	// the agreement patterns within a private deliberation are
+	// confidential to its participants and ACL, and emitting edges from
+	// them would leak those patterns into the globally-readable
+	// agent_trust_edges table. Tradeoff: private delibs neither
+	// contribute to nor benefit from reputation weighting. Per-delib
+	// private EigenTrust (partitioned edges) is a planned refinement
+	// tracked in THREAT_MODEL. "link" visibility is treated like "open"
+	// because a link-shared delib is still participating in the global
+	// graph — it's discoverable-by-token, not consent-limited.
+	if s.reputation != nil && d.Visibility != "private" {
 		positionAuthors := make(map[string]string, len(positions))
 		for _, p := range positions {
 			positionAuthors[p.ID] = p.AgentID
