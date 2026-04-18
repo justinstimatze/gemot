@@ -18,9 +18,9 @@ type Store interface {
 	LoadReputation(ctx context.Context, agents []string) (map[string]store.Reputation, error)
 	ResolveVertices(ctx context.Context, agents []string) (map[string]string, error)
 	LoadTrustEdges(ctx context.Context) ([]analysis.Edge, error)
-	AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge) error
+	AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, cap float64) error
 	ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge) error
-	DecayTrustEdges(ctx context.Context, halfLife time.Duration) error
+	DecayTrustEdges(ctx context.Context, halfLife time.Duration, floor float64) error
 	IncrementSurvivedCounts(ctx context.Context, agents []string) error
 	PersistEigenTrustScores(ctx context.Context, scores map[string]float64) error
 }
@@ -55,6 +55,21 @@ type Config struct {
 	// edges at input, so a sufficiently-disputed agent has that inbound
 	// trust effectively clamped to zero.
 	DisputeWeight float64
+	// EdgeFloor prunes trust edges whose weight falls below this value
+	// after decay. 0 (default) disables pruning — edges persist forever
+	// with exponentially small weight, unbounded growth of
+	// agent_trust_edges. Recommended: 0.01 (a decayed edge below this
+	// contributes negligibly to EigenTrust). Floor only applies to
+	// positive weights; negative dispute rows are retained.
+	EdgeFloor float64
+	// EdgeCap clamps the cumulative per-edge weight via LEAST(...) at
+	// AccumulateTrustEdges time. 0 (default) disables capping (legacy
+	// unbounded accumulation). Recommended: 10.0 — a single (from, to)
+	// pair can exert at most 10× a unit endorsement of inbound trust,
+	// bounding the damage from a Sybil pair that repeats mutual
+	// endorsement across many deliberations. Cap does not apply to
+	// ApplyDisputeEdges; disputes may accumulate arbitrarily negative.
+	EdgeCap float64
 }
 
 // DBFailClosed is the sentinel that activates fail-closed semantics.
@@ -291,7 +306,7 @@ func (r *Weigher) UpdateFromRound(
 	if err := r.store.IncrementSurvivedCounts(ctx, survivedAuthors); err != nil {
 		return fmt.Errorf("increment survived: %w", err)
 	}
-	if err := r.store.AccumulateTrustEdges(ctx, edges); err != nil {
+	if err := r.store.AccumulateTrustEdges(ctx, edges, r.cfg.EdgeCap); err != nil {
 		return fmt.Errorf("accumulate edges: %w", err)
 	}
 	if err := r.store.ApplyDisputeEdges(ctx, disputeEdges); err != nil {
@@ -306,7 +321,7 @@ func (r *Weigher) UpdateFromRound(
 func (r *Weigher) recomputeGlobalScores(ctx context.Context) error {
 	if r.cfg.DecayHalfLifeDays > 0 {
 		halfLife := time.Duration(r.cfg.DecayHalfLifeDays) * 24 * time.Hour
-		if err := r.store.DecayTrustEdges(ctx, halfLife); err != nil {
+		if err := r.store.DecayTrustEdges(ctx, halfLife, r.cfg.EdgeFloor); err != nil {
 			// Non-fatal: decay is a damping signal, and proceeding with
 			// stale weights is better than aborting the reputation
 			// recompute entirely. Log and continue.

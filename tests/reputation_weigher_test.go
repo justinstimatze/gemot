@@ -81,12 +81,17 @@ func (f *fakeReputationStore) LoadTrustEdges(_ context.Context) ([]analysis.Edge
 	return out, nil
 }
 
-func (f *fakeReputationStore) AccumulateTrustEdges(_ context.Context, edges []analysis.Edge) error {
+func (f *fakeReputationStore) AccumulateTrustEdges(_ context.Context, edges []analysis.Edge, cap float64) error {
 	for _, e := range edges {
 		if e.Weight <= 0 {
 			continue
 		}
-		f.edges[[2]string{e.From, e.To}] += e.Weight
+		key := [2]string{e.From, e.To}
+		sum := f.edges[key] + e.Weight
+		if cap > 0 && sum > cap {
+			sum = cap
+		}
+		f.edges[key] = sum
 	}
 	return nil
 }
@@ -108,8 +113,15 @@ func (f *fakeReputationStore) ApplyDisputeEdges(_ context.Context, edges []analy
 // in-memory tests assert edge accumulation invariants that decay would
 // obscure. Call count is recorded so we can assert the weigher
 // invokes the hook exactly when configured.
-func (f *fakeReputationStore) DecayTrustEdges(_ context.Context, _ time.Duration) error {
+func (f *fakeReputationStore) DecayTrustEdges(_ context.Context, _ time.Duration, floor float64) error {
 	f.decayCall++
+	if floor > 0 {
+		for k, w := range f.edges {
+			if w > 0 && w < floor {
+				delete(f.edges, k)
+			}
+		}
+	}
 	return nil
 }
 

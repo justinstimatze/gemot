@@ -132,7 +132,15 @@ func (s *DB) IncrementSurvivedCounts(ctx context.Context, agents []string) error
 // in one batched round-trip via `unnest`. Edges are aggregated
 // cumulatively across deliberations — the weight column is the total
 // number of observed "A endorsed B" events, not an average.
-func (s *DB) AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge) error {
+//
+// cap (>0) clamps cumulative per-edge weight via LEAST(...). cap=0
+// disables clamping (legacy unbounded accumulation). CHECK constraints
+// can't compare against a runtime-configurable bound, so the clamp is
+// applied at write time instead. The cap applies only to positive
+// accumulation — ApplyDisputeEdges intentionally has no cap because
+// disputes can go arbitrarily negative (EigenTrust clamps non-positive
+// edges to zero at input).
+func (s *DB) AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, cap float64) error {
 	if len(edges) == 0 {
 		return nil
 	}
@@ -148,6 +156,20 @@ func (s *DB) AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge) er
 		weights = append(weights, e.Weight)
 	}
 	if len(froms) == 0 {
+		return nil
+	}
+	if cap > 0 {
+		_, err := s.db.ExecContext(ctx,
+			`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, last_updated)
+			 SELECT f, t, LEAST(w, $4), NOW()
+			 FROM unnest($1::text[], $2::text[], $3::float8[]) AS u(f, t, w)
+			 ON CONFLICT (from_agent, to_agent) DO UPDATE
+			 SET weight = LEAST(agent_trust_edges.weight + EXCLUDED.weight, $4),
+			     last_updated = NOW()`,
+			froms, tos, weights, cap)
+		if err != nil {
+			return fmt.Errorf("accumulate trust edges: %w", err)
+		}
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
@@ -235,7 +257,20 @@ func (s *DB) ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge) error
 // double-decay when UpdateFromRound runs back-to-back in quick
 // succession. Uses Postgres' POWER + EXTRACT(EPOCH FROM ...) so the
 // calculation happens server-side in a single UPDATE.
-func (s *DB) DecayTrustEdges(ctx context.Context, halfLife time.Duration) error {
+//
+// floor (>0) prunes rows whose decayed weight drops below the floor in
+// a second DELETE. This bounds agent_trust_edges storage: without
+// pruning, edges that stop being reinforced persist forever with
+// exponentially small weight. floor=0 disables pruning (legacy
+// behaviour — decay only, no DELETE).
+//
+// The DELETE is scoped to positive weights only. Negative-weight rows
+// (from ApplyDisputeEdges) are retained unconditionally so a persistent
+// dispute signal doesn't get pruned once its magnitude decays toward
+// zero — disputes should decay into neutrality, not into missing rows
+// that could be re-accumulated by a fresh endorsement without the
+// dispute history visible.
+func (s *DB) DecayTrustEdges(ctx context.Context, halfLife time.Duration, floor float64) error {
 	if halfLife <= 0 {
 		return nil
 	}
@@ -248,6 +283,13 @@ func (s *DB) DecayTrustEdges(ctx context.Context, halfLife time.Duration) error 
 		halfLifeSeconds)
 	if err != nil {
 		return fmt.Errorf("decay trust edges: %w", err)
+	}
+	if floor > 0 {
+		if _, err := s.db.ExecContext(ctx,
+			`DELETE FROM agent_trust_edges WHERE weight > 0 AND weight < $1`,
+			floor); err != nil {
+			return fmt.Errorf("prune decayed edges: %w", err)
+		}
 	}
 	return nil
 }
