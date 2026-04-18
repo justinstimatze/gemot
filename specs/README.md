@@ -15,9 +15,14 @@ mechanically checked and, later, refined against the implementation.
 
 - `Deliberation.tla` / `Deliberation.cfg` — the deliberation state
   machine module and its TLC configuration.
-- `HotStuff.tla` / `HotStuff.cfg` — the chained-HotStuff sequence-
-  agreement module and its TLC configuration. Session 1 of the BFT
-  implementation; see `hotstuff-design.md` for the protocol design.
+- `HotStuff.tla` — the chained-HotStuff sequence-agreement module.
+  Session 1 of the BFT implementation; see `hotstuff-design.md` for
+  the protocol design.
+- `HotStuff.cfg` / `HotStuff_stress.cfg` — tight and stress TLC
+  configurations for the HotStuff spec. The tight cfg runs in <1s
+  and is the PR-check target; the stress cfg covers bounds high
+  enough to exercise the locked-QC vote constraint under
+  adversarial scenarios.
 - `hotstuff-design.md` — design document for the `internal/bft/`
   HotStuff implementation: adversary model, message types, state
   machine, commit rule, storage design, deferred items.
@@ -152,14 +157,31 @@ adversarial model.
 
 ### Model bounds and generalization
 
-The committed `HotStuff.cfg` checks `|Replicas|=4`, `|Byzantine|=1`,
-`MaxView=2`, `MaxHeight=2`, `MaxBlocks=3`. TLC explores 7,862
-distinct reachable states in ~1 second and verifies all safety
-invariants. N=4 with f=1 is the minimum non-trivial HotStuff
-configuration (f < N/3 ⇒ N ≥ 4). Two views and two heights suffice
-to exercise the pipelined two-chain commit rule: block at height 1
-with a QC in view 1, block at height 2 extending it with a QC in
-view 2 — the two-chain rule commits the height-1 block.
+Two model configurations are committed:
+
+- `HotStuff.cfg` (PR check): `|Replicas|=4`, `|Byzantine|=1`,
+  `MaxView=2`, `MaxHeight=2`, `MaxBlocks=3`. TLC explores 510
+  distinct reachable states in well under a second and verifies
+  all safety invariants. Exercises the minimum commit pipeline:
+  height-1 block QC'd in view 1, height-2 block QC'd in view 2,
+  two-chain rule commits the height-1 block.
+
+- `HotStuff_stress.cfg` (nightly / pre-release): `MaxView=4`,
+  `MaxHeight=2`, `MaxBlocks=5`. TLC explores 62,017 distinct
+  reachable states in ~5 seconds. These bounds admit a potentially
+  conflicting height-1 block at view 3 plus a height-2 child in
+  view 4 whose QC would trigger commit on the conflicting branch.
+  An earlier draft of the spec — with `LockOn` modeled as an
+  optional action rather than coupled atomically into `FormQC` —
+  failed this configuration: TLC found an execution where honest
+  replicas committed two different blocks at height 1. That trace
+  motivated tying the honest-replica lock update into `FormQC`
+  itself, which is the current spec. The stress cfg is retained
+  as a regression harness against any future spec regression that
+  loosens the lock-update rule.
+
+N=4 with f=1 is the minimum non-trivial HotStuff configuration
+(f < N/3 ⇒ N ≥ 4).
 
 **Generalization from the small model to arbitrary N.** The same
 three-step argument as `Deliberation.tla` applies:

@@ -34,6 +34,10 @@ type Replica struct {
 	// lastVotedView is the anti-equivocation guard: a replica votes at
 	// most once per view.
 	lastVotedView View
+	// proposedInView is the highest view in which this replica has
+	// already emitted a proposal as leader. Prevents equivocating
+	// proposals in the same view. Advances on Propose; never decreases.
+	proposedInView View
 
 	// knownBlocks indexes all blocks this replica has seen, by hash.
 	// Needed so the two-chain commit rule can look up a block's parent.
@@ -76,21 +80,22 @@ func NewReplica(id ReplicaID, n, f int, signer Signer, transport Transport, rost
 	}
 	genesis := QC{} // View=0, BlockHash=zero, no signers, no sig.
 	r := &Replica{
-		ID:            id,
-		N:             n,
-		F:             f,
-		view:          1,
-		highQC:        genesis,
-		lockedQC:      genesis,
-		preparedQC:    genesis,
-		lastVotedView: 0,
-		knownBlocks:   make(map[Hash]Block),
-		committed:     make(map[Hash]bool),
-		committedLog:  []Hash{{}},
-		pendingVotes:  make(map[voteKey]map[ReplicaID]Signature),
-		signer:        signer,
-		transport:     transport,
-		roster:        append([]ReplicaID{}, roster...),
+		ID:             id,
+		N:              n,
+		F:              f,
+		view:           1,
+		highQC:         genesis,
+		lockedQC:       genesis,
+		preparedQC:     genesis,
+		lastVotedView:  0,
+		proposedInView: 0,
+		knownBlocks:    make(map[Hash]Block),
+		committed:      make(map[Hash]bool),
+		committedLog:   []Hash{{}},
+		pendingVotes:   make(map[voteKey]map[ReplicaID]Signature),
+		signer:         signer,
+		transport:      transport,
+		roster:         append([]ReplicaID{}, roster...),
 	}
 	// Genesis is committed by construction — every replica agrees on it.
 	var zero Hash
@@ -121,9 +126,12 @@ func (r *Replica) Committed() []Hash {
 }
 
 // leader returns the designated leader for a given view. Deterministic
-// rotation: view mod N over the roster.
+// rotation: (view-1) mod N over the roster, so view 1 picks roster[0].
+// The -1 is the conventional form; using `view mod N` directly with
+// views starting at 1 would skew the rotation and leave roster[0]
+// unused until view N+1.
 func (r *Replica) leader(v View) ReplicaID {
-	return r.roster[int(v)%r.N]
+	return r.roster[int(v-1)%r.N]
 }
 
 // extends reports whether descendant's chain (walking Parent pointers

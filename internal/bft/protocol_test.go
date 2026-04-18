@@ -100,68 +100,11 @@ func runRound(t *testing.T, reps map[ReplicaID]*Replica, parent Hash, justify QC
 	return prop.Block.Hash(), *formedQC
 }
 
-// TestHappyPathSingleCommit exercises the minimal commit sequence: three
-// consecutive honest views produce QCs on blocks at heights 1, 2, 3,
-// and the two-chain rule commits block 1 (height 1) when the QC on
-// block 2 arrives at the next proposal's justify.
-//
-// This is the core session-1 acceptance test: if it fails, the commit
-// rule is broken.
-func TestHappyPathSingleCommit(t *testing.T) {
-	reps := newCluster(t, 4, 1)
-
-	// View 1: propose block at height 1 extending genesis.
-	genesisQC := QC{}
-	h1, qc1 := runRound(t, reps, Hash{}, genesisQC, []byte("op1"))
-
-	// View 2: propose block at height 2 extending h1, justified by qc1.
-	// When every replica processes this proposal, it sees qc1 (the
-	// justify) which is a QC on h1, then locks on h1's parent (genesis).
-	// No commit yet — we need the grand-parent chain.
-	h2, qc2 := runRound(t, reps, h1, qc1, []byte("op2"))
-
-	// View 3: propose block at height 3 extending h2, justified by qc2.
-	// Now processJustify for qc2 sees:
-	//   justified = h2, parent = h1 (view 1), justified.View = 2 = 1+1
-	// so the two-chain rule fires and commits h2's grand-parent,
-	// which is h1's parent = genesis. Hmm — that already is committed.
-	// The commit of h1 itself requires one more round (qc3 justified
-	// at view 3, h3's parent is h2 at view 2, so committing h2's
-	// grand-parent = h1, which is not yet committed).
-	_, _ = runRound(t, reps, h2, qc2, []byte("op3"))
-
-	// View 4: needs one more round to commit h1 via two-chain on
-	// (h3, h2) — when processJustify sees qc3, parent=h2 (view 2),
-	// justified.View=3, 3=2+1, commits h2's parent = h1.
-	// Wait — tracking carefully:
-	// After view 3 round, qc3 was processed inline during the
-	// HandleProposal. processJustify(qc2) happened when view-3
-	// proposal arrived (because that proposal's justify is qc2).
-	// So after 3 rounds, every replica has:
-	//   - seen blocks h1 (view 1), h2 (view 2), h3 (view 3)
-	//   - processJustify(qc1) when view-2 proposal arrived → locks
-	//     on h1's parent = genesis, which is already committed
-	//   - processJustify(qc2) when view-3 proposal arrived → locks
-	//     on h2's parent = h1 (view 1), two-chain: justified.View=2
-	//     = 1 + 1 so commit h2's grand-parent = genesis (already
-	//     committed). No new commit.
-	// We need one more proposal/round so qc3 flows through processJustify.
-	// That commits h1 (grand-parent of h3).
-
-	// Helper: find the QC just produced in view 3.
-	// runRound returned (h3, qc3).
-	// We need to drive a 4th round to deliver qc3 as justify.
-	// Since h3 is the head, next proposal extends h3 with justify=qc3.
-	// Run one more round:
-	// But we have no qc3 in scope — re-do the last call with return.
-
-	// Rewrite: capture qc3.
-	// ... actually the above _, _ = runRound swallowed it.
-	// Redo: do 4 rounds total so we commit h1 and h2.
-}
-
-// TestHappyPathCommitsAfterFourRounds is the corrected, clearer version
-// of the commit test. Four consecutive rounds commit blocks 1 and 2.
+// TestHappyPathCommitsAfterFourRounds is the core session-1 acceptance
+// test. Four consecutive honest rounds commit blocks 1 and 2 via the
+// chained two-chain rule: block 1 commits when view-3's proposal
+// arrives (its justify is QC on block 2, whose parent is block 1, with
+// consecutive views 1 and 2), and block 2 commits one view later.
 func TestHappyPathCommitsAfterFourRounds(t *testing.T) {
 	reps := newCluster(t, 4, 1)
 
@@ -241,23 +184,31 @@ func TestSafetyAgreementAtHeight(t *testing.T) {
 // the threshold is 3; 2 votes must not form a QC but 3 must.
 func TestQuorumThresholdAtTwoFPlusOne(t *testing.T) {
 	reps := newCluster(t, 4, 1)
-	// Leader of view 1 is replica (1 mod 4) = 1.
-	leader := reps[1]
-	if leader.ID != leader.leader(leader.View()) {
-		t.Fatalf("replica 1 is not leader for view 1; got leader %d", leader.leader(leader.View()))
-	}
+	anyRep := reps[0]
+	leaderID := anyRep.leader(anyRep.View())
+	leader := reps[leaderID]
 
-	// Build a dummy proposal so the vote digest is over a known block.
+	// Build a real proposal from the actual leader so the vote digest
+	// and proposal signature line up.
 	genesisQC := QC{}
 	prop, err := leader.Propose(Hash{}, []byte("op"), genesisQC)
 	if err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
 	blockHash := prop.Block.Hash()
-	digest := proposalDigest(prop.View, blockHash)
+	digest := voteDigest(prop.View, blockHash)
 
-	// Replicas 0, 2 vote (F+1 = 2). No QC expected.
-	for _, voter := range []ReplicaID{0, 2} {
+	// Two non-leader voters submit F+1 = 2 votes. No QC expected.
+	var voters []ReplicaID
+	for id := range reps {
+		if id != leaderID {
+			voters = append(voters, id)
+		}
+	}
+	if len(voters) < 3 {
+		t.Fatalf("expected at least 3 non-leader voters, got %d", len(voters))
+	}
+	for _, voter := range voters[:2] {
 		sig := reps[voter].signer.Sign(digest)
 		qc, err := leader.HandleVote(Vote{View: prop.View, BlockHash: blockHash, Voter: voter, Sig: sig})
 		if err != nil {
@@ -269,7 +220,7 @@ func TestQuorumThresholdAtTwoFPlusOne(t *testing.T) {
 	}
 
 	// Third vote crosses the 2f+1 threshold.
-	voter := ReplicaID(3)
+	voter := voters[2]
 	sig := reps[voter].signer.Sign(digest)
 	qc, err := leader.HandleVote(Vote{View: prop.View, BlockHash: blockHash, Voter: voter, Sig: sig})
 	if err != nil {
@@ -290,32 +241,134 @@ func TestQuorumThresholdAtTwoFPlusOne(t *testing.T) {
 // twice.
 func TestDoubleVoteRejected(t *testing.T) {
 	reps := newCluster(t, 4, 1)
-	leader := reps[reps[0].leader(1)]
+	leaderID := reps[0].leader(1)
+	leader := reps[leaderID]
 
 	// First proposal in view 1.
 	prop1, err := leader.Propose(Hash{}, []byte("op-a"), QC{})
 	if err != nil {
 		t.Fatalf("Propose A: %v", err)
 	}
-	// Deliver to replica 2 — should succeed.
-	target := reps[2]
+	// Deliver to a non-leader replica — should succeed.
+	var targetID ReplicaID
+	for id := range reps {
+		if id != leaderID {
+			targetID = id
+			break
+		}
+	}
+	target := reps[targetID]
 	if err := target.HandleProposal(*prop1); err != nil {
 		t.Fatalf("HandleProposal A: %v", err)
 	}
 
-	// Second proposal in the SAME view with different payload (Byzantine
-	// equivocation). Leader fabricates it; replica 2 should reject.
+	// Second (equivocating) proposal in the SAME view with different
+	// payload. Propose() would refuse (ErrDoublePropose), so we
+	// fabricate it directly to simulate a Byzantine leader that has
+	// bypassed its own equivocation guard.
 	prop2 := *prop1
 	prop2.Block.Payload = []byte("op-b")
-	// Re-hash via Sign digest path: the test bypasses Propose because
-	// Propose always advances via current view and block.View=r.view.
-	// We set block.View manually to match.
 	prop2.Block.View = prop1.View
-	prop2.Sig = leader.signer.Sign(proposalDigest(prop2.View, prop2.Block.Hash()))
+	prop2.Sig = leader.signer.Sign(proposalSignDigest(prop2.View, prop2.Block.Hash()))
 
 	err = target.HandleProposal(prop2)
 	if !errors.Is(err, ErrDoubleVote) {
 		t.Fatalf("expected ErrDoubleVote on equivocating proposal; got %v", err)
+	}
+}
+
+// TestDoubleProposeBlocked verifies the leader-side equivocation guard:
+// a leader that has emitted a proposal in view V refuses to emit a
+// second proposal in the same view. Must call AdvanceView first.
+func TestDoubleProposeBlocked(t *testing.T) {
+	reps := newCluster(t, 4, 1)
+	leaderID := reps[0].leader(1)
+	leader := reps[leaderID]
+
+	if _, err := leader.Propose(Hash{}, []byte("first"), QC{}); err != nil {
+		t.Fatalf("first Propose: %v", err)
+	}
+	_, err := leader.Propose(Hash{}, []byte("second"), QC{})
+	if !errors.Is(err, ErrDoublePropose) {
+		t.Fatalf("expected ErrDoublePropose on second proposal in same view; got %v", err)
+	}
+}
+
+// TestWrongLeaderRejected verifies that a replica rejects a proposal
+// whose Sender is not the designated leader for the proposal's view,
+// even if the proposal is otherwise well-formed.
+func TestWrongLeaderRejected(t *testing.T) {
+	reps := newCluster(t, 4, 1)
+	leaderID := reps[0].leader(1)
+	leader := reps[leaderID]
+
+	prop, err := leader.Propose(Hash{}, []byte("op"), QC{})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	// Pick a non-leader victim replica and a non-leader fake sender.
+	var target, fake ReplicaID
+	for id := range reps {
+		if id != leaderID {
+			if target == 0 && id != 0 {
+				target = id
+			} else if fake == 0 && id != 0 && id != target {
+				fake = id
+			}
+		}
+	}
+	if target == fake || target == leaderID || fake == leaderID {
+		// Fall back to explicit selection; tests with N=4 should always
+		// have three non-leader IDs.
+		for id := range reps {
+			if id != leaderID && id != target {
+				fake = id
+				break
+			}
+		}
+	}
+	// Forge a proposal claiming to be from a non-leader.
+	forged := *prop
+	forged.Sender = fake
+	// Sign with the fake's signer so the sig validates against the
+	// wrong sender — otherwise we'd trip ErrBadProposalSig first.
+	forged.Sig = reps[fake].signer.Sign(proposalSignDigest(forged.View, forged.Block.Hash()))
+	err = reps[target].HandleProposal(forged)
+	if !errors.Is(err, ErrWrongLeader) {
+		t.Fatalf("expected ErrWrongLeader on forged proposal; got %v", err)
+	}
+}
+
+// TestBadProposalSigRejected verifies that a proposal whose signature
+// fails verification is rejected with ErrBadProposalSig even when the
+// sender is the correct leader.
+func TestBadProposalSigRejected(t *testing.T) {
+	reps := newCluster(t, 4, 1)
+	leaderID := reps[0].leader(1)
+	leader := reps[leaderID]
+
+	prop, err := leader.Propose(Hash{}, []byte("op"), QC{})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	// Corrupt the signature.
+	forged := *prop
+	if len(forged.Sig) == 0 {
+		t.Fatalf("placeholder sig unexpectedly empty")
+	}
+	forged.Sig = append(Signature{}, forged.Sig...)
+	forged.Sig[len(forged.Sig)-1] ^= 0xff
+
+	var targetID ReplicaID
+	for id := range reps {
+		if id != leaderID {
+			targetID = id
+			break
+		}
+	}
+	err = reps[targetID].HandleProposal(forged)
+	if !errors.Is(err, ErrBadProposalSig) {
+		t.Fatalf("expected ErrBadProposalSig on tampered signature; got %v", err)
 	}
 }
 
