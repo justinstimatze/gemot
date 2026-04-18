@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
 	"github.com/justinstimatze/gemot/internal/store"
@@ -17,6 +18,8 @@ type Store interface {
 	LoadReputation(ctx context.Context, agents []string) (map[string]store.Reputation, error)
 	LoadTrustEdges(ctx context.Context) ([]analysis.Edge, error)
 	AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge) error
+	ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge) error
+	DecayTrustEdges(ctx context.Context, halfLife time.Duration) error
 	IncrementSurvivedCounts(ctx context.Context, agents []string) error
 	PersistEigenTrustScores(ctx context.Context, scores map[string]float64) error
 }
@@ -35,6 +38,22 @@ type Config struct {
 	// an attacker can DoS Postgres. Hosted deployments should set
 	// GEMOT_EIGENTRUST_DB_FAIL=closed.
 	DBFail string
+	// DecayHalfLifeDays controls exponential decay of stored trust-edge
+	// weights. 0 (the default) disables decay — today's cumulative-
+	// forever semantics. Positive values apply weight *= 0.5^(age/half)
+	// to edges older than ~1h at the start of each recompute, damping
+	// the whitewashing attack where a graduated Sybil ring retains
+	// pumped-up edge mass indefinitely. Recommended value: 14 (two-
+	// week half-life) for a deployment that expects weekly usage.
+	DecayHalfLifeDays int
+	// DisputeWeight is the per-dispute negative edge weight added when
+	// an agent files a Dispute against a crux. A dispute from X against
+	// a crux authored by Y subtracts this much weight from edge X→Y.
+	// Default 0.5 — half the weight of a single agreement. Stored
+	// weight is allowed to go negative; EigenTrust ignores non-positive
+	// edges at input, so a sufficiently-disputed agent has that inbound
+	// trust effectively clamped to zero.
+	DisputeWeight float64
 }
 
 // DBFailClosed is the sentinel that activates fail-closed semantics.
@@ -158,15 +177,23 @@ func (r *Weigher) UpdateFromRound(
 	ctx context.Context,
 	cruxes []types.Crux,
 	positionAuthors map[string]string,
+	disputes []types.Dispute,
 ) error {
 	agreersByAuthor := map[string]map[string]struct{}{}
 	var edges []analysis.Edge
+	// Build a claim→authors index for dispute mapping. We key by the
+	// surviving crux's claim text because Dispute.CruxClaim holds the
+	// claim string (the Dispute model predates persistent crux IDs).
+	cruxAuthorsByClaim := map[string]map[string]struct{}{}
 	for _, c := range cruxes {
 		authors := map[string]struct{}{}
 		for _, pid := range c.SourcePositionIDs {
 			if author, ok := positionAuthors[pid]; ok && author != "" {
 				authors[author] = struct{}{}
 			}
+		}
+		if c.Claim != "" {
+			cruxAuthorsByClaim[c.Claim] = authors
 		}
 		seenAgreers := map[string]struct{}{}
 		for _, agreer := range c.AgreeAgents {
@@ -187,6 +214,26 @@ func (r *Weigher) UpdateFromRound(
 		}
 	}
 
+	var disputeEdges []analysis.Edge
+	disputeWeight := r.cfg.DisputeWeight
+	if disputeWeight <= 0 {
+		disputeWeight = 0.5
+	}
+	for _, d := range disputes {
+		authors, ok := cruxAuthorsByClaim[d.CruxClaim]
+		if !ok {
+			continue
+		}
+		for author := range authors {
+			if author == d.AgentID {
+				continue
+			}
+			disputeEdges = append(disputeEdges, analysis.Edge{
+				From: d.AgentID, To: author, Weight: disputeWeight,
+			})
+		}
+	}
+
 	var survivedAuthors []string
 	for author, agreers := range agreersByAuthor {
 		if len(agreers) >= minDistinctAgreers {
@@ -200,6 +247,9 @@ func (r *Weigher) UpdateFromRound(
 	if err := r.store.AccumulateTrustEdges(ctx, edges); err != nil {
 		return fmt.Errorf("accumulate edges: %w", err)
 	}
+	if err := r.store.ApplyDisputeEdges(ctx, disputeEdges); err != nil {
+		return fmt.Errorf("apply dispute edges: %w", err)
+	}
 	return r.recomputeGlobalScores(ctx)
 }
 
@@ -207,10 +257,23 @@ func (r *Weigher) UpdateFromRound(
 // and persists the result. Called at round close after edge
 // accumulation and survived-count increments.
 func (r *Weigher) recomputeGlobalScores(ctx context.Context) error {
+	if r.cfg.DecayHalfLifeDays > 0 {
+		halfLife := time.Duration(r.cfg.DecayHalfLifeDays) * 24 * time.Hour
+		if err := r.store.DecayTrustEdges(ctx, halfLife); err != nil {
+			// Non-fatal: decay is a damping signal, and proceeding with
+			// stale weights is better than aborting the reputation
+			// recompute entirely. Log and continue.
+			slog.Warn("decay trust edges failed — continuing with undecayed weights", "err", err)
+		}
+	}
 	edges, err := r.store.LoadTrustEdges(ctx)
 	if err != nil {
 		return fmt.Errorf("load edges: %w", err)
 	}
+	// EigenTrust ignores non-positive edges at input (see eigentrust.go
+	// line ~142), so negative dispute-edge weights naturally clamp to
+	// zero in the transition matrix — an inbound dispute cancels an
+	// endorsement of equal magnitude rather than punching below zero.
 	cfg := analysis.EigenTrustConfig{Iterations: r.cfg.Iterations}
 	scores := analysis.EigenTrust(edges, nil, cfg)
 	if err := r.store.PersistEigenTrustScores(ctx, scores); err != nil {

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
 )
@@ -118,6 +119,71 @@ func (s *DB) LoadTrustEdges(ctx context.Context) ([]analysis.Edge, error) {
 		edges = append(edges, e)
 	}
 	return edges, rows.Err()
+}
+
+// ApplyDisputeEdges subtracts dispute-edge weights from the trust graph
+// in one batched round-trip. Unlike AccumulateTrustEdges, this intentionally
+// does NOT touch last_updated — decay tracks "when was this endorsement
+// last reinforced" and a dispute is not a reinforcement. Weights are
+// allowed to go negative; EigenTrust clamps non-positive edges to zero
+// at input, so negative storage means "inbound trust mass is cancelled
+// out until disputes are balanced by fresh endorsements."
+func (s *DB) ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge) error {
+	if len(edges) == 0 {
+		return nil
+	}
+	froms := make([]string, 0, len(edges))
+	tos := make([]string, 0, len(edges))
+	weights := make([]float64, 0, len(edges))
+	for _, e := range edges {
+		if e.Weight <= 0 {
+			continue
+		}
+		froms = append(froms, e.From)
+		tos = append(tos, e.To)
+		weights = append(weights, e.Weight)
+	}
+	if len(froms) == 0 {
+		return nil
+	}
+	// Insert with negated weight (-w). On conflict, add EXCLUDED.weight
+	// (which equals -w) to the existing row, yielding weight - w.
+	// last_updated is NOT bumped: a dispute is not an endorsement
+	// refresh, so decay should continue to see the true age of the
+	// inbound-trust signal (the previous endorsement).
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, last_updated)
+		 SELECT f, t, -w, NOW()
+		 FROM unnest($1::text[], $2::text[], $3::float8[]) AS u(f, t, w)
+		 ON CONFLICT (from_agent, to_agent) DO UPDATE
+		 SET weight = agent_trust_edges.weight + EXCLUDED.weight`,
+		froms, tos, weights)
+	if err != nil {
+		return fmt.Errorf("apply dispute edges: %w", err)
+	}
+	return nil
+}
+
+// DecayTrustEdges applies exponential weight decay to edges older than
+// one hour: weight *= 0.5^(age / halfLife). The one-hour skip prevents
+// double-decay when UpdateFromRound runs back-to-back in quick
+// succession. Uses Postgres' POWER + EXTRACT(EPOCH FROM ...) so the
+// calculation happens server-side in a single UPDATE.
+func (s *DB) DecayTrustEdges(ctx context.Context, halfLife time.Duration) error {
+	if halfLife <= 0 {
+		return nil
+	}
+	halfLifeSeconds := halfLife.Seconds()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE agent_trust_edges
+		 SET weight = weight * POWER(0.5, EXTRACT(EPOCH FROM (NOW() - last_updated)) / $1),
+		     last_updated = NOW()
+		 WHERE last_updated < NOW() - INTERVAL '1 hour'`,
+		halfLifeSeconds)
+	if err != nil {
+		return fmt.Errorf("decay trust edges: %w", err)
+	}
+	return nil
 }
 
 // PersistEigenTrustScores upserts scores for all agents in one batched

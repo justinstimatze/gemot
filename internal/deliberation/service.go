@@ -125,6 +125,8 @@ type AgentKeyStore interface {
 type ModerationStore interface {
 	CreateDispute(ctx context.Context, d *Dispute) error
 	GetDisputes(ctx context.Context, deliberationID string) ([]Dispute, error)
+	GetUnprocessedDisputes(ctx context.Context, deliberationID string) ([]Dispute, error)
+	MarkDisputesProcessed(ctx context.Context, disputeIDs []string) error
 	CreateAbuseReport(ctx context.Context, deliberationID, reporterKey, reason string) error
 	RecordContextAccess(ctx context.Context, deliberationID, agentID string, round int) error
 	HasContextAccess(ctx context.Context, deliberationID, agentID string, round int) (bool, error)
@@ -239,7 +241,7 @@ func WithSignature(sig []byte) PositionOption {
 // the reputation package) to avoid a deliberation → reputation →
 // analysis → deliberation import cycle.
 type RoundReputationUpdater interface {
-	UpdateFromRound(ctx context.Context, cruxes []types.Crux, positionAuthors map[string]string) error
+	UpdateFromRound(ctx context.Context, cruxes []types.Crux, positionAuthors map[string]string, disputes []types.Dispute) error
 }
 
 type Service struct {
@@ -1254,16 +1256,30 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 	}
 
 	// Reputation: update edges + survived_count from this round's cruxes,
-	// then recompute the global EigenTrust eigenvector. Non-fatal on
-	// failure — reputation is a signal, not a correctness property, so
-	// a DB hiccup here should not abort the round.
+	// then recompute the global EigenTrust eigenvector. Unprocessed
+	// disputes feed negative-weight edges into the graph (DARPA Track 1
+	// §3 defense against whitewashing). Non-fatal on failure —
+	// reputation is a signal, not a correctness property, so a DB
+	// hiccup here should not abort the round.
 	if s.reputation != nil {
 		positionAuthors := make(map[string]string, len(positions))
 		for _, p := range positions {
 			positionAuthors[p.ID] = p.AgentID
 		}
-		if err := s.reputation.UpdateFromRound(ctx, result.Cruxes, positionAuthors); err != nil {
+		unprocessed, dErr := s.store.GetUnprocessedDisputes(ctx, deliberationID)
+		if dErr != nil {
+			slog.Warn("fetch unprocessed disputes failed", "deliberation", deliberationID, "err", dErr)
+		}
+		if err := s.reputation.UpdateFromRound(ctx, result.Cruxes, positionAuthors, unprocessed); err != nil {
 			slog.Warn("reputation update failed", "deliberation", deliberationID, "err", err)
+		} else if len(unprocessed) > 0 {
+			ids := make([]string, len(unprocessed))
+			for i, d := range unprocessed {
+				ids[i] = d.ID
+			}
+			if err := s.store.MarkDisputesProcessed(ctx, ids); err != nil {
+				slog.Warn("mark disputes processed failed", "deliberation", deliberationID, "err", err)
+			}
 		}
 	}
 

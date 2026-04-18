@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
 	"github.com/justinstimatze/gemot/internal/reputation"
@@ -119,7 +120,7 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 		{SourcePositionIDs: []string{"p-alice-r1"}, AgreeAgents: []string{"bob", "carol"}},
 	}
 	authors1 := map[string]string{"p-alice-r1": "alice"}
-	if err := w.UpdateFromRound(ctx, round1, authors1); err != nil {
+	if err := w.UpdateFromRound(ctx, round1, authors1, nil); err != nil {
 		t.Fatalf("round 1 UpdateFromRound: %v", err)
 	}
 
@@ -142,7 +143,7 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 		{SourcePositionIDs: []string{"p-alice-r2"}, AgreeAgents: []string{"bob", "carol"}},
 	}
 	authors2 := map[string]string{"p-alice-r2": "alice"}
-	if err := w.UpdateFromRound(ctx, round2, authors2); err != nil {
+	if err := w.UpdateFromRound(ctx, round2, authors2, nil); err != nil {
 		t.Fatalf("round 2 UpdateFromRound: %v", err)
 	}
 
@@ -170,5 +171,140 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 	}
 	if reps["alice"].Score <= 0 {
 		t.Fatalf("alice should have positive eigenvector score, got %f", reps["alice"].Score)
+	}
+}
+
+// TestDecayTrustEdgesPostgres exercises the decay SQL against real
+// Postgres. An edge aged 14 days at halfLife=7 days should decay to
+// 0.25× its original weight (two half-lives). Edges fresher than 1
+// hour are skipped by the WHERE clause — the test seeds a stale edge
+// and a fresh edge so both branches are exercised in one UPDATE.
+func TestDecayTrustEdgesPostgres(t *testing.T) {
+	db := tempDB(t)
+	ctx := context.Background()
+
+	// Seed a fresh edge (will be skipped by the 1-hour-age guard).
+	if err := db.AccumulateTrustEdges(ctx, []analysis.Edge{
+		{From: "fresh-src", To: "fresh-dst", Weight: 1.0},
+	}); err != nil {
+		t.Fatalf("seed fresh edge: %v", err)
+	}
+	// Seed a stale edge by back-dating last_updated 14 days. Postgres
+	// INTERVAL + raw SQL keeps the test hermetic (no wall-clock wait).
+	if _, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO agent_trust_edges (from_agent, to_agent, weight, last_updated) VALUES ('stale-src', 'stale-dst', 1.0, NOW() - INTERVAL '14 days')`,
+	); err != nil {
+		t.Fatalf("seed stale edge: %v", err)
+	}
+
+	// halfLife = 7 days. Stale edge aged 14d → 2 half-lives → factor 0.25.
+	if err := db.DecayTrustEdges(ctx, 7*24*time.Hour); err != nil {
+		t.Fatalf("DecayTrustEdges: %v", err)
+	}
+	loaded, err := db.LoadTrustEdges(ctx)
+	if err != nil {
+		t.Fatalf("LoadTrustEdges: %v", err)
+	}
+	byPair := map[[2]string]float64{}
+	for _, e := range loaded {
+		byPair[[2]string{e.From, e.To}] = e.Weight
+	}
+	// Fresh edge untouched.
+	if w := byPair[[2]string{"fresh-src", "fresh-dst"}]; w != 1.0 {
+		t.Fatalf("fresh edge should not decay within 1h window; got weight=%f", w)
+	}
+	// Stale edge decayed. Allow small floating slack — the EXTRACT(EPOCH)
+	// math won't land at exactly 0.25 due to the tiny time elapsed
+	// during the test itself.
+	staleW := byPair[[2]string{"stale-src", "stale-dst"}]
+	if staleW < 0.24 || staleW > 0.26 {
+		t.Fatalf("stale edge aged 14d at halfLife=7d should decay to ~0.25; got weight=%f", staleW)
+	}
+}
+
+// TestApplyDisputeEdgesPostgres exercises the dispute-edge SQL path.
+// A dispute against an agent who has no prior edge inserts a row with
+// negative weight; a dispute against an agent with an existing
+// positive edge subtracts. Exercises both the INSERT and ON CONFLICT
+// DO UPDATE branches.
+func TestApplyDisputeEdgesPostgres(t *testing.T) {
+	db := tempDB(t)
+	ctx := context.Background()
+
+	// Seed a positive edge: bob endorsed alice.
+	if err := db.AccumulateTrustEdges(ctx, []analysis.Edge{
+		{From: "bob", To: "alice", Weight: 1.0},
+	}); err != nil {
+		t.Fatalf("seed endorsement: %v", err)
+	}
+
+	// Apply two disputes: carol→alice (new row, negative), bob→alice
+	// (existing row, subtracts).
+	if err := db.ApplyDisputeEdges(ctx, []analysis.Edge{
+		{From: "carol", To: "alice", Weight: 0.5},
+		{From: "bob", To: "alice", Weight: 0.4},
+	}); err != nil {
+		t.Fatalf("ApplyDisputeEdges: %v", err)
+	}
+
+	loaded, err := db.LoadTrustEdges(ctx)
+	if err != nil {
+		t.Fatalf("LoadTrustEdges: %v", err)
+	}
+	byPair := map[[2]string]float64{}
+	for _, e := range loaded {
+		byPair[[2]string{e.From, e.To}] = e.Weight
+	}
+	// Existing edge: 1.0 - 0.4 = 0.6
+	if w := byPair[[2]string{"bob", "alice"}]; w < 0.5999 || w > 0.6001 {
+		t.Fatalf("bob→alice after dispute want 0.6, got %f", w)
+	}
+	// New negative row: -0.5
+	if w := byPair[[2]string{"carol", "alice"}]; w < -0.5001 || w > -0.4999 {
+		t.Fatalf("carol→alice after dispute want -0.5, got %f", w)
+	}
+}
+
+// TestUnprocessedDisputesGatingPostgres verifies the idempotency path:
+// GetUnprocessedDisputes returns only disputes with rep_processed_at
+// IS NULL, and MarkDisputesProcessed flips the flag so subsequent
+// rounds skip already-ingested disputes.
+func TestUnprocessedDisputesGatingPostgres(t *testing.T) {
+	db := tempDB(t)
+	ctx := context.Background()
+
+	// Create a deliberation so the FK on disputes is satisfied.
+	_, err := db.RawDB().ExecContext(ctx,
+		`INSERT INTO deliberations (id, topic, round_number, status) VALUES ('d-test', 'decay test', 0, 'open')`,
+	)
+	if err != nil {
+		t.Fatalf("seed deliberation: %v", err)
+	}
+
+	// Two disputes on the same deliberation.
+	for _, id := range []string{"disp-1", "disp-2"} {
+		if _, err := db.RawDB().ExecContext(ctx,
+			`INSERT INTO disputes (id, deliberation_id, agent_id, crux_claim, correction, created_at) VALUES ($1, 'd-test', 'carol', 'some claim', 'why', NOW())`,
+			id,
+		); err != nil {
+			t.Fatalf("seed dispute %s: %v", id, err)
+		}
+	}
+
+	unprocessed, err := db.GetUnprocessedDisputes(ctx, "d-test")
+	if err != nil {
+		t.Fatalf("GetUnprocessedDisputes: %v", err)
+	}
+	if len(unprocessed) != 2 {
+		t.Fatalf("expected 2 unprocessed, got %d", len(unprocessed))
+	}
+
+	// Mark one processed — subsequent query should return just the other.
+	if err := db.MarkDisputesProcessed(ctx, []string{"disp-1"}); err != nil {
+		t.Fatalf("MarkDisputesProcessed: %v", err)
+	}
+	unprocessed, _ = db.GetUnprocessedDisputes(ctx, "d-test")
+	if len(unprocessed) != 1 || unprocessed[0].ID != "disp-2" {
+		t.Fatalf("expected only disp-2 unprocessed, got %+v", unprocessed)
 	}
 }
