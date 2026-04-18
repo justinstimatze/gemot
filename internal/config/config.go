@@ -19,6 +19,20 @@ type Config struct {
 	// scaling roughly linear in N × subtopic count. Suggested dev/research
 	// value: 3. Leave unset in production unless the cost profile is understood.
 	StabilitySamples int
+
+	// EigenTrust controls the persistent reputation layer. Off-by-default.
+	// When enabled, positions/votes contribute to a cross-deliberation
+	// trust graph (see internal/analysis/eigentrust.go + internal/store/
+	// reputation.go), and agent effective-weights in consensus synthesis
+	// are modulated by (a) the EigenTrust score and (b) a cold-start cap
+	// until the agent has accumulated ColdStartThreshold survived-round
+	// validations. The cold-start cap is the primary Sybil defense
+	// because canonical EigenTrust under a uniform teleport cannot
+	// defeat closed trust cycles — see THREAT_MODEL.md.
+	EigenTrustEnabled       bool
+	EigenTrustColdCap       float64 // default 0.1
+	EigenTrustColdThreshold int     // default 5
+	EigenTrustIterations    int     // default 50
 }
 
 // Load reads configuration from environment variables (and optional .env file).
@@ -27,10 +41,14 @@ func Load() *Config {
 	loadDotenv(".env")
 
 	cfg := &Config{
-		DatabaseURL:      envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
-		AnthropicKey:     envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
-		Model:            envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
-		StabilitySamples: envInt("GEMOT_STABILITY_SAMPLES", 0),
+		DatabaseURL:             envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
+		AnthropicKey:            envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
+		Model:                   envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
+		StabilitySamples:        envInt("GEMOT_STABILITY_SAMPLES", 0),
+		EigenTrustEnabled:       envBool("GEMOT_EIGENTRUST_ENABLED", false),
+		EigenTrustColdCap:       envFloat("GEMOT_EIGENTRUST_COLD_CAP", 0.1),
+		EigenTrustColdThreshold: envInt("GEMOT_EIGENTRUST_COLD_THRESHOLD", 5),
+		EigenTrustIterations:    envInt("GEMOT_EIGENTRUST_ITERATIONS", 50),
 	}
 
 	// Validate model is in known set
@@ -48,7 +66,47 @@ func Load() *Config {
 		fmt.Fprintf(os.Stderr, "gemot: WARNING: ANTHROPIC_API_KEY not set — analysis and content screening disabled\n")
 	}
 
+	if cfg.EigenTrustEnabled {
+		fmt.Fprintf(os.Stderr,
+			"gemot: EigenTrust reputation enabled (cold_cap=%.2f, cold_threshold=%d, iterations=%d)\n",
+			cfg.EigenTrustColdCap, cfg.EigenTrustColdThreshold, cfg.EigenTrustIterations)
+	}
+
 	return cfg
+}
+
+// envBool reads a boolean env var. Accepts "1"/"true"/"yes" (case-
+// insensitive) as true, "0"/"false"/"no"/"" as false. Unrecognized
+// values warn on stderr and fall back to the default — same pattern
+// as envInt.
+func envBool(key string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: %s=%q is not a boolean, using default %v\n", key, raw, fallback)
+		return fallback
+	}
+}
+
+// envFloat mirrors envInt for float64 values.
+func envFloat(key string, fallback float64) float64 {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: %s=%q is not a float, using default %f\n", key, raw, fallback)
+		return fallback
+	}
+	return f
 }
 
 func envOr(key, fallback string) string {

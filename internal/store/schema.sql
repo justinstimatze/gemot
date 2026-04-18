@@ -273,9 +273,38 @@ CREATE TABLE IF NOT EXISTS envelope_nonces (
 );
 CREATE INDEX IF NOT EXISTS idx_envelope_nonces_expires ON envelope_nonces(expires_at);
 
+-- EigenTrust reputation + cold-start cap (Track 1 Sybil resistance).
+-- `agent_reputation` is the per-agent persistent state: `score` is the
+-- most recent EigenTrust eigenvector component; `survived_count` is the
+-- count of deliberation rounds where a position authored by this agent
+-- survived to the final crux set. The cold-start cap clamps effective
+-- weight until `survived_count >= GEMOT_EIGENTRUST_COLD_THRESHOLD` —
+-- this is the primary Sybil defense because canonical EigenTrust
+-- without OOB pre-trust does not defeat closed trust cycles.
+--
+-- `agent_trust_edges` is the sparse directed trust graph aggregated
+-- across deliberations. `weight` is cumulative: each "A voted +1+ on a
+-- surviving position by B" observation increments weight(A → B) by 1.
+-- Power iteration is recomputed over this graph at round-close.
+CREATE TABLE IF NOT EXISTS agent_reputation (
+    agent_id TEXT PRIMARY KEY,
+    score DOUBLE PRECISION DEFAULT 0,
+    survived_count INTEGER DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS agent_trust_edges (
+    from_agent TEXT NOT NULL,
+    to_agent TEXT NOT NULL,
+    weight DOUBLE PRECISION DEFAULT 0,
+    last_updated TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (from_agent, to_agent)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_trust_edges_from ON agent_trust_edges(from_agent);
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (1) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (2) ON CONFLICT DO NOTHING;

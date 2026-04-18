@@ -43,6 +43,12 @@ type TextAnalyzer struct {
 	// N additional LLM calls, so this is opt-in (enable via a.StabilityCheckSamples
 	// from the CLI/flag layer).
 	StabilityCheckSamples int
+
+	// Reputation, when non-nil, supplies per-agent reputation multipliers
+	// (EigenTrust score + cold-start cap) that get multiplied into the
+	// effective-weight chain alongside TrustWeights and correlation.
+	// Nil means reputation is disabled (the default); weights are unity.
+	Reputation ReputationWeigher
 }
 
 func NewTextAnalyzer(client *llm.Client) *TextAnalyzer {
@@ -762,7 +768,11 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	trustWeightsEarly := TrustWeights(agents, positions, votes, warnings, currentRound)
 	// Correlation discounting (Plurality: degressive proportionality)
 	correlationWeightsEarly := CorrelationDiscountedWeights(votes, agents)
-	// Effective weights: trust × correlation × sqrt(conviction × time_weight)
+	var reputationWeights map[string]float64
+	if a.Reputation != nil {
+		reputationWeights = a.Reputation.WeightsFor(ctx, agents)
+	}
+	// Effective weights: trust × correlation × reputation × sqrt(conviction × time_weight)
 	// Conviction voting: agents who sustain positions across rounds gain weight.
 	// time_weight = 1 + 0.2*(roundsActive-1), so round 1 = 1.0, round 2 = 1.2, round 3 = 1.4
 	effectiveWeights := map[string]float64{}
@@ -793,7 +803,13 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 		if timeWeight < 1.0 {
 			timeWeight = 1.0
 		}
-		effectiveWeights[a] = trustWeightsEarly[a] * correlationWeightsEarly[a] * math.Sqrt(conv*timeWeight)
+		repW := 1.0
+		if reputationWeights != nil {
+			if w, ok := reputationWeights[a]; ok {
+				repW = w
+			}
+		}
+		effectiveWeights[a] = trustWeightsEarly[a] * correlationWeightsEarly[a] * repW * math.Sqrt(conv*timeWeight)
 	}
 
 	var consensus []deliberation.ConsensusStatement
