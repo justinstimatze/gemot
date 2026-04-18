@@ -1,8 +1,10 @@
-# Gemot Protocol TLA+ Specification
+# Gemot Protocol TLA+ Specifications
 
-TLA+ specification of the Gemot deliberation protocol state machine,
-covering round progression, position submission, qualified voting,
-commitment lifecycle, and termination under Byzantine presence.
+TLA+ specifications of the Gemot protocol stack, covering both the
+deliberation state machine (round progression, position submission,
+qualified voting, commitment lifecycle, termination under Byzantine
+presence) and the Byzantine-tolerant sequence-agreement protocol that
+orders those operations across replicas.
 
 This work is a cross-cutting deliverable of DARPA-PS-26-09 Track 1
 ("Formal specification and auditability," abstract §3). Its purpose is
@@ -11,9 +13,14 @@ mechanically checked and, later, refined against the implementation.
 
 ## Files
 
-- `Deliberation.tla` — the specification module.
-- `Deliberation.cfg` — TLC model-checker configuration with
-  representative constants.
+- `Deliberation.tla` / `Deliberation.cfg` — the deliberation state
+  machine module and its TLC configuration.
+- `HotStuff.tla` / `HotStuff.cfg` — the chained-HotStuff sequence-
+  agreement module and its TLC configuration. Session 1 of the BFT
+  implementation; see `hotstuff-design.md` for the protocol design.
+- `hotstuff-design.md` — design document for the `internal/bft/`
+  HotStuff implementation: adversary model, message types, state
+  machine, commit rule, storage design, deferred items.
 
 ## Running the model checker
 
@@ -97,9 +104,96 @@ Liveness (under fairness):
   cross-deliberation graph and are out of scope for a single-session
   spec. Track 1's EigenTrust work will produce its own specification.
 - **The full Byzantine-agreement sub-protocol.** This spec captures
-  the *deliberation* state machine; the PBFT/HotStuff-lineage sequence
-  agreement that will eventually order position submissions and votes
-  is a separate module (future work — abstract §5 M16 item).
+  the *deliberation* state machine; the HotStuff-lineage sequence
+  agreement that orders position submissions and votes is in the
+  companion `HotStuff.tla` module.
+
+## The HotStuff sequence-agreement spec
+
+`HotStuff.tla` models the chained-HotStuff core as implemented in
+`internal/bft/`: block proposal, replica voting, quorum-certificate
+(QC) formation at the 2f+1 threshold, and the two-chain commit rule.
+Session 1 scope is the happy-path state machine; view change and
+real threshold signatures are tracked for session 2. See
+`hotstuff-design.md` for the design-level discussion.
+
+### Properties checked
+
+Safety invariants:
+
+- `TypeInvariant` — state variables keep declared types.
+- `NoDoubleVoteInView` — no replica (honest or Byzantine) casts two
+  different votes in the same view.
+- `AgreementAtHeight` — **the core HotStuff safety property**: no
+  two honest replicas commit different blocks at the same height.
+  Yin et al. PODC 2019, Theorem 1.
+- `CommittedChainConsistent` — every committed block (above genesis)
+  has a committed ancestor at the genesis height; the committed
+  subgraph is chain-connected.
+- `QCRequiresQuorum` — every QC has 2f+1 distinct voters.
+- `CommitRequiresQC` — honest replicas only commit blocks with a QC.
+- `ByzantineBound` — the f < N/3 constant assumption holds.
+
+Temporal safety (stuttering-insensitive `[][...]_vars`):
+
+- `CommittedMonotonic` — per-replica committed set is append-only.
+- `QCsMonotonic`, `VotesMonotonic`, `BlocksMonotonic` — the
+  observable protocol histories are append-only.
+
+### Byzantine model
+
+The spec's Byzantine replicas may vote for any block in any view
+they have not yet voted in. This is deliberately weaker than a full
+adversarial model — intra-view equivocation (two votes in the same
+view), signature forgery (guarded by the threshold-sig assumption),
+and adversarial view-change manipulation are out of scope for
+session 1. Session 2's view-change implementation expands the
+adversarial model.
+
+### Model bounds and generalization
+
+The committed `HotStuff.cfg` checks `|Replicas|=4`, `|Byzantine|=1`,
+`MaxView=2`, `MaxHeight=2`, `MaxBlocks=3`. TLC explores 7,862
+distinct reachable states in ~1 second and verifies all safety
+invariants. N=4 with f=1 is the minimum non-trivial HotStuff
+configuration (f < N/3 ⇒ N ≥ 4). Two views and two heights suffice
+to exercise the pipelined two-chain commit rule: block at height 1
+with a QC in view 1, block at height 2 extending it with a QC in
+view 2 — the two-chain rule commits the height-1 block.
+
+**Generalization from the small model to arbitrary N.** The same
+three-step argument as `Deliberation.tla` applies:
+
+1. **Parametric statement of properties.** `AgreementAtHeight` and
+   the other safety invariants are universally quantified over
+   `Honest` and `committed[r]` with no fixed-arity references.
+2. **Cutoff / projection.** The safety properties are Π₁ (for-all
+   over finite-history tuples); projecting an N+1-replica execution
+   down to N replicas preserves the invariants, and extending to
+   N+1 by leaving one replica idle is still a valid behavior.
+3. **Byzantine ratio is instance-independent.** `f < N/3` is a
+   constant constraint; any valid instantiation at higher N with
+   the same ratio preserves it.
+
+Liveness is *not* checked in `HotStuff.cfg` — session 1 scopes to
+safety. Liveness under partial synchrony is a session-2 deliverable
+once the view-change protocol is implemented. The safety argument
+above is independent of liveness.
+
+### What the HotStuff spec does *not* cover
+
+- **View change.** Session 1 is happy-path only; no NewView message
+  or leader-timeout logic.
+- **Real threshold signatures.** Modeled as an abstract QC set that
+  forms at 2f+1 votes; the Go implementation uses placeholder sigs
+  in session 1 and wires real BLS in session 2.
+- **Network model.** Messages are modeled as a set of
+  state-machine transitions; no explicit network layer, no dropped
+  or reordered messages. Partial-synchrony assumptions live in the
+  design doc, not the spec.
+- **Service-layer integration.** The spec models the protocol in
+  isolation; the binding to gemot's `submit_position` / `vote` /
+  `analyze` operations is a session-3 deliverable.
 
 ## Model bounds and the n-agent generalization argument
 
