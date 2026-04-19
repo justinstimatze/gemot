@@ -26,6 +26,13 @@ type server struct {
 	credits  *payments.CreditStore
 	db       *store.DB
 	shutdown context.Context // server lifetime context — cancelled on shutdown
+	// analyzeLimiter caps analyze:run invocations per API key to bound
+	// LLM-call rate independent of the credit system. A well-funded
+	// account could otherwise burn through its credits in seconds and
+	// saturate the upstream Anthropic quota for every other user.
+	// Set by RunHTTP; nil when running via `serve` (stdio, trusted
+	// single agent) where rate limiting adds no value.
+	analyzeLimiter *payments.RateLimiter
 }
 
 // RunAnalysisAsync starts an analysis in a background goroutine with proper
@@ -633,6 +640,18 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		}
 		if args.Model != "" && !llm.AllowedModels[args.Model] {
 			return errResult(fmt.Errorf("unsupported model %q — allowed: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5", args.Model))
+		}
+		// Per-key rate limit BEFORE credit deduction. A rejected request
+		// must not charge the caller, so the limiter check comes first.
+		// Nil limiter (stdio / trusted mode) is a pass-through.
+		if s.analyzeLimiter != nil {
+			bucket := keyID
+			if bucket == "" {
+				bucket = "anonymous"
+			}
+			if !s.analyzeLimiter.Allow("analyze:" + bucket) {
+				return errResult(fmt.Errorf("rate limit exceeded: max 10 analyses per minute per API key — slow down or batch requests"))
+			}
 		}
 		// Sandbox users get 1 free analysis per deliberation
 		if sandbox, _ := ctx.Value(payments.ContextKeySandbox{}).(bool); sandbox {

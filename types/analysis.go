@@ -44,6 +44,13 @@ type ConsensusStatement struct {
 	Content              string  `json:"content"`
 	OverallAgreeRatio    float64 `json:"overall_agree_ratio"`
 	MinClusterAgreeRatio float64 `json:"min_cluster_agree_ratio"`
+	// SupportingAgents lists every agent whose vote contributed to
+	// the overall agree ratio — i.e., voted value > 0 on this
+	// position. Enables consensus-claim provenance: a reader can
+	// audit exactly which votes back the statement rather than
+	// trusting the aggregate ratio alone. Threat-model pattern #7
+	// (consensus spoofing) defense.
+	SupportingAgents []string `json:"supporting_agents,omitempty"`
 }
 
 type BridgingStatement struct {
