@@ -83,15 +83,20 @@ func Load() *Config {
 		AnthropicKey:                envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
 		Model:                       envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
 		StabilitySamples:            envInt("GEMOT_STABILITY_SAMPLES", 0),
-		EigenTrustEnabled:           envBool("GEMOT_EIGENTRUST_ENABLED", false),
+		// Defaults updated 2026-04-19 per feedback_darpa_always_on: the
+		// hardening work is always-on by default, not gated behind an
+		// env-var opt-in that most deployments never flip. Values below
+		// are the recommended settings previously documented in
+		// THREAT_MODEL, now baked as defaults.
+		EigenTrustEnabled:           envBool("GEMOT_EIGENTRUST_ENABLED", true),
 		EigenTrustColdCap:           envFloat("GEMOT_EIGENTRUST_COLD_CAP", 0.1),
 		EigenTrustColdThreshold:     envInt("GEMOT_EIGENTRUST_COLD_THRESHOLD", 5),
 		EigenTrustIterations:        envInt("GEMOT_EIGENTRUST_ITERATIONS", 50),
-		EigenTrustDBFail:            envDBFailMode("GEMOT_EIGENTRUST_DB_FAIL", "open"),
-		EigenTrustDecayHalfLifeDays: envInt("GEMOT_EIGENTRUST_DECAY_HALFLIFE_DAYS", 0),
+		EigenTrustDBFail:            envDBFailMode("GEMOT_EIGENTRUST_DB_FAIL", "closed"),
+		EigenTrustDecayHalfLifeDays: envInt("GEMOT_EIGENTRUST_DECAY_HALFLIFE_DAYS", 30),
 		EigenTrustDisputeWeight:     envFloat("GEMOT_EIGENTRUST_DISPUTE_WEIGHT", 0.5),
-		EigenTrustEdgeFloor:         envFloat("GEMOT_EIGENTRUST_EDGE_FLOOR", 0),
-		EigenTrustEdgeCap:           envFloat("GEMOT_EIGENTRUST_EDGE_CAP", 0),
+		EigenTrustEdgeFloor:         envFloat("GEMOT_EIGENTRUST_EDGE_FLOOR", 0.01),
+		EigenTrustEdgeCap:           envFloat("GEMOT_EIGENTRUST_EDGE_CAP", 10.0),
 		ConsistencyModel:            os.Getenv("GEMOT_CONSISTENCY_MODEL"),
 		ConsistencyKey:              envOr("GEMOT_CONSISTENCY_KEY", os.Getenv("GEMINI_API_KEY")),
 		ConsistencySampleK:          envInt("GEMOT_CONSISTENCY_SAMPLE_K", 5),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 
@@ -499,4 +500,90 @@ func truncateClaim(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// trimmedMean returns the mean of `values` after discarding the
+// top and bottom `trim` fraction of samples. trim=0.1 drops 10% from
+// each end (20% total), bounding the influence of any single outlier
+// or small coordinated minority on the aggregate. If the dataset is
+// too small to trim meaningfully, falls back to the median (even more
+// robust) or raw mean as a last resort.
+//
+// Used by validateAggregationStability to cross-check Polis-style
+// mean aggregates against a manipulation-resistant alternative. When
+// the two disagree, outlier voters are likely pulling the aggregate
+// in a direction the majority does not support.
+func trimmedMean(values []float64, trim float64) float64 {
+	n := len(values)
+	if n == 0 {
+		return 0
+	}
+	k := int(math.Floor(float64(n) * trim))
+	if 2*k >= n {
+		// Trim would discard everything; return median instead.
+		sorted := append([]float64(nil), values...)
+		sort.Float64s(sorted)
+		return sorted[n/2]
+	}
+	if k == 0 {
+		// Too few samples to trim; return regular mean.
+		sum := 0.0
+		for _, v := range values {
+			sum += v
+		}
+		return sum / float64(n)
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	trimmed := sorted[k : n-k]
+	sum := 0.0
+	for _, v := range trimmed {
+		sum += v
+	}
+	return sum / float64(len(trimmed))
+}
+
+// validateAggregationStability emits AGGREGATION_DRIFT warnings when a
+// position's raw per-position vote mean diverges substantially from
+// its trimmed mean — a signal that outlier voters (a small
+// coordinated minority with extreme stances) are pulling the
+// aggregate away from what the majority actually expressed. This is
+// the robust-aggregation defense against Byzantine-tolerant
+// vote-matrix manipulation: not changing the algorithm output, but
+// surfacing when the aggregate is suspect so downstream readers can
+// weight it accordingly.
+//
+// Requires ≥ 10 votes on a position for a reliable signal — below
+// that threshold, trimming removes too much and the comparison
+// produces noise. Divergence threshold 0.2 on the -2..+2 scale
+// (5% of the value range) is calibrated to catch a single outlier
+// in a 10-voter pool: e.g., 9 voters at 0 + 1 at +2 yields raw 0.2,
+// trimmed 0, diff 0.2. Bigger cohorts need more coordinated outliers
+// to trigger; smaller than 10 falls below the minVoters floor.
+func validateAggregationStability(votes []deliberation.Vote, positions []deliberation.Position) []string {
+	const minVoters = 10
+	const driftThreshold = 0.2
+	byPosition := map[string][]float64{}
+	for _, v := range votes {
+		byPosition[v.PositionID] = append(byPosition[v.PositionID], float64(v.Value))
+	}
+	var warnings []string
+	for _, p := range positions {
+		vals := byPosition[p.ID]
+		if len(vals) < minVoters {
+			continue
+		}
+		sum := 0.0
+		for _, v := range vals {
+			sum += v
+		}
+		raw := sum / float64(len(vals))
+		trimmed := trimmedMean(vals, 0.1)
+		if math.Abs(raw-trimmed) >= driftThreshold {
+			warnings = append(warnings, fmt.Sprintf(
+				"AGGREGATION_DRIFT: position %s has raw_mean=%.2f trimmed_mean=%.2f — outlier votes are pulling the aggregate",
+				p.ID, raw, trimmed))
+		}
+	}
+	return warnings
 }

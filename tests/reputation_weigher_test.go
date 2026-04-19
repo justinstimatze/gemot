@@ -96,6 +96,34 @@ func (f *fakeReputationStore) LoadTrustEdges(_ context.Context, delibID string) 
 	return out, nil
 }
 
+// LoadTrustEdgesForCohort returns the private partition plus global
+// edges where either endpoint is in cohort. Mirrors PostgresReputation
+// store's SQL semantics.
+func (f *fakeReputationStore) LoadTrustEdgesForCohort(_ context.Context, delibID string, cohort []string) ([]analysis.Edge, error) {
+	if delibID == "" && len(cohort) == 0 {
+		return f.LoadTrustEdges(context.Background(), "")
+	}
+	inCohort := make(map[string]bool, len(cohort))
+	for _, v := range cohort {
+		inCohort[v] = true
+	}
+	out := make([]analysis.Edge, 0, len(f.edges))
+	for k, w := range f.edges {
+		scope := k[2]
+		if scope != "" {
+			if scope == delibID {
+				out = append(out, analysis.Edge{From: k[0], To: k[1], Weight: w})
+			}
+			continue
+		}
+		// Global edge: include only if either endpoint is in cohort.
+		if len(cohort) > 0 && (inCohort[k[0]] || inCohort[k[1]]) {
+			out = append(out, analysis.Edge{From: k[0], To: k[1], Weight: w})
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeReputationStore) AccumulateTrustEdges(_ context.Context, edges []analysis.Edge, cap float64, delibID string) error {
 	for _, e := range edges {
 		if e.Weight <= 0 {

@@ -44,19 +44,25 @@ const (
 	EnvelopeRequired
 )
 
-// ParseEnvelopeMode maps the GEMOT_ENVELOPE_MODE env string to a mode. Unknown
-// values fall back to EnvelopeOff with a warning so a typo doesn't silently
-// relax a stricter intent.
+// ParseEnvelopeMode maps the GEMOT_ENVELOPE_MODE env string to a mode.
+// Default (empty string) is EnvelopeAdvisory: unsigned requests pass
+// through, signed requests get verified and log mismatches. This is
+// a safe always-on posture — any client that starts signing gets
+// immediate verification without existing unsigned clients breaking.
+// Unknown values fall back to EnvelopeAdvisory with a warning so a
+// typo doesn't silently disable verification.
 func ParseEnvelopeMode(s string) (EnvelopeMode, error) {
 	switch s {
-	case "", "off":
+	case "":
+		return EnvelopeAdvisory, nil
+	case "off":
 		return EnvelopeOff, nil
 	case "advisory":
 		return EnvelopeAdvisory, nil
 	case "required":
 		return EnvelopeRequired, nil
 	default:
-		return EnvelopeOff, fmt.Errorf("unknown envelope mode %q (use off|advisory|required)", s)
+		return EnvelopeAdvisory, fmt.Errorf("unknown envelope mode %q (use off|advisory|required)", s)
 	}
 }
 

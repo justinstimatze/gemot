@@ -91,17 +91,24 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 		fmt.Fprintf(os.Stderr, "gemot: WARNING: %v — defaulting to off\n", err)
 	}
 	var nonceCache auth.NonceCache
+	// Default is postgres so multi-instance Fly deploys have replay
+	// protection out of the box. Explicit GEMOT_NONCE_STORE=memory is
+	// still honored for single-process local dev where avoiding the
+	// Postgres round-trip per request matters more than durability.
 	switch store := strings.TrimSpace(os.Getenv("GEMOT_NONCE_STORE")); store {
-	case "postgres":
+	case "", "postgres":
 		pg := auth.NewPostgresNonceCache(db, 0)
 		pg.StartJanitor(ctx, 0)
 		nonceCache = pg
-		fmt.Fprintf(os.Stderr, "gemot: envelope nonce cache: postgres (durable)\n")
-	case "", "memory":
+		fmt.Fprintf(os.Stderr, "gemot: envelope nonce cache: postgres (durable, multi-instance safe)\n")
+	case "memory":
 		nonceCache = auth.NewMemoryNonceCache(0, 0)
+		fmt.Fprintf(os.Stderr, "gemot: envelope nonce cache: memory (single-instance only)\n")
 	default:
-		fmt.Fprintf(os.Stderr, "gemot: WARNING: unknown GEMOT_NONCE_STORE=%q — defaulting to memory (single-instance only)\n", store)
-		nonceCache = auth.NewMemoryNonceCache(0, 0)
+		fmt.Fprintf(os.Stderr, "gemot: WARNING: unknown GEMOT_NONCE_STORE=%q — defaulting to postgres\n", store)
+		pg := auth.NewPostgresNonceCache(db, 0)
+		pg.StartJanitor(ctx, 0)
+		nonceCache = pg
 	}
 	envelopeMiddleware := EnvelopeMiddleware(svc, nonceCache, envelopeMode, 0)
 	if envelopeMode != EnvelopeOff {
@@ -724,12 +731,28 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		w.Write(indexHTML) //nolint:errcheck
 	})
 
-	// Security headers for all responses
+	// Security headers for all responses. CSP uses 'unsafe-inline' for
+	// both scripts and styles because the landing page + /try HTML have
+	// inline onclick handlers and inline <style>. Fonts.googleapis /
+	// gstatic are the only external origins any page reaches; everything
+	// else is same-origin or explicit via a redirect the user initiates.
+	// Stricter nonces are a future tightening once the static pages are
+	// rewritten to use external script/style refs.
+	const csp = "default-src 'self'; " +
+		"script-src 'self' 'unsafe-inline'; " +
+		"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+		"font-src 'self' https://fonts.gstatic.com; " +
+		"img-src 'self' data:; " +
+		"connect-src 'self'; " +
+		"frame-ancestors 'none'; " +
+		"base-uri 'self'; " +
+		"form-action 'self'"
 	secureHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		w.Header().Set("Content-Security-Policy", csp)
 		mux.ServeHTTP(w, r)
 	})
 

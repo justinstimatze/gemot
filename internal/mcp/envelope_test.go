@@ -10,12 +10,12 @@ func TestParseEnvelopeMode(t *testing.T) {
 		want    EnvelopeMode
 		wantErr bool
 	}{
-		{"", EnvelopeOff, false},
+		{"", EnvelopeAdvisory, false}, // default is advisory (always-on safe posture)
 		{"off", EnvelopeOff, false},
 		{"advisory", EnvelopeAdvisory, false},
 		{"required", EnvelopeRequired, false},
-		{"REQUIRED", EnvelopeOff, true},
-		{"strict", EnvelopeOff, true},
+		{"REQUIRED", EnvelopeAdvisory, true}, // typo falls to advisory, not off
+		{"strict", EnvelopeAdvisory, true},
 	}
 	for _, c := range cases {
 		got, err := ParseEnvelopeMode(c.in)
