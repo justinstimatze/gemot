@@ -71,4 +71,11 @@ func TestTryCodeTemplateRender(t *testing.T) {
 	if !strings.Contains(out, "47h remaining") {
 		t.Errorf("output missing hours-remaining display")
 	}
+	// The invite-msg div must preserve newlines so the clipboard copy
+	// (via innerText) renders as a multi-line message when pasted.
+	// Without white-space:pre-line the HTML collapses newlines to
+	// spaces and the pasted invite is a single-paragraph blob.
+	if !strings.Contains(out, `id="invite-msg"`) || !strings.Contains(out, "white-space:pre-line") {
+		t.Errorf("invite-msg div missing white-space:pre-line — pasted text will collapse to one line")
+	}
 }
