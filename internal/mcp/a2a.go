@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"database/sql"
@@ -19,6 +20,65 @@ import (
 	"github.com/justinstimatze/gemot/internal/store"
 )
 
+// SandboxResolver lets A2AAuthMiddleware authorize anonymous requests
+// that carry a valid sandbox join code. Kept as an interface (rather
+// than a *deliberation.Service dep) so tests can stub it without
+// pulling the full service wiring.
+type SandboxResolver interface {
+	LookupJoinCode(ctx context.Context, code string) (*deliberation.JoinCode, *deliberation.Deliberation, error)
+}
+
+// sandboxAllowedOp is a (grouped-method, action) pair a bearer-less
+// sandbox caller may invoke. Keep tight — each entry is an avenue for
+// spam via a leaked join code. Rate-limited per IP downstream.
+type sandboxAllowedOp struct{ method, action string }
+
+var sandboxAllowedOps = map[sandboxAllowedOp]bool{
+	{"gemot/coordinate", "join"}:             true,
+	{"gemot/participate", "submit_position"}: true,
+	{"gemot/participate", "vote"}:            true,
+	{"gemot/participate", "get_positions"}:   true,
+}
+
+// peekA2ARequest reads the JSON-RPC request body, returns method and
+// raw params, and restores r.Body so the downstream handler can read
+// it again. Returns empty strings on any parse failure (not fatal —
+// we fall through to Bearer auth).
+func peekA2ARequest(r *http.Request) (method string, params map[string]any) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return "", nil
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var msg struct {
+		Method string         `json:"method"`
+		Params map[string]any `json:"params"`
+	}
+	if err := json.Unmarshal(body, &msg); err != nil {
+		return "", nil
+	}
+	return msg.Method, msg.Params
+}
+
+// sandboxCodeFromParams extracts the join code from a sandbox-allowed
+// call. For join (coordinate/join) the code field is `code`; for
+// submit/vote/get_positions it's `join_code` so the two don't
+// collide with any existing field.
+func sandboxCodeFromParams(op sandboxAllowedOp, params map[string]any) string {
+	if params == nil {
+		return ""
+	}
+	if op.method == "gemot/coordinate" && op.action == "join" {
+		if c, ok := params["code"].(string); ok {
+			return c
+		}
+	}
+	if c, ok := params["join_code"].(string); ok {
+		return c
+	}
+	return ""
+}
+
 // A2AAuthMiddleware verifies A2A bearer-token auth and populates the request
 // context with the same keys payments.Middleware uses on /mcp:
 //
@@ -36,7 +96,13 @@ import (
 // Unlike payments.Middleware, this middleware never falls through to sandbox
 // mode — unauthenticated A2A requests are rejected outright, preserving the
 // strict posture agents expect from /a2a.
-func A2AAuthMiddleware(apiSecret string, creditStore *payments.CreditStore, rateLimiter *payments.RateLimiter) func(http.Handler) http.Handler {
+func A2AAuthMiddleware(
+	apiSecret string,
+	creditStore *payments.CreditStore,
+	rateLimiter *payments.RateLimiter,
+	sandboxResolver SandboxResolver,
+	sandboxLimiter *payments.RateLimiter,
+) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
@@ -50,7 +116,45 @@ func A2AAuthMiddleware(apiSecret string, creditStore *payments.CreditStore, rate
 
 			authHdr := r.Header.Get("Authorization")
 			if !strings.HasPrefix(authHdr, "Bearer ") {
-				writeA2AError(w, nil, -32000, "Authorization: Bearer <api_key> required")
+				// Bearer-less sandbox path: if the request is one of the
+				// sandbox-allowed methods and carries a valid join code,
+				// allow it through with ContextKeySandbox=true. Matches
+				// the MCP-with-join-code flow so the /try invite block
+				// is actually usable over /a2a.
+				if sandboxResolver != nil {
+					method, params := peekA2ARequest(r)
+					action, _ := params["action"].(string)
+					op := sandboxAllowedOp{method: method, action: action}
+					if sandboxAllowedOps[op] {
+						code := sandboxCodeFromParams(op, params)
+						if code != "" {
+							jc, _, err := sandboxResolver.LookupJoinCode(ctx, code)
+							if err == nil && jc != nil && time.Now().Before(jc.ExpiresAt) {
+								ip := ClientIP(r)
+								if sandboxLimiter != nil && !sandboxLimiter.Allow("sbx-a2a:"+ip) {
+									writeA2AError(w, nil, -32000, "sandbox rate limit exceeded — slow down or get an API key")
+									return
+								}
+								// Set a distinct keyID so downstream
+								// CheckAccess runs the visibility check
+								// instead of treating the caller as
+								// admin (empty keyID). Format is
+								// "sbx:<first-8-chars-of-code>" so logs
+								// remain legible and the value is stable
+								// across a sandbox session.
+								codeBucket := code
+								if len(codeBucket) > 8 {
+									codeBucket = codeBucket[:8]
+								}
+								ctx = context.WithValue(ctx, payments.ContextKeySandbox{}, true)
+								ctx = context.WithValue(ctx, payments.ContextKeyKeyID{}, "sbx:"+codeBucket)
+								next.ServeHTTP(w, r.WithContext(ctx))
+								return
+							}
+						}
+					}
+				}
+				writeA2AError(w, nil, -32000, "Authorization: Bearer <api_key> required (or a valid sandbox join_code on sandbox-allowed methods)")
 				return
 			}
 			token := strings.TrimPrefix(authHdr, "Bearer ")
