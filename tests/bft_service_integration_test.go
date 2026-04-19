@@ -3,6 +3,7 @@ package tests
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/justinstimatze/gemot/internal/bft"
@@ -59,6 +60,83 @@ func TestWritesRoutedThroughBFT(t *testing.T) {
 	}
 	if height < 2 {
 		t.Fatalf("expected >= 2 committed entries after 3 writes; got %d — not all writes routed through BFT", height)
+	}
+}
+
+// TestClientVerifiesAuditProofs is the 5d acceptance test: a client
+// holding only the server's published public key can independently
+// verify that each entry in the tamper-evident log was signed by the
+// server — closing the self-attestation gap where the server
+// previously reported its own log without anything a client could
+// cross-check.
+func TestClientVerifiesAuditProofs(t *testing.T) {
+	db := tempDB(t)
+	svc := deliberation.NewService(db, &mockAnalyzer{})
+
+	ctx := context.Background()
+	log := store.NewPostgresLogStore(db)
+	voteHist := store.NewPostgresVoteHistoryStore(db, bft.ReplicaID(0))
+	keys := store.NewPostgresReplicaKeyStore(db)
+	engine, err := bft.BootstrapSingleNode(ctx, log, voteHist, keys)
+	if err != nil {
+		t.Fatalf("BootstrapSingleNode: %v", err)
+	}
+	svc.SetBFTEngine(engine)
+
+	// Client-side: fetch the replica's public key once.
+	pubBytes, err := svc.ReplicaPublicKey()
+	if err != nil {
+		t.Fatalf("ReplicaPublicKey: %v", err)
+	}
+	pub, err := bft.UnmarshalBLSPublicKey(pubBytes)
+	if err != nil {
+		t.Fatalf("UnmarshalBLSPublicKey: %v", err)
+	}
+	roster := []bft.BLSPublicKey{pub}
+
+	// Drive enough writes to commit a couple of actions.
+	d, err := svc.CreateDeliberation(ctx, "Verify Test", "")
+	if err != nil {
+		t.Fatalf("CreateDeliberation: %v", err)
+	}
+	p, err := svc.SubmitPosition(ctx, d.ID, "agent1", "position one")
+	if err != nil {
+		t.Fatalf("SubmitPosition: %v", err)
+	}
+	if err := svc.Vote(ctx, d.ID, "agent2", p.ID, 1, "", ""); err != nil {
+		t.Fatalf("Vote: %v", err)
+	}
+	if _, err := svc.Commit(ctx, d.ID, "agent1", "I commit to X", ""); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// Client-side: fetch audit log and verify every proof.
+	entries, err := svc.GetTamperEvidentLog(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetTamperEvidentLog: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("expected at least one committed entry in audit log")
+	}
+	for i, e := range entries {
+		if len(e.Proof) == 0 {
+			t.Fatalf("entry %d missing proof", i)
+		}
+		var qc bft.QC
+		if err := json.Unmarshal(e.Proof, &qc); err != nil {
+			t.Fatalf("entry %d: decode proof: %v", i, err)
+		}
+		if err := bft.VerifyQC(qc, roster); err != nil {
+			t.Fatalf("entry %d (height %d, action %s): VerifyQC: %v — server self-attestation failed offline verification", i, e.Height, e.ActionType, err)
+		}
+	}
+
+	// Negative control: a corrupted QC must fail verification.
+	var corruptQC bft.QC
+	_ = json.Unmarshal(entries[0].Proof, &corruptQC)
+	corruptQC.View++ // tamper with the signed digest
+	if err := bft.VerifyQC(corruptQC, roster); err == nil {
+		t.Fatalf("tampered QC should fail verification; got nil error")
 	}
 }
 

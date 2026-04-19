@@ -267,20 +267,30 @@ func (s *BLSSigner) Aggregate(sigs []Signature) Signature {
 // of the listed signers' public keys. Duplicates rejected — a
 // duplicate signer would silently double-weight one party.
 func (s *BLSSigner) VerifyAggregate(signers []ReplicaID, msg []byte, agg Signature) error {
+	return VerifyAggregateSignature(s.roster, signers, msg, agg)
+}
+
+// VerifyAggregateSignature is the pure-function form of
+// BLSSigner.VerifyAggregate — takes the roster as a direct argument
+// so clients holding a published pubkey set can verify QCs without
+// constructing a full signer (no private key, no replica identity).
+// This is the load-bearing primitive for client-side QC verification
+// of the tamper-evident action log.
+func VerifyAggregateSignature(roster []BLSPublicKey, signers []ReplicaID, msg []byte, agg Signature) error {
 	if len(signers) == 0 {
 		return errors.New("bft: BLS verify-aggregate requires at least one signer")
 	}
 	seen := make(map[ReplicaID]struct{}, len(signers))
 	var aggPK bls12381.G2Jac
 	for _, id := range signers {
-		if int(id) >= len(s.roster) {
+		if int(id) >= len(roster) {
 			return fmt.Errorf("bft: BLS verify-aggregate unknown signer %d", id)
 		}
 		if _, dup := seen[id]; dup {
 			return fmt.Errorf("bft: BLS verify-aggregate duplicate signer %d", id)
 		}
 		seen[id] = struct{}{}
-		aggPK.AddMixed(&s.roster[id].point)
+		aggPK.AddMixed(&roster[id].point)
 	}
 	var aggPKAff bls12381.G2Affine
 	aggPKAff.FromJacobian(&aggPK)
@@ -306,4 +316,21 @@ func (s *BLSSigner) VerifyAggregate(signers []ReplicaID, msg []byte, agg Signatu
 		return errors.New("bft: BLS aggregate signature invalid")
 	}
 	return nil
+}
+
+// VerifyQC is a client-side primitive: given a QC and the replica
+// roster's public keys, check that the QC's aggregate signature is a
+// valid signature from the listed signers over (qc.View, qc.BlockHash).
+// Does NOT verify that qc.BlockHash corresponds to any particular
+// payload — clients cross-reference the block hash from the audit
+// log separately. Genesis QCs are explicitly rejected because they
+// carry no signature.
+func VerifyQC(qc QC, roster []BLSPublicKey) error {
+	if qc.IsGenesis() {
+		return errors.New("bft: cannot verify genesis QC — no signers")
+	}
+	if len(qc.Signers) == 0 {
+		return errors.New("bft: QC has no signers")
+	}
+	return VerifyAggregateSignature(roster, qc.Signers, voteDigest(qc.View, qc.BlockHash), qc.AggSig)
 }

@@ -175,9 +175,10 @@ func newServer(s *server) *sdkmcp.Server {
 		Name: "admin",
 		Description: `Admin and audit tools. Actions:
 - report_abuse: Report abusive content (deliberation_id, reason)
-- get_audit_log: Get audit trail (deliberation_id)
+- get_audit_log: Get audit trail incl. tamper-evident log with proofs (deliberation_id)
 - list_templates: List available governance templates
-- get_votes: Get all votes (deliberation_id)`,
+- get_votes: Get all votes (deliberation_id)
+- replica_pubkey: Get the server's BLS public key for offline proof verification`,
 	}, s.handleAdmin)
 
 	return srv
@@ -1019,6 +1020,17 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 	case "list_templates":
 		return jsonResult(deliberation.ListTemplates())
 
+	case "replica_pubkey":
+		pub, err := s.svc.ReplicaPublicKey()
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(map[string]any{
+			"public_key_hex":  fmt.Sprintf("%x", pub),
+			"algorithm":       "bls12-381-g2",
+			"usage":           "verify `proof` fields in get_audit_log's tamper_evident_log",
+		})
+
 	case "get_votes":
 		votes, err := CoreGetVotes(ctx, s.svc, args.DeliberationID, keyID)
 		if err != nil {
@@ -1027,7 +1039,7 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 		return jsonResult(votes)
 
 	default:
-		return errResult(fmt.Errorf("unknown action %q — use: report_abuse, get_audit_log, list_templates, get_votes", args.Action))
+		return errResult(fmt.Errorf("unknown action %q — use: report_abuse, get_audit_log, list_templates, get_votes, replica_pubkey", args.Action))
 	}
 }
 
