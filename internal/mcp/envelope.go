@@ -20,6 +20,18 @@ import (
 // enforces signatures. The modes parallel DMARC's none/quarantine/reject so
 // operators can deploy envelope signing in stages without breaking existing
 // unsigned clients.
+// dummyVerifyPubkey is a fixed ed25519 public key used to equalize
+// signature-verify latency when the real lookup returns
+// ErrAgentKeyNotFound. Any valid-format ed25519 key works — the
+// result is discarded; only the cost of the operation matters. Bytes
+// are arbitrary but constant so the work is reproducible.
+var dummyVerifyPubkey = [32]byte{
+	0xe7, 0x8f, 0x4a, 0x3b, 0x1c, 0xd5, 0x92, 0x06,
+	0x7a, 0xb8, 0x43, 0xe1, 0x5f, 0x0c, 0x29, 0x7d,
+	0x84, 0x31, 0xa6, 0x50, 0xbc, 0xe9, 0x17, 0x22,
+	0x4f, 0x6d, 0x80, 0x3e, 0x9a, 0x55, 0xc8, 0x11,
+}
+
 type EnvelopeMode int
 
 const (
@@ -174,6 +186,19 @@ func EnvelopeMiddleware(svc *deliberation.Service, cache auth.NonceCache, mode E
 			storedAgentID := scopeAgentID(r.Context(), agentID)
 			pubkey, regAlgo, keyErr := svc.GetActiveAgentKey(r.Context(), storedAgentID)
 			if errors.Is(keyErr, deliberation.ErrAgentKeyNotFound) {
+				// Equalize latency between "no key registered" and
+				// "key registered but signature invalid" by running a
+				// dummy verify before rejecting. Without this, an
+				// attacker probes `/mcp` with arbitrary agent IDs and
+				// times the response to enumerate which agents have
+				// keys registered. The dummy verify uses a fixed
+				// throwaway public key and the real message, matching
+				// the cost of the real path. Result is discarded.
+				bodyHash := sha256.Sum256(body)
+				sig, _ := base64.StdEncoding.DecodeString(sigB64)
+				method := r.Method + " " + r.URL.RequestURI()
+				dummyMsg := auth.EnvelopePayload(agentID, method, bodyHash[:], nonce, ts)
+				_ = auth.Verify(auth.AlgoEd25519, dummyVerifyPubkey[:], dummyMsg, sig)
 				envelopeReject(w, fmt.Sprintf("no active key registered for agent %q", agentID))
 				return
 			}

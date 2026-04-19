@@ -66,7 +66,13 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 		gemotDB.LogAuditEvent("", "", method, deliberationID, agentID)
 	})
 
-	s := &server{svc: svc, credits: creditStore, db: gemotDB, shutdown: ctx}
+	// Per-key analyze rate limit: 10 concurrent analyses per minute
+	// per API key. Credits bound the dollar spend; this limiter bounds
+	// the burst rate so a funded account can't monopolize the upstream
+	// Anthropic quota. Anonymous (no-key) requests share a pool keyed
+	// by IP via a separate limiter downstream.
+	analyzeLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
+	s := &server{svc: svc, credits: creditStore, db: gemotDB, shutdown: ctx, analyzeLimiter: analyzeLimiter}
 	srv := newServer(s)
 
 	// MPP payment configuration (for when Stripe enables SPTs)

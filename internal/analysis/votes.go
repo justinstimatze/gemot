@@ -127,7 +127,7 @@ func (v *VoteAnalyzer) Analyze(_ context.Context, positions []deliberation.Posit
 	repness := computeRepness(matrix, labels, agents, positions, nAgents, nPositions)
 
 	// Consensus: positions with high agreement across all clusters
-	consensus := computeConsensus(matrix, labels, positions, nAgents, nPositions)
+	consensus := computeConsensus(matrix, labels, agents, positions, nAgents, nPositions)
 
 	// Build PCA coordinate map
 	coordMap := map[string][2]float64{}
@@ -457,7 +457,9 @@ func computeRepness(matrix *mat.Dense, labels []int, agents []string, positions 
 
 // computeConsensus finds positions with high agreement across all clusters.
 // Polis consensus: overall agree > 50%, agree in every cluster > 50%.
-func computeConsensus(matrix *mat.Dense, labels []int, positions []deliberation.Position, nAgents, nPositions int) []deliberation.ConsensusStatement {
+// Populates SupportingAgents with the IDs of every agent whose vote
+// contributed to the overall agree count — provenance for the claim.
+func computeConsensus(matrix *mat.Dense, labels []int, agents []string, positions []deliberation.Position, nAgents, nPositions int) []deliberation.ConsensusStatement {
 	clusterIDs := uniqueInts(labels)
 
 	var consensus []deliberation.ConsensusStatement
@@ -465,12 +467,16 @@ func computeConsensus(matrix *mat.Dense, labels []int, positions []deliberation.
 		// Overall agree ratio (vote == 1)
 		agrees := 0
 		voters := 0
+		var supporters []string
 		for i := 0; i < nAgents; i++ {
 			v := matrix.At(i, j)
 			if v != 0 { // count non-pass votes
 				voters++
 				if v > 0 {
 					agrees++
+					if i < len(agents) {
+						supporters = append(supporters, agents[i])
+					}
 				}
 			}
 		}
@@ -516,6 +522,7 @@ func computeConsensus(matrix *mat.Dense, labels []int, positions []deliberation.
 				Content:              positions[j].Content,
 				OverallAgreeRatio:    overallRatio,
 				MinClusterAgreeRatio: minClusterRatio,
+				SupportingAgents:     supporters,
 			})
 		}
 	}
