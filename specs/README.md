@@ -218,18 +218,45 @@ three-step argument as `Deliberation.tla` applies:
    constant constraint; any valid instantiation at higher N with
    the same ratio preserves it.
 
-Liveness is *not* checked in either cfg. Session 2 adds the
-`ViewMonotonic` temporal property (view never regresses) and models
-timeout / view-change actions that _enable_ progress under Byzantine
-leader failure, but does not encode an explicit `<>[]progress`
-formula. Under fairness assumptions this would state "eventually
-some honest replica commits"; TLC liveness checking at the current
-bounds would expand the state space beyond the 10-second PR-check
-budget. The session-2 Go adversarial tests
-(`internal/bft/adversarial_test.go`) cover liveness empirically —
-TestPartitionedMinority asserts non-progress under sub-quorum and
-progress on heal. A formal liveness check lands in a later session
-guarded by its own cfg.
+Liveness is *declared* in the spec — `Liveness == <>SomeHonestCommits`
+with a `Fairness` formula that weak-fairness-guards every honest-driven
+action (Propose / CastVote / FormQC / Commit / TriggerTimeout /
+ViewChange) and strong-fairness-guards the leader's Propose. `FairSpec`
+== `Init /\ [][Next]_vars /\ Fairness` is the fair-scheduling variant
+of the base `Spec`. The declaration makes the intended property
+mechanically referenceable (TLAPS, PlusCal, or a future TLC run with
+tighter bounds can check it), even though TLC under the current
+state-space budget does not complete the liveness proof.
+
+Spec improvements made during the attempt — all retained because they
+tighten the model toward the implementation's behavior:
+
+- **Leader rotation** (new `Leader(v)` function, used by `Propose`):
+  only the designated leader of view `v` can propose. Matches the
+  implementation's `(v-1) % N` rotation.
+- **At-most-one-proposal-per-view** (new `proposedInView` variable,
+  guard on `Propose`): mirrors the Go implementation's
+  `r.proposedInView` guard.
+- **Leader-readiness precondition** on `Propose`: the leader can only
+  propose when (a) this is view 1, (b) a QC exists for the previous
+  view, or (c) 2f+1 NewView messages for this view have been collected.
+  Matches the real protocol's "leader waits for prior QC or view-
+  change aggregate before proposing."
+
+Why TLC doesn't close the liveness property: the leader's `Propose`
+uses `highQC[leader]` as the parent, but under the spec's scheduler
+the leader can propose with a stale `highQC` (before FormQC has fired
+to update it), orphaning the freshly QC'd block. The real protocol
+has a synchronizer that sequences "wait for QC → propose in next view
+with that QC as parent"; capturing this precisely in TLA+ without
+over-constraining the scheduler is the remaining gap. A TLAPS proof
+(declarative, not state-space explorer) would sidestep this; that's
+tracked as follow-up work.
+
+Empirical liveness is covered by the Go adversarial tests
+(`internal/bft/adversarial_test.go`): `TestPartitionedMinority`
+asserts non-progress under sub-quorum and progress on heal;
+`TestLeaderStall` exercises view change after a silent leader.
 
 ### What the HotStuff spec does *not* cover
 

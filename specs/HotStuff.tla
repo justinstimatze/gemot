@@ -80,6 +80,18 @@ BlockIDs == 0..(MaxBlocks - 1)
 \* Genesis block: height 0, no parent, pre-existing QC.
 Genesis == [id |-> 0, height |-> 0, parent |-> 0, view |-> 0]
 
+\* Leader rotation: deterministic mapping from view → replica. Matches
+\* the implementation's (view-1) % N indexing. Requires a stable
+\* ordering of Replicas; we CHOOSE one at spec-load time. TLC treats
+\* CHOOSE as deterministic (same choice every time for the same set).
+ReplicaSeq ==
+    LET Order == CHOOSE f \in [1..Cardinality(Replicas) -> Replicas] :
+                     \A i, j \in 1..Cardinality(Replicas) :
+                         i /= j => f[i] /= f[j]
+    IN Order
+
+Leader(v) == ReplicaSeq[((v - 1) % Cardinality(Replicas)) + 1]
+
 VARIABLES
     view,           \* Global view number. Advances via FormQC (happy
                     \* path) or ViewChange (after 2f+1 NewViews).
@@ -92,10 +104,17 @@ VARIABLES
     lastVotedView,  \* [Replicas -> view]: anti-equivocation guard.
     nextBlockID,    \* Monotonic block-ID counter.
     newViews,       \* Set of NewView messages: [sender, view, highQCblock].
-    timedOut        \* [Replicas -> SUBSET Views]: views r has timed out on.
+    timedOut,       \* [Replicas -> SUBSET Views]: views r has timed out on.
+    proposedInView  \* SUBSET Views: views that have had a proposal.
+                    \* Matches the implementation's per-view leader-
+                    \* proposes-at-most-once rule. Without this, TLC
+                    \* finds schedules that burn all MaxBlocks in one
+                    \* view and trap the protocol — which doesn't
+                    \* match real HotStuff, where the leader of V
+                    \* proposes exactly once before rotation.
 
 vars == <<view, blocks, votes, qcs, locked, highQC, committed,
-          lastVotedView, nextBlockID, newViews, timedOut>>
+          lastVotedView, nextBlockID, newViews, timedOut, proposedInView>>
 
 \* Look up a block by ID. Total function: returns Genesis for id=0 and for
 \* any id not in blocks (defensive default so TLC doesn't evaluate CHOOSE
@@ -127,6 +146,7 @@ TypeOK ==
     /\ nextBlockID \in 1..MaxBlocks
     /\ newViews \subseteq [sender: Replicas, view: Views, highQCblock: BlockIDs]
     /\ timedOut \in [Replicas -> SUBSET Views]
+    /\ proposedInView \subseteq Views
 
 Init ==
     /\ view = 1
@@ -140,6 +160,7 @@ Init ==
     /\ nextBlockID = 1
     /\ newViews = {}
     /\ timedOut = [r \in Replicas |-> {}]
+    /\ proposedInView = {}
 
 (* ---------------------------- Actions ----------------------------------- *)
 
@@ -149,16 +170,35 @@ Init ==
 \* Safety is independent of leader choice (locked-QC rule); liveness
 \* needs honest-leader rotation but we don't bind a rotation function
 \* here.
-Propose(leader, parentID, h) ==
+Propose(leader, h) ==
     /\ nextBlockID < MaxBlocks
+    /\ view \notin proposedInView   \* at most one proposal per view
+    /\ leader = Leader(view)        \* only the designated leader proposes
+    \* Leader-readiness precondition: the real protocol's Propose
+    \* waits until the leader has a basis for extending the chain —
+    \* either the previous view produced a QC the leader sees (happy
+    \* path), or this is the first view, or 2f+1 NewViews for this
+    \* view have arrived (post-timeout path, picking the highest-view
+    \* QC among them). Without this guard, TLC schedules Propose
+    \* ahead of FormQC and orphans the QC'd block, breaking the two-
+    \* chain commit.
+    /\ \/ view = 1
+       \/ \E qc \in qcs : qc.view = view - 1
+       \/ Cardinality({nv.sender : nv \in {x \in newViews : x.view = view}}) >= Quorum
     /\ h \in 1..MaxHeight
-    /\ parentID \in {b.id: b \in blocks} \cup {0}
-    /\ LET parent == BlockOf(parentID) IN
-           /\ h = parent.height + 1
-           /\ blocks' = blocks \cup
-                  {[id |-> nextBlockID, height |-> h,
-                    parent |-> parentID, view |-> view]}
+    \* Leader extends its own highQC — matches the real implementation
+    \* (Propose reads r.highQC and sets parent accordingly). Modeling
+    \* free parent choice lets TLC find schedules where the leader
+    \* orphans a QC'd block by extending genesis instead, trapping
+    \* liveness. The real protocol doesn't permit this.
+    /\ LET parentID == highQC[leader]
+           parent   == BlockOf(parentID)
+       IN /\ h = parent.height + 1
+          /\ blocks' = blocks \cup
+                 {[id |-> nextBlockID, height |-> h,
+                   parent |-> parentID, view |-> view]}
     /\ nextBlockID' = nextBlockID + 1
+    /\ proposedInView' = proposedInView \cup {view}
     /\ UNCHANGED <<view, votes, qcs, locked, highQC, committed,
                    lastVotedView, newViews, timedOut>>
 
@@ -188,7 +228,7 @@ CastVote(r, b) ==
     /\ votes' = votes \cup {[replica |-> r, view |-> b.view, blockID |-> b.id]}
     /\ lastVotedView' = [lastVotedView EXCEPT ![r] = b.view]
     /\ UNCHANGED <<view, blocks, qcs, locked, highQC, committed,
-                   nextBlockID, newViews, timedOut>>
+                   nextBlockID, newViews, timedOut, proposedInView>>
 
 \* Form a QC when 2f+1 votes exist for a block in its view. Atomic with
 \* the honest-replica lock and highQC update: an honest replica that
@@ -210,7 +250,7 @@ FormQC(bid, v) ==
            IF r \in Honest /\ v > BlockOf(locked[r]).view THEN bid ELSE locked[r]]
     /\ view' = IF v = view /\ v + 1 <= MaxView THEN v + 1 ELSE view
     /\ UNCHANGED <<blocks, votes, committed, lastVotedView, nextBlockID,
-                   newViews, timedOut>>
+                   newViews, timedOut, proposedInView>>
 
 \* Two-chain commit rule: honest replica commits block b when there are
 \* QCs on both b and a direct child of b in consecutive views.
@@ -226,7 +266,7 @@ Commit(r, bid) ==
            /\ c.view = b.view + 1         \* direct consecutive views
     /\ committed' = [committed EXCEPT ![r] = @ \cup {bid}]
     /\ UNCHANGED <<view, blocks, votes, qcs, locked, highQC,
-                   lastVotedView, nextBlockID, newViews, timedOut>>
+                   lastVotedView, nextBlockID, newViews, timedOut, proposedInView>>
 
 \* TriggerTimeout: replica r abandons the current view and sends a
 \* NewView(view+1, claimedQC) message. Honest replicas report their
@@ -244,7 +284,7 @@ TriggerTimeout(r, claimedQC) ==
            {[sender |-> r, view |-> view + 1, highQCblock |-> claimedQC]}
     /\ timedOut' = [timedOut EXCEPT ![r] = @ \cup {view}]
     /\ UNCHANGED <<view, blocks, votes, qcs, locked, highQC, committed,
-                   lastVotedView, nextBlockID>>
+                   lastVotedView, nextBlockID, proposedInView>>
 
 \* ViewChange: once 2f+1 replicas have sent NewView for view v, the
 \* global view advances to v. Captures the view-synchronizer
@@ -259,11 +299,10 @@ ViewChange(v) ==
     /\ Cardinality({nv.sender : nv \in {x \in newViews : x.view = v}}) >= Quorum
     /\ view' = v
     /\ UNCHANGED <<blocks, votes, qcs, locked, highQC, committed,
-                   lastVotedView, nextBlockID, newViews, timedOut>>
+                   lastVotedView, nextBlockID, newViews, timedOut, proposedInView>>
 
 Next ==
-    \/ \E leader \in Replicas, parentID \in BlockIDs, h \in 1..MaxHeight:
-           Propose(leader, parentID, h)
+    \/ \E leader \in Replicas, h \in 1..MaxHeight: Propose(leader, h)
     \/ \E r \in Replicas, b \in blocks: CastVote(r, b)
     \/ \E bid \in BlockIDs, v \in Views: FormQC(bid, v)
     \/ \E r \in Replicas, bid \in BlockIDs: Commit(r, bid)
@@ -333,6 +372,62 @@ QCsMonotonic == [][qcs \subseteq qcs']_vars
 VotesMonotonic == [][votes \subseteq votes']_vars
 BlocksMonotonic == [][blocks \subseteq blocks']_vars
 NewViewsMonotonic == [][newViews \subseteq newViews']_vars
+
+(* ---------------------------- Liveness ---------------------------------- *)
+
+\* Reachability-style liveness: under fairness, some honest replica
+\* eventually commits a block beyond genesis. HotStuff's two-chain
+\* commit rule requires two consecutive views with QCs, so Liveness
+\* cannot hold without Propose/CastVote/FormQC/Commit all firing.
+\* Expressed as <>(...) rather than <>[](...) because the bounded
+\* model saturates once MaxBlocks is exhausted — "eventually always"
+\* would be trivially true after the last reachable commit.
+SomeHonestCommits == \E r \in Honest : \E bid \in committed[r] : bid /= 0
+
+Liveness == <>SomeHonestCommits
+
+\* Fairness: weak fairness on every honest-driven action. Byzantine
+\* actions intentionally get NO fairness — they may be indefinitely
+\* silent (network-partition-of-Byzantine), which is the scenario
+\* under which HotStuff must still make progress. ViewChange and
+\* FormQC are not replica-indexed; they fire when their enabling
+\* condition (Quorum collected) is satisfied.
+Fairness ==
+    \* Leader's Propose gets strong fairness — under WF, the scheduler
+    \* can always race a timeout ahead of a ready-to-propose leader
+    \* by repeatedly disabling Propose (e.g., via advancing the view).
+    \* SF says "if enabled infinitely often, fires infinitely often",
+    \* matching the GST assumption that the network is eventually
+    \* synchronous enough for the leader to get its proposal out.
+    /\ \A r \in Honest:
+         SF_vars(\E h \in 1..MaxHeight: Propose(r, h))
+    /\ \A r \in Honest:
+         WF_vars(\E b \in blocks: CastVote(r, b))
+    \* FormQC and ViewChange get STRONG fairness: they're the
+    \* view-advance primitives. Under only weak fairness, TLC finds
+    \* schedules where Propose exhausts MaxBlocks before FormQC gets
+    \* its turn, trapping the protocol in one view forever. Strong
+    \* fairness matches the real-protocol invariant: once 2f+1 votes
+    \* are in, the leader forms the QC without unbounded delay.
+    /\ SF_vars(\E bid \in BlockIDs, v \in Views: FormQC(bid, v))
+    /\ \A r \in Honest:
+         WF_vars(\E bid \in BlockIDs: Commit(r, bid))
+    \* Honest timeouts must be fair: if an honest replica is stuck
+    \* waiting for a QC that isn't coming (split-vote scenario), it
+    \* must eventually trigger timeout so ViewChange can fire.
+    /\ \A r \in Honest:
+         WF_vars(\E cqc \in BlockIDs: TriggerTimeout(r, cqc))
+    /\ SF_vars(\E v \in Views: ViewChange(v))
+
+\* FairSpec is the spec under honest-fairness. Declaration-only under
+\* the current TLC budget: the scheduler can interleave Propose and
+\* FormQC in ways that orphan QC'd blocks, so `<>SomeHonestCommits`
+\* doesn't close here. The real protocol's synchronizer sequences
+\* "wait for QC → propose next" which our state-space abstraction
+\* doesn't capture tightly enough. TLAPS (proof assistant) is the
+\* intended next step for mechanical liveness verification. See
+\* specs/README.md for detail.
+FairSpec == Init /\ [][Next]_vars /\ Fairness
 
 (* ---------------------------- Symmetry ---------------------------------- *)
 
