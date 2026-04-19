@@ -330,6 +330,22 @@ type AuditLogEntry struct {
 	// BlockHash is the cryptographic hash of the committed block —
 	// stable identifier users can reference when filing disputes.
 	BlockHash string `json:"block_hash"`
+	// Proof is the JSON-encoded QC that witnesses this action.
+	// Clients holding the replica's public key (see
+	// admin:replica_pubkey) can call bft.VerifyQC to confirm the
+	// signature offline without trusting the server's report of its
+	// own log. Safe to ignore if you don't need that guarantee.
+	Proof []byte `json:"proof,omitempty"`
+}
+
+// ReplicaPublicKey returns the BLS public key of the server's
+// single-replica cluster as 96 compressed G2 bytes. Clients fetch
+// this once and cache it; combined with the `proof` field on audit
+// log entries, a client can verify that every recorded action carries
+// a valid server signature — so the server cannot retroactively
+// rewrite the log without the client detecting the mismatch.
+func (s *Service) ReplicaPublicKey() ([]byte, error) {
+	return s.bftEngine.PublicKey()
 }
 
 // GetTamperEvidentLog returns the committed-log entries filtered to
@@ -356,12 +372,14 @@ func (s *Service) GetTamperEvidentLog(ctx context.Context, deliberationID string
 			continue
 		}
 		h := e.Block.Hash()
+		proof, _ := bft.EncodeQCProof(e.QC)
 		out = append(out, AuditLogEntry{
 			Height:     int64(e.Block.Height),
 			View:       int64(e.Block.View),
 			ActionType: parts[0],
 			AgentID:    parts[2],
 			BlockHash:  fmt.Sprintf("%x", h[:8]),
+			Proof:      proof,
 		})
 	}
 	return out, nil

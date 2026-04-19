@@ -153,6 +153,18 @@ func (e *Engine) Submit(ctx context.Context, payload []byte) (QC, Block, error) 
 	return preparedQC, proposal.Block, nil
 }
 
+// PublicKey returns the single-replica roster's BLS public key in
+// its compressed 96-byte G2 encoding. Clients receive this via the
+// MCP admin:replica_pubkey endpoint and use it to verify QCs from
+// the audit log offline.
+func (e *Engine) PublicKey() ([]byte, error) {
+	signer, ok := e.replica.signer.(*BLSSigner)
+	if !ok {
+		return nil, errors.New("bft: replica signer is not BLSSigner — cannot expose public key")
+	}
+	return signer.myKey.Public.Marshal(), nil
+}
+
 // AuditEntries returns the full tamper-evident log in height order.
 // Each entry is a committed block plus its QC. Callers parse the
 // block's payload to recover the domain-level action. Used by the
