@@ -27,24 +27,29 @@ import (
 //go:embed all:static
 var staticFS embed.FS
 
-// tryCodeTmpl is the sandbox landing page shown after a join code is
-// created. Parsed lazily on first use so embed failures surface on
-// the first request rather than at init.
-var (
-	tryCodeTmplOnce sync.Once
-	tryCodeTmpl     *template.Template
-	tryCodeTmplErr  error
-)
-
-func getTryCodeTmpl() (*template.Template, error) {
-	tryCodeTmplOnce.Do(func() {
-		tryCodeTmpl, tryCodeTmplErr = template.ParseFS(staticFS, "static/try-code.html")
-	})
-	return tryCodeTmpl, tryCodeTmplErr
+// tryCodeData is the render context for static/try-code.html. Named
+// so adding a template field without a matching struct field surfaces
+// at the call site instead of rendering <no value>.
+type tryCodeData struct {
+	Topic     string
+	Code      string
+	HoursLeft int
 }
 
 // RunHTTP starts the MCP server over SSE/HTTP on the given address.
 func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr string) error {
+	// Fail-fast template + static-asset checks. If an embed is missing
+	// or a template has a syntax error, surface here at startup rather
+	// than on the first /try/<code> request in production.
+	tryCodeTmpl, err := template.ParseFS(staticFS, "static/try-code.html")
+	if err != nil {
+		return fmt.Errorf("parsing try-code.html template: %w", err)
+	}
+	tryFormBody, err := staticFS.ReadFile("static/try-form.html")
+	if err != nil {
+		return fmt.Errorf("reading try-form.html: %w", err)
+	}
+
 	apiSecret := os.Getenv("GEMOT_API_SECRET")
 
 	// Initialize credit store (uses the same Postgres DB)
@@ -600,6 +605,9 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			r.ParseForm() //nolint:errcheck
 			topic = r.FormValue("topic")
 		}
+		// Collapse whitespace so a multi-line paste doesn't produce
+		// mid-sentence newlines in the invite-a-friend clipboard text.
+		topic = strings.Join(strings.Fields(topic), " ")
 		if topic == "" {
 			topic = "Open discussion"
 		}
@@ -650,16 +658,22 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 	})
 
 	mux.HandleFunc("/try/", func(w http.ResponseWriter, r *http.Request) {
+		// Rate-limit reads: a bogus-code lookup is a DB round-trip, and
+		// an empty-code request is a template render. 30/min per IP
+		// (same bucket as other read endpoints) is plenty for a real
+		// user and blocks enumeration.
+		ip := ClientIP(r)
+		if !endpointLimiter.Allow("try-get:" + ip) {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+
 		code := strings.TrimPrefix(r.URL.Path, "/try/")
 		if code == "" {
-			// Show creation form
+			// Show creation form. Pre-read at startup — no disk hit per request.
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			body, err := staticFS.ReadFile("static/try-form.html")
-			if err != nil {
-				http.Error(w, "sandbox page unavailable", http.StatusInternalServerError)
-				return
-			}
-			w.Write(body) //nolint:errcheck
+			w.Header().Set("Cache-Control", "private, no-cache")
+			w.Write(tryFormBody) //nolint:errcheck
 			return
 		}
 
@@ -679,21 +693,20 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		}
 		hoursLeft := minutesLeft / 60
 
-		tmpl, err := getTryCodeTmpl()
-		if err != nil {
+		// Render to a buffer first so a mid-stream template error turns
+		// into a clean 500 instead of a truncated page to the client.
+		var buf strings.Builder
+		if err := tryCodeTmpl.Execute(&buf, tryCodeData{
+			Topic: topic, Code: jc.Code, HoursLeft: hoursLeft,
+		}); err != nil {
+			slog.Error("try-code template render failed", "code", jc.Code, "error", err)
 			http.Error(w, "sandbox page unavailable", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		// html/template auto-escapes every interpolated field so the
-		// raw topic string is safe to pass through without manual
-		// html.EscapeString — the engine handles context-aware
-		// escaping for attributes vs text vs script.
-		_ = tmpl.Execute(w, struct {
-			Topic     string
-			Code      string
-			HoursLeft int
-		}{Topic: topic, Code: jc.Code, HoursLeft: hoursLeft})
+		// Time-sensitive ("Xh remaining") — don't let intermediaries cache.
+		w.Header().Set("Cache-Control", "private, no-cache")
+		_, _ = w.Write([]byte(buf.String()))
 	})
 
 	// Landing page
