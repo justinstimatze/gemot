@@ -207,10 +207,10 @@ func (s *DB) AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, ca
 //     never another private delib's edges.
 //
 // For deployments with many agents this is not scalable long-term — a
-// future version should load only the subgraph reachable from the
-// current cohort (see THREAT_MODEL: Subgraph-scoped LoadTrustEdges).
-// For now power iteration over the full graph is cheap enough
-// (O(V + E)) that a full load is fine at the scales this reaches.
+// A subgraph-scoped alternative ships as LoadTrustEdgesForCohort —
+// preferred for the per-delib recompute path (WeightsFor). This full
+// loader stays in place for global eigenvector recompute, where every
+// row matters to the normalization.
 func (s *DB) LoadTrustEdges(ctx context.Context, delibID string) ([]analysis.Edge, error) {
 	var rows *sql.Rows
 	var err error
@@ -226,6 +226,46 @@ func (s *DB) LoadTrustEdges(ctx context.Context, delibID string) ([]analysis.Edg
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load trust edges: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	var edges []analysis.Edge
+	for rows.Next() {
+		var e analysis.Edge
+		if err := rows.Scan(&e.From, &e.To, &e.Weight); err != nil {
+			return nil, fmt.Errorf("scan edge: %w", err)
+		}
+		edges = append(edges, e)
+	}
+	return edges, rows.Err()
+}
+
+// LoadTrustEdgesForCohort returns a bounded subgraph: the private
+// delib partition (when delibID != "") plus the one-hop global
+// neighborhood of any vertex in `cohort` (from_agent or to_agent
+// matches a cohort member). On large global graphs this bounds
+// recompute cost to O(|cohort| × avg-degree) instead of O(|V|+|E|).
+//
+// When both delibID is empty and cohort is empty, falls through to
+// LoadTrustEdges's semantics (full global load) so callers that
+// can't enumerate the cohort still work. When delibID is non-empty
+// and cohort is empty, returns just the private partition.
+func (s *DB) LoadTrustEdgesForCohort(ctx context.Context, delibID string, cohort []string) ([]analysis.Edge, error) {
+	if delibID == "" && len(cohort) == 0 {
+		return s.LoadTrustEdges(ctx, "")
+	}
+	// Query builds: private partition (if delibID set) UNION
+	// ALL one-hop global edges touching any cohort vertex. ANY($2::text[])
+	// handles the list natively; an empty cohort short-circuits to no
+	// global rows when delibID is set.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT from_agent, to_agent, weight FROM agent_trust_edges
+		 WHERE (deliberation_id = $1 AND $1 <> '')
+		    OR (deliberation_id = ''
+		        AND cardinality($2::text[]) > 0
+		        AND (from_agent = ANY($2::text[]) OR to_agent = ANY($2::text[])))`,
+		delibID, cohort)
+	if err != nil {
+		return nil, fmt.Errorf("load trust edges (cohort-scoped): %w", err)
 	}
 	defer rows.Close() //nolint:errcheck
 	var edges []analysis.Edge

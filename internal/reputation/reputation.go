@@ -21,6 +21,14 @@ type Store interface {
 	// public eigenvector graph); non-empty returns global ∪ that
 	// delib's private edges (for per-delib private EigenTrust).
 	LoadTrustEdges(ctx context.Context, delibID string) ([]analysis.Edge, error)
+	// LoadTrustEdgesForCohort returns a bounded subgraph: the private
+	// delib partition (if delibID is non-empty) plus the one-hop
+	// neighborhood of `cohort` in the global partition. For large
+	// global graphs this is O(|cohort| × avg-degree) rather than O(|V|
+	// + |E|), bounding per-recompute cost. Empty cohort falls back to
+	// LoadTrustEdges's behaviour so callers that can't enumerate the
+	// cohort still work correctly.
+	LoadTrustEdgesForCohort(ctx context.Context, delibID string, cohort []string) ([]analysis.Edge, error)
 	// AccumulateTrustEdges: delibID scopes the write partition.
 	// "" for global (open/link delibs), <uuid> for private delibs.
 	AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, cap float64, delibID string) error
@@ -210,26 +218,37 @@ func (r *Weigher) weightsForPrivateDelib(
 	delibID string,
 ) (map[string]float64, error) {
 	out := make(map[string]float64, len(agents))
-	edges, err := r.store.LoadTrustEdges(ctx, delibID)
-	if err != nil {
-		if r.cfg.DBFail == DBFailClosed {
-			return nil, fmt.Errorf("private delib edges load failed (fail-closed): %w", err)
-		}
-		slog.Warn("private delib edges load failed — falling back to unit weights", "err", err)
-		for _, a := range agents {
-			out[a] = 1.0
-		}
-		return out, nil
-	}
 	// Resolve symbolic agents to their current vertex form so the
 	// EigenTrust score lookup matches the key-bound identity used in
-	// edge storage.
+	// edge storage. Resolve BEFORE loading edges so we can scope the
+	// edge load to the cohort's vertices.
 	vertices, err := r.store.ResolveVertices(ctx, agents)
 	if err != nil {
 		if r.cfg.DBFail == DBFailClosed {
 			return nil, fmt.Errorf("resolve vertices (fail-closed): %w", err)
 		}
 		slog.Warn("resolve vertices failed — falling back to unit weights", "err", err)
+		for _, a := range agents {
+			out[a] = 1.0
+		}
+		return out, nil
+	}
+	cohortVertices := make([]string, 0, len(vertices))
+	for _, v := range vertices {
+		if v != "" {
+			cohortVertices = append(cohortVertices, v)
+		}
+	}
+	// Subgraph-scoped load: only the cohort's one-hop global neighborhood
+	// plus the private partition. Bounds recompute cost on large global
+	// graphs without changing EigenTrust semantics meaningfully at the
+	// scales we operate (cohorts of tens, graphs of thousands).
+	edges, err := r.store.LoadTrustEdgesForCohort(ctx, delibID, cohortVertices)
+	if err != nil {
+		if r.cfg.DBFail == DBFailClosed {
+			return nil, fmt.Errorf("private delib edges load failed (fail-closed): %w", err)
+		}
+		slog.Warn("private delib edges load failed — falling back to unit weights", "err", err)
 		for _, a := range agents {
 			out[a] = 1.0
 		}

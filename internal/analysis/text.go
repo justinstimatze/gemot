@@ -733,6 +733,14 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	// Integrity: check for Sybil-like voting patterns
 	warnings = append(warnings, validateVoteSimilarity(votes, agents)...)
 
+	// Integrity: robust-aggregation check. Flags positions where the
+	// raw mean vote diverges from the trimmed mean — a signal that a
+	// small coordinated minority at the extremes is pulling the
+	// aggregate. DARPA-PS-26-09 Track 1 planned defense (robust
+	// aggregation), now emitted as a warning rather than silently
+	// changing the Polis mean-based algorithm.
+	warnings = append(warnings, validateAggregationStability(votes, positions)...)
+
 	// Integrity: check model diversity
 	warnings = append(warnings, validateModelDiversity(positions)...)
 
