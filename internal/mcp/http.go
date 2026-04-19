@@ -327,7 +327,11 @@ No API key needed — the join code is your credential.
 	// layer populates ContextKeyKeyID so the envelope layer's scopeAgentID
 	// rewrite resolves the correct stored key in hosted mode.
 	a2aLimiter := payments.NewRateLimiter(ctx, 30, time.Minute) // 30/min, same as MCP
-	a2aAuth := A2AAuthMiddleware(apiSecret, creditStore, a2aLimiter)
+	// Separate tight rate limit for bearer-less sandbox A2A callers.
+	// 10/min per IP — enough for a human pacing through the invite
+	// block, tight enough that a shared join code can't flood prod.
+	a2aSandboxLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
+	a2aAuth := A2AAuthMiddleware(apiSecret, creditStore, a2aLimiter, svc, a2aSandboxLimiter)
 	a2aHandler := A2AHandler(svc, creditStore, gemotDB, gemotDB)
 	mux.Handle("POST /a2a", a2aAuth(envelopeMiddleware(a2aHandler)))
 
