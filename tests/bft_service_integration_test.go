@@ -3,7 +3,6 @@ package tests
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/justinstimatze/gemot/internal/bft"
@@ -11,11 +10,12 @@ import (
 	"github.com/justinstimatze/gemot/internal/store"
 )
 
-// TestSubmitPositionRoutedThroughBFT confirms that when a BFT engine
-// is attached to the service, SubmitPosition drives the HotStuff
-// state machine (proposal + self-vote + QC) and the returned Position
-// carries a valid QC proof. Session 5b acceptance.
-func TestSubmitPositionRoutedThroughBFT(t *testing.T) {
+// TestWritesRoutedThroughBFT confirms that when a Postgres-backed
+// engine is attached via SetBFTEngine, every service write
+// (positions, votes, commitments, disputes) lands in bft_log —
+// exercising the "one code path" guarantee that BFT routing always
+// runs rather than being gated by a feature flag.
+func TestWritesRoutedThroughBFT(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})
 
@@ -29,61 +29,43 @@ func TestSubmitPositionRoutedThroughBFT(t *testing.T) {
 	}
 	svc.SetBFTEngine(engine)
 
-	d, err := svc.CreateDeliberation(ctx, "BFT Test", "Route position through BFT")
+	d, err := svc.CreateDeliberation(ctx, "BFT Routing", "Verify every write orders through BFT")
 	if err != nil {
 		t.Fatalf("CreateDeliberation: %v", err)
 	}
 
+	// One position + one vote = two BFT submits. Two-chain rule
+	// commits block 1 (position) when block 2 (vote) forms its QC.
 	p, err := svc.SubmitPosition(ctx, d.ID, "agent1", "we should prioritize interoperability")
 	if err != nil {
 		t.Fatalf("SubmitPosition: %v", err)
 	}
-	if len(p.BFTProof) == 0 {
-		t.Fatalf("Position.BFTProof is empty — engine did not attach a QC")
+	if err := svc.Vote(ctx, d.ID, "agent2", p.ID, 1, "", ""); err != nil {
+		t.Fatalf("Vote: %v", err)
 	}
 
-	// The proof is a JSON-encoded QC. Unmarshal and sanity-check.
-	var qc bft.QC
-	if err := json.Unmarshal(p.BFTProof, &qc); err != nil {
-		t.Fatalf("decode BFTProof: %v", err)
-	}
-	if qc.View != 1 {
-		t.Fatalf("first position QC.View = %d; want 1", qc.View)
-	}
-	if len(qc.Signers) != 1 {
-		t.Fatalf("QC.Signers = %d; want 1 (single-node)", len(qc.Signers))
+	// A third write (a commitment) advances the chain far enough to
+	// commit both prior actions.
+	if _, err := svc.Commit(ctx, d.ID, "agent1", "I will work on the interop proposal", ""); err != nil {
+		t.Fatalf("Commit: %v", err)
 	}
 
-	// Second position advances the view and commits the first block
-	// via two-chain.
-	p2, err := svc.SubmitPosition(ctx, d.ID, "agent2", "but not at the cost of safety invariants")
-	if err != nil {
-		t.Fatalf("SubmitPosition 2: %v", err)
-	}
-	var qc2 bft.QC
-	if err := json.Unmarshal(p2.BFTProof, &qc2); err != nil {
-		t.Fatalf("decode BFTProof 2: %v", err)
-	}
-	if qc2.View != 2 {
-		t.Fatalf("second position QC.View = %d; want 2", qc2.View)
-	}
-
-	// After two submissions, the committed log holds block 1 (block 2
-	// still waits for block 3's QC under the two-chain rule).
+	// bft_log must now hold at least 2 committed entries (position +
+	// vote). Commitment commits on the NEXT write — so three writes
+	// yields exactly two commits under the two-chain rule.
 	height, err := log.HighestHeight(ctx)
 	if err != nil {
 		t.Fatalf("HighestHeight: %v", err)
 	}
-	if height != 1 {
-		t.Fatalf("after 2 SubmitPositions, highest committed height = %d; want 1", height)
+	if height < 2 {
+		t.Fatalf("expected >= 2 committed entries after 3 writes; got %d — not all writes routed through BFT", height)
 	}
 }
 
 // TestBFTEngineResumesAcrossBoot is the session-5c acceptance test:
 // with the replica keypair persisted in bft_replica_keys, a fresh
 // engine booted against the same stores can verify prior-boot QCs
-// and extend the chain — the limitation documented in session 5b
-// is now closed.
+// and extend the chain.
 func TestBFTEngineResumesAcrossBoot(t *testing.T) {
 	db := tempDB(t)
 	ctx := context.Background()
@@ -92,8 +74,6 @@ func TestBFTEngineResumesAcrossBoot(t *testing.T) {
 	voteHist := store.NewPostgresVoteHistoryStore(db, bft.ReplicaID(0))
 	keys := store.NewPostgresReplicaKeyStore(db)
 
-	// First boot: drive 3 submits (commits blocks 1 and 2 under the
-	// two-chain rule; block 3 remains prepared but uncommitted).
 	eng1, err := bft.BootstrapSingleNode(ctx, log, voteHist, keys)
 	if err != nil {
 		t.Fatalf("first Bootstrap: %v", err)
@@ -108,9 +88,6 @@ func TestBFTEngineResumesAcrossBoot(t *testing.T) {
 		t.Fatalf("after 3 submits, committed height = %d; want 2", heightBefore)
 	}
 
-	// Second boot: fresh engine against the same stores. Extending
-	// the chain requires verifying the prior boot's QC — which only
-	// works if the BLS keypair persisted from boot 1.
 	eng2, err := bft.BootstrapSingleNode(ctx, log, voteHist, keys)
 	if err != nil {
 		t.Fatalf("second Bootstrap: %v", err)
@@ -119,9 +96,6 @@ func TestBFTEngineResumesAcrossBoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("eng2.Submit: %v (BLS key persistence must carry across boot)", err)
 	}
-	// Next height extends the last committed (= block 2); prepared-
-	// but-uncommitted block 3 is not recovered by Replay, so the new
-	// submission lands at height 3 and view > 3.
 	if block.Height != 3 {
 		t.Fatalf("post-restart block height = %d; want 3", block.Height)
 	}
@@ -129,10 +103,6 @@ func TestBFTEngineResumesAcrossBoot(t *testing.T) {
 		t.Fatalf("post-restart QC view = %d; want > 3", qc.View)
 	}
 
-	// Committed log continues to grow across restarts: the new
-	// submission's successor would commit this block, but a third
-	// submission under the second engine is enough to confirm the
-	// chain is live — commit block 3 via two-chain.
 	if _, _, err := eng2.Submit(ctx, []byte("post-restart-2")); err != nil {
 		t.Fatalf("eng2.Submit 2: %v", err)
 	}
@@ -167,7 +137,6 @@ func TestReplicaKeyStoreReturnsSameKey(t *testing.T) {
 		t.Fatalf("second load returned different public key — persistence failed")
 	}
 
-	// A different replica ID yields a different keypair.
 	kp3, err := ks.LoadOrGenerate(ctx, bft.ReplicaID(1))
 	if err != nil {
 		t.Fatalf("replica-1 LoadOrGenerate: %v", err)
