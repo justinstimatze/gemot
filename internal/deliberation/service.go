@@ -275,11 +275,29 @@ type Service struct {
 }
 
 func NewService(store Store, analyzer Analyzer) *Service {
+	// Every service gets a BFT engine so action ordering is always
+	// recorded in a tamper-evident log. Tests use an in-memory engine
+	// auto-constructed here; production overrides with a durable
+	// Postgres-backed engine via SetBFTEngine. A single code path —
+	// no "BFT disabled" branch anywhere downstream.
+	engine, err := bft.BootstrapSingleNode(
+		context.Background(),
+		bft.NewInMemoryLogStore(),
+		bft.NewInMemoryVoteHistoryStore(),
+		bft.NewInMemoryReplicaKeyStore(),
+	)
+	if err != nil {
+		// Bootstrap only fails on BLS keygen (crypto-rand failure),
+		// which is unreachable in practice — panic so the
+		// misconfigured build surfaces immediately.
+		panic(fmt.Sprintf("bft: bootstrap in-memory engine: %v", err))
+	}
 	return &Service{
 		store:           store,
 		analyzer:        analyzer,
 		activeAnalyses:  make(map[string]context.CancelFunc),
 		resolutionLocks: make(map[string]*sync.Mutex),
+		bftEngine:       engine,
 	}
 }
 
@@ -288,12 +306,87 @@ func (s *Service) SetAuditLogger(fn func(method, deliberationID, agentID string)
 	s.auditFn = fn
 }
 
-// SetBFTEngine wires a HotStuff BFT engine into the service.
-// Position submissions route through the state machine (ordered via
-// propose → vote → QC) and embed the resulting QC proof on the
-// returned Position.BFTProof. nil engine disables routing (tests).
+// SetBFTEngine overrides the default in-memory engine (auto-
+// constructed in NewService) with a durable one — typically the
+// Postgres-backed engine wired in main.go. All services always have
+// an engine; this setter just swaps which storage backs it.
 func (s *Service) SetBFTEngine(e *bft.Engine) {
 	s.bftEngine = e
+}
+
+// AuditLogEntry is a single row in the tamper-evident action log,
+// surfaced by the admin:get_audit_log tool so users can verify that
+// a given deliberation's actions were recorded in an append-only log
+// the server cannot retroactively edit without detection.
+type AuditLogEntry struct {
+	// Height is the monotonic sequence number in the BFT log.
+	Height int64 `json:"height"`
+	// View is the consensus round that committed this entry.
+	View int64 `json:"view"`
+	// ActionType: submit_position, vote, commit, dispute_crux.
+	ActionType string `json:"action_type"`
+	// AgentID is the agent that initiated the action.
+	AgentID string `json:"agent_id"`
+	// BlockHash is the cryptographic hash of the committed block —
+	// stable identifier users can reference when filing disputes.
+	BlockHash string `json:"block_hash"`
+}
+
+// GetTamperEvidentLog returns the committed-log entries filtered to
+// a single deliberation, parsed from the canonical pipe-delimited
+// payloads. Entries are in the order the server committed them.
+// Actions that have been submitted but not yet committed (the most
+// recent 1 action under the two-chain rule) are not included —
+// they will appear after the next action lands.
+func (s *Service) GetTamperEvidentLog(ctx context.Context, deliberationID string) ([]AuditLogEntry, error) {
+	entries, err := s.bftEngine.AuditEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AuditLogEntry, 0, len(entries))
+	for _, e := range entries {
+		parts := strings.Split(string(e.Block.Payload), "|")
+		// Canonical payloads always carry deliberation_id as the
+		// second field (after action_type) except for any hypothetical
+		// server-initiated actions, which have none.
+		if len(parts) < 3 {
+			continue
+		}
+		if parts[1] != deliberationID {
+			continue
+		}
+		h := e.Block.Hash()
+		out = append(out, AuditLogEntry{
+			Height:     int64(e.Block.Height),
+			View:       int64(e.Block.View),
+			ActionType: parts[0],
+			AgentID:    parts[2],
+			BlockHash:  fmt.Sprintf("%x", h[:8]),
+		})
+	}
+	return out, nil
+}
+
+// orderAction submits a write action through the BFT state machine
+// so it lands in the tamper-evident log before the domain-table
+// write. Every service mutation that should be audit-orderable
+// (positions, votes, commitments, disputes) calls this. Payload is
+// a pipe-joined canonical string so a later verify path can
+// regenerate and match it byte-for-byte.
+//
+// Returns an error that callers wrap with their own context. The
+// domain write should NOT proceed if this returns an error — the
+// log is the source of truth for "did this action happen."
+func (s *Service) orderAction(ctx context.Context, opType string, parts ...string) error {
+	payload := []byte(opType)
+	for _, p := range parts {
+		payload = append(payload, '|')
+		payload = append(payload, p...)
+	}
+	if _, _, err := s.bftEngine.Submit(ctx, payload); err != nil {
+		return fmt.Errorf("order %s: %w", opType, err)
+	}
+	return nil
 }
 
 func (s *Service) audit(method, deliberationID, agentID string) {
@@ -805,25 +898,11 @@ func (s *Service) SubmitPositionWithSigningID(ctx context.Context, deliberationI
 		fmt.Fprintf(os.Stderr, "gemot: SIG_SANITIZED position in %s from agent %q — signature was valid at submit but content was sanitized (stored signature will not reverify against stored content)\n", deliberationID, agentID)
 	}
 
-	// BFT routing: order the submission through the HotStuff state
-	// machine before persisting to domain tables. Payload is the
-	// canonical position bytes (deliberation-id, agent-id, content,
-	// round) — the same identity the signature covers — so the log
-	// entry is self-describing. QC attaches to the returned Position
-	// as proof of ordering; session 5c will expose replay-from-log
-	// so clients can reconstruct and verify.
-	if s.bftEngine != nil {
-		payload := []byte(fmt.Sprintf("submit_position|%s|%s|%d|%s",
-			deliberationID, agentID, p.Round, content))
-		qc, _, err := s.bftEngine.Submit(ctx, payload)
-		if err != nil {
-			return nil, fmt.Errorf("bft: order position: %w", err)
-		}
-		proof, err := bft.EncodeQCProof(qc)
-		if err != nil {
-			return nil, fmt.Errorf("bft: encode proof: %w", err)
-		}
-		p.BFTProof = proof
+	// Order the submission through the tamper-evident log BEFORE the
+	// domain-table write. Log is the source of truth for "did this
+	// happen"; if ordering fails, we must not persist the position.
+	if err := s.orderAction(ctx, "submit_position", deliberationID, agentID, fmt.Sprintf("%d", p.Round), content); err != nil {
+		return nil, err
 	}
 
 	if err := s.store.CreatePosition(ctx, p); err != nil {
@@ -938,6 +1017,14 @@ func (s *Service) castVote(ctx context.Context, v *Vote, signingAgentID string) 
 	mu := s.resolutionLock(v.DeliberationID)
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Tamper-evident log BEFORE domain write.
+	if err := s.orderAction(ctx, "vote",
+		v.DeliberationID, v.AgentID, v.PositionID,
+		fmt.Sprintf("%d", v.Value), v.Qualifier, v.CriterionID,
+	); err != nil {
+		return err
+	}
 
 	if err := s.store.CreateVote(ctx, v); err != nil {
 		return err
@@ -1839,6 +1926,9 @@ func (s *Service) Commit(ctx context.Context, deliberationID, agentID, statement
 		Statement:      statement,
 		Conditional:    conditional,
 	}
+	if err := s.orderAction(ctx, "commit", deliberationID, agentID, fmt.Sprintf("%d", c.AnalysisRound), statement, conditional); err != nil {
+		return nil, err
+	}
 	if err := s.store.CreateCommitment(ctx, c); err != nil {
 		return nil, err
 	}
@@ -2042,6 +2132,9 @@ func (s *Service) DisputeCrux(ctx context.Context, deliberationID, agentID, crux
 		AgentID:        agentID,
 		CruxClaim:      cruxClaim,
 		Correction:     correction,
+	}
+	if err := s.orderAction(ctx, "dispute_crux", deliberationID, agentID, cruxClaim, correction); err != nil {
+		return nil, err
 	}
 	if err := s.store.CreateDispute(ctx, d); err != nil {
 		return nil, err

@@ -153,6 +153,20 @@ func (e *Engine) Submit(ctx context.Context, payload []byte) (QC, Block, error) 
 	return preparedQC, proposal.Block, nil
 }
 
+// AuditEntries returns the full tamper-evident log in height order.
+// Each entry is a committed block plus its QC. Callers parse the
+// block's payload to recover the domain-level action. Used by the
+// service layer to render a verifiable audit trail of every write.
+func (e *Engine) AuditEntries(ctx context.Context) ([]LogEntry, error) {
+	e.mu.Lock()
+	log := e.replica.log
+	e.mu.Unlock()
+	if log == nil {
+		return nil, nil
+	}
+	return log.Load(ctx)
+}
+
 // EncodeQCProof serializes a QC for inclusion in a client-facing
 // response. JSON for MVP debuggability; a binary format lands
 // alongside multi-node wire stability if QC size becomes a concern.

@@ -63,13 +63,7 @@ type Position struct {
 	Metadata         map[string]any `json:"metadata,omitempty"`
 	Round            int            `json:"round_number"`
 	Signature        []byte         `json:"signature,omitempty"` // ed25519 signature over auth.PositionPayload
-	// BFTProof is the HotStuff QC (JSON-encoded) that witnesses the
-	// position was ordered through the BFT state machine. Empty when
-	// the server is not running a BFT engine (tests, legacy). Session
-	// 5b wires this for position submission; votes / analysis come in
-	// later sessions.
-	BFTProof  []byte    `json:"bft_proof,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt        time.Time      `json:"created_at"`
 }
 
 type JoinCode struct {

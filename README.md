@@ -184,6 +184,8 @@ Analysis results include `integrity_warnings` flagging:
 - `MODEL_DIVERSITY` — all agents share a model family
 - `DISPUTED` — agent challenges to crux classifications
 
+**Tamper-evident action log.** Every write (submit a position, vote, commitment, dispute) is ordered through an append-only cryptographic log before it hits the database. Call `admin action:get_audit_log` to see the `tamper_evident_log` field — it lists each action's sequence number and content hash, so you can verify the server hasn't quietly rewritten history.
+
 ### Platform
 - **Async analysis** with sub-status progress reporting
 - **LLM response caching** (24h TTL, SHA256 keys)

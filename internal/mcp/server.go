@@ -1003,9 +1003,17 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 		if result, err := s.db.GetLatestAnalysisResult(ctx, args.DeliberationID); err == nil && result != nil {
 			analysisAudit = result.AuditLog
 		}
+		// Tamper-evident log: every write action is ordered through
+		// a BFT state machine, so a client holding this log can
+		// verify the server didn't retroactively edit history.
+		tamperEvident, tErr := s.svc.GetTamperEvidentLog(ctx, args.DeliberationID)
+		if tErr != nil {
+			tamperEvident = nil
+		}
 		return jsonResult(map[string]any{
-			"operations":         opLog,
-			"analysis_decisions": analysisAudit,
+			"operations":          opLog,
+			"analysis_decisions":  analysisAudit,
+			"tamper_evident_log":  tamperEvident,
 		})
 
 	case "list_templates":
