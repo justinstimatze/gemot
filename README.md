@@ -206,7 +206,7 @@ Analysis results include `integrity_warnings` flagging:
 | Dataset | Source | Result |
 |---|---|---|
 | **Polis NZ Biodiversity** | 529 agents, 29K votes | 3 clusters at 0.76-0.97 purity vs Polis ground truth, 99 consensus positions |
-| **Habermas Machine** | 15 human opinions (Speaker L) | 2 cruxes found; directionally interesting but statistically limited (n=4) |
+| **Habermas Machine** | 15 human opinions (Tessler et al., DeepMind) | 2 cruxes found; directionally interesting but statistically limited (n=4) |
 | **Synthetic 5-agent** | AI governance deliberation | 5 topics, 3 cruxes at 0.97 avg controversy, 130s with Sonnet |
 
 ## Security
@@ -261,11 +261,11 @@ Apache 2.0 — see [LICENSE](LICENSE)
 - [Talk to the City (T3C)](https://github.com/AIObjectives/talktothe.city) — claim extraction and crux detection pipeline
 - [Polis](https://pol.is) — vote matrix analysis, bridging scores concept
 - [Plurality (Weyl, Tang et al.)](https://github.com/pluralitybook/plurality) — correlation discounting, quadratic voting, broad listening framework
-- [Habermas Machine](https://arxiv.org/abs/2410.11302) — AI mediator generating common-ground statements, 5,734 UK participants (Science, 2024)
+- [Habermas Machine](https://www.science.org/doi/10.1126/science.adq2852) — AI mediator generating common-ground statements, 5,734 UK participants (Tessler, Bakker et al., Science, 2024)
 - [Moltbook](https://arxiv.org/abs/2602.14299) — empirical validation that agent societies need structural mechanisms
 - [Generative Social Choice](https://arxiv.org/abs/2309.01291) — compromise proposal generation framework (Fish, Procaccia et al., EC 2024)
-- [Deliberative Collective Intelligence](https://arxiv.org/abs/2603.11781) — typed epistemic acts, convergent flow, minority reports (Prakash, 2025)
-- [The Empty Chair](https://arxiv.org/abs/2503.13812) — LLM personas for missing stakeholder perspectives in deliberation (Fulay, Dimitrakopoulou & Roy, CSCW 2025)
+- [From Debate to Deliberation: Structured Collective Reasoning with Typed Epistemic Acts](https://arxiv.org/abs/2603.11781) — typed epistemic acts, convergent flow, minority reports (Prakash, 2026)
+- [The Empty Chair](https://arxiv.org/abs/2503.13812) — LLM personas for missing stakeholder perspectives in deliberation (Fulay, Dimitrakopoulou & Roy, NeurIPS 2025 PersonaLLM workshop)
 - [Debate or Vote](https://arxiv.org/abs/2508.17536) — voting matters more than debate; structure matters more than rounds (Choi, Zhu & Li, NeurIPS 2025 Spotlight)
 - [FREE-MAD](https://arxiv.org/abs/2509.11035) — anti-conformity mechanism for multi-agent debate
 - [CQs-Gen](https://argmining-org.github.io/2025/) — critical question generation as crux detection (ArgMining @ ACL 2025)

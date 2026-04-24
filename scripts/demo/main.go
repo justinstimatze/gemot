@@ -396,7 +396,7 @@ const htmlTemplate = `<!DOCTYPE html>
   <span class="pill" style="background:#2a1a1a; color:#f87171; font-size:0.75rem;">Multi-Agent Risks (Cooperative AI, arXiv 2502.14143)</span>
   <span class="pill" style="background:#2a1a1a; color:#f87171; font-size:0.75rem;">AgentPoison (NeurIPS 2024)</span>
   <span class="pill" style="background:#2a1a1a; color:#f87171; font-size:0.75rem;">OWASP Agentic Top 10 (2026)</span>
-  <span class="pill" style="background:#2a1a1a; color:#f87171; font-size:0.75rem;">Epistemic Poisoning (Speaker L, arXiv 2603.02960)</span>
+  <span class="pill" style="background:#2a1a1a; color:#f87171; font-size:0.75rem;">Epistemic Poisoning (Marchal et al., arXiv 2603.02960)</span>
 </div>
 <p style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #525252; margin-bottom: 0.5rem;">Ships as</p>
 <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-bottom: 1rem;">
