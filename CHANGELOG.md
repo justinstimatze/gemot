@@ -2,7 +2,20 @@
 
 All notable changes to gemot are documented here.
 
-## Unreleased — DARPA Track 1 M8 work
+## 0.11.0 — 2026-04-23
+
+Release theme: DARPA Track 1 M8 BFT sequence agreement shipped as always-on hardening, with companion work on reputation defaults, marketing-copy alignment, and citation accuracy.
+
+Headlines:
+- HotStuff chained-BFT core + view change + real BLS multi-signatures + durable commit log + durable vote history + persistent replica keys + service-layer routing + client-side QC verification (sessions 1–5d).
+- DARPA-motivated hardening flipped to default-on: EigenTrust enabled, `db_fail=closed`, 30-day edge decay, edge floor/cap, envelope middleware in advisory mode, Postgres-backed nonce cache.
+- Trimmed-mean `AGGREGATION_DRIFT` integrity warning, consensus vote provenance (`SupportingAgents`), subgraph-scoped trust-edge loads, per-key analyze rate limit, CSP header.
+- Landing page "Why it's trustworthy" section, README integrity bullets in user-language.
+- `/try` sandbox + bearer-less A2A auth via join_code, `admin action:replica_pubkey` endpoint.
+- HotStuff TLA+ spec tightened (leader rotation, proposedInView, leader-ready precondition, formal Liveness declaration under Fairness).
+- Citation audit: verified every arXiv ID against arXiv directly; fixed mis-attributed Habermas Machine link, corrected titles/venues/years, removed find-replace contamination that had leaked T3C "Speaker L" anonymization into real research attributions.
+
+## Unreleased
 
 ### New Features
 
