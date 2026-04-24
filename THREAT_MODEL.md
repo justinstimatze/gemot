@@ -55,7 +55,7 @@ In multi-round deliberation, a small bias in round 1 analysis compounds as agent
 **Severity:** High
 **Current defense:** None.
 **Needed:** Round-over-round drift detection; analysis diff between rounds; alert when agent positions converge suspiciously fast.
-**Research:** LLM feedback loop research (arXiv 2402.06627); real-time misinformation feedback (arXiv 2410.14651).
+**Research:** Pan et al., "Feedback Loops With Language Models Drive In-Context Reward Hacking" (arXiv 2402.06627); Chen et al., "Real-time Factuality Assessment from Adversarial Feedback" (arXiv 2410.14651).
 
 ### 6. Memory/Context Poisoning
 
@@ -63,7 +63,7 @@ If a malicious agent manipulates one deliberation's analysis, and that analysis 
 
 **Severity:** Medium
 **Current defense:** Analysis results are scoped to deliberation ID and round number. No cross-deliberation referencing in the current design.
-**Research:** AgentPoison (NeurIPS 2024, arXiv 2407.12784); MemoryGraft (arXiv 2512.16962).
+**Research:** Chen et al., AgentPoison (NeurIPS 2024, arXiv 2407.12784); Srivastava & He, MemoryGraft (2025, arXiv 2512.16962).
 
 ### 7. Consensus Spoofing
 
@@ -131,13 +131,13 @@ A malicious agent submits positions carefully crafted to appear as consensus (mo
 
 ## Key References
 
-- Marchal et al., "Architecting Trust in Artificial Epistemic Agents" (Speaker L, 2026). arXiv:2603.02960
+- Marchal et al., "Architecting Trust in Artificial Epistemic Agents" (2026). arXiv:2603.02960
 - Multi-author, "Multi-Agent Risks from Advanced AI" (Cooperative AI Foundation, 2025). arXiv:2502.14143
 - Schroeder de Witt, "Open Challenges in Multi-Agent Security" (2025). arXiv:2505.02077
 - "Cracking the Collective Mind: Adversarial Manipulation in Multi-Agent Systems" (OpenReview, 2024). openreview.net/forum?id=kgZFaAtzYi
 - "AgentPoison: Red-teaming LLM Agents via Poisoning Memory" (NeurIPS 2024). arXiv:2407.12784
-- "MemoryGraft: Persistent Compromise of LLM Agents" (2024). arXiv:2512.16962
+- Srivastava & He, "MemoryGraft: Persistent Compromise of LLM Agents via Poisoned Experience Retrieval" (2025). arXiv:2512.16962
 - OWASP Top 10 for Agentic Applications (2026). genai.owasp.org
 - "AI can help humans find common ground" (Science, 2024) — Habermas Machine. doi:10.1126/science.adq2852
 - "Opportunities and Risks of LLMs for Scalable Deliberation with Polis". arXiv:2306.11932
-- Robust aggregation survey. arXiv:2312.14461
+- Choudhary, Kolluri & Saxena, "Attacking Byzantine Robust Aggregation in High Dimensions" (2023). arXiv:2312.14461

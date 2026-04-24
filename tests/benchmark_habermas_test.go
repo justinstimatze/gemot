@@ -29,7 +29,7 @@ type habermasPosition struct {
 }
 
 // TestHabermasBenchmark runs gemot's text pipeline on real human deliberation data
-// from Google Speaker L's Habermas Machine experiment.
+// from Google DeepMind's Habermas Machine experiment.
 //
 // Ground truth: which participants changed their views during deliberation.
 // Hypothesis: cruxes should capture the claims that view-changers moved on.
