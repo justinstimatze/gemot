@@ -13,11 +13,17 @@
 // goroutines hard enough for finer locks to matter, and a single mutex
 // makes the "did I forget to lock?" review trivial.
 //
-// Defensive copying: maps and slices are shallow-copied on read so a
-// caller that mutates a returned struct doesn't corrupt the stored
-// version. Pointer fields (e.g. Resolution, FulfilledAt) are not deep-
-// copied — callers must treat them as read-only views, same contract as
-// the Postgres adapter.
+// Defensive copying: top-level structs are returned by value, so a caller
+// that mutates the returned struct's value-typed fields (string, int,
+// bool, time.Time) doesn't affect the stored copy. Map, slice, and
+// pointer fields (Position.Metadata, Position.Signature, Vote.Signature,
+// Deliberation.Rules, Deliberation.Criteria, Deliberation.Resolution,
+// Commitment.FulfilledAt) DO share underlying storage with the stored
+// version. This matches the contract callers should already follow with
+// the Postgres adapter (each fresh QueryRow scan is independent, but
+// nothing in the codebase mutates returned structs in place — and a
+// future reviewer should not start). If we ever need true deep-copy
+// semantics, switch the read paths to JSON-roundtrip the struct.
 package store
 
 import (
@@ -674,6 +680,7 @@ func (m *MemoryStore) GetDelegations(_ context.Context, deliberationID string) (
 			out = append(out, *d)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
 
@@ -709,6 +716,14 @@ func (m *MemoryStore) CreateCommitment(_ context.Context, c *deliberation.Commit
 	return nil
 }
 
+// sortByCreatedAt is the default ordering used across the Postgres
+// adapter (every list-style query has `ORDER BY created_at`). Mirrored
+// here so callers can rely on stable, ascending-by-creation order
+// regardless of which backend is wired in.
+func sortByCommitmentCreatedAt(out []deliberation.Commitment) {
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+}
+
 func (m *MemoryStore) GetCommitments(_ context.Context, deliberationID string) ([]deliberation.Commitment, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -718,6 +733,7 @@ func (m *MemoryStore) GetCommitments(_ context.Context, deliberationID string) (
 			out = append(out, *c)
 		}
 	}
+	sortByCommitmentCreatedAt(out)
 	return out, nil
 }
 
@@ -730,6 +746,7 @@ func (m *MemoryStore) GetCommitmentsByAgent(_ context.Context, agentID string) (
 			out = append(out, *c)
 		}
 	}
+	sortByCommitmentCreatedAt(out)
 	return out, nil
 }
 
@@ -748,6 +765,7 @@ func (m *MemoryStore) GetCommitmentsByGroup(_ context.Context, groupID string) (
 			out = append(out, *c)
 		}
 	}
+	sortByCommitmentCreatedAt(out)
 	return out, nil
 }
 
@@ -987,6 +1005,7 @@ func (m *MemoryStore) GetInvitations(_ context.Context, deliberationID string) (
 			out = append(out, *i)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
 
@@ -1048,6 +1067,7 @@ func (m *MemoryStore) GetDisputes(_ context.Context, deliberationID string) ([]d
 			out = append(out, *d)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
 
@@ -1062,6 +1082,7 @@ func (m *MemoryStore) GetUnprocessedDisputes(_ context.Context, deliberationID s
 			}
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
 
