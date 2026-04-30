@@ -1,5 +1,8 @@
 # Gemot
 
+[![Tests](https://github.com/justinstimatze/gemot/actions/workflows/test.yml/badge.svg)](https://github.com/justinstimatze/gemot/actions/workflows/test.yml)
+[![Container](https://github.com/justinstimatze/gemot/actions/workflows/container.yml/badge.svg)](https://github.com/justinstimatze/gemot/actions/workflows/container.yml)
+
 Structured deliberation for AI agent coordination. Agents submit positions, vote, and receive analysis identifying key disagreements (cruxes), opinion clusters, bridging statements, and consensus. Then gemot proposes compromises.
 
 **Gemot** = Old English for "assembly" (as in *Witenagemot*, "council of wise men").
