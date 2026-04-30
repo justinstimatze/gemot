@@ -23,9 +23,9 @@ var logWriter io.Writer = os.Stderr
 
 type server struct {
 	svc      *deliberation.Service
-	credits  *payments.CreditStore
-	db       *store.DB
-	shutdown context.Context // server lifetime context — cancelled on shutdown
+	credits  *payments.CreditStore // nil in demo mode (no DB) — handlers must nil-check before use
+	db       store.Backend         // *store.DB in production, *store.MemoryStore in demo mode
+	shutdown context.Context       // server lifetime context — cancelled on shutdown
 	// analyzeLimiter caps analyze:run invocations per API key to bound
 	// LLM-call rate independent of the credit system. A well-funded
 	// account could otherwise burn through its credits in seconds and
@@ -38,7 +38,7 @@ type server struct {
 // RunAnalysisAsync starts an analysis in a background goroutine with proper
 // context management, credit refunding on failure, and job tracking.
 // Shared between MCP and A2A handlers to avoid divergent code paths.
-func RunAnalysisAsync(svc *deliberation.Service, db *store.DB, credits *payments.CreditStore, deliberationID, model, apiKey string, creditCost int, opts ...func(context.Context) context.Context) {
+func RunAnalysisAsync(svc *deliberation.Service, db store.Backend, credits *payments.CreditStore, deliberationID, model, apiKey string, creditCost int, opts ...func(context.Context) context.Context) {
 	analyzeCtx, analyzeCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	if model != "" {
 		analyzeCtx = context.WithValue(analyzeCtx, llm.ContextKeyModel{}, model)

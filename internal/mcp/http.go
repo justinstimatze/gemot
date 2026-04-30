@@ -36,7 +36,13 @@ type tryCodeData struct {
 }
 
 // RunHTTP starts the MCP server over SSE/HTTP on the given address.
-func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr string) error {
+//
+// backend is the gemot persistence layer (Postgres in production, in-memory
+// for `docker run gemot/gemot` style demos). db is the underlying *sql.DB
+// for components that genuinely need raw SQL access (credit store, Postgres
+// nonce cache, /metrics counters); pass nil in demo mode to skip those
+// components. backend itself is always non-nil.
+func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backend, db *sql.DB, addr string) error {
 	// Fail-fast template + static-asset checks. If an embed is missing
 	// or a template has a syntax error, surface here at startup rather
 	// than on the first /try/<code> request in production.
@@ -50,19 +56,24 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	}
 
 	apiSecret := os.Getenv("GEMOT_API_SECRET")
+	demoMode := db == nil
 
-	// Initialize credit store (uses the same Postgres DB)
-	creditStore, err := payments.NewCreditStore(db)
-	if err != nil {
-		return fmt.Errorf("initializing credit store: %w", err)
+	// Initialize credit store. In demo mode (no SQL DB) it stays nil and
+	// every paid path no-ops via the existing `if creditStore != nil`
+	// guards in the handlers — anonymous users effectively get
+	// unrestricted analysis runs.
+	var creditStore *payments.CreditStore
+	if !demoMode {
+		creditStore, err = payments.NewCreditStore(db)
+		if err != nil {
+			return fmt.Errorf("initializing credit store: %w", err)
+		}
 	}
-
-	gemotDB, _ := store.WrapRawDB(db)
 
 	// Wire service-level audit logging so ALL write operations are tracked,
 	// regardless of whether they come through MCP, A2A, or internal calls (e.g., expert panels).
 	svc.SetAuditLogger(func(method, deliberationID, agentID string) {
-		gemotDB.LogAuditEvent("", "", method, deliberationID, agentID)
+		backend.LogAuditEvent("", "", method, deliberationID, agentID)
 	})
 
 	// Per-key analyze rate limit: 10 concurrent analyses per minute
@@ -71,7 +82,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	// Anthropic quota. Anonymous (no-key) requests share a pool keyed
 	// by IP via a separate limiter downstream.
 	analyzeLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
-	s := &server{svc: svc, credits: creditStore, db: gemotDB, shutdown: ctx, analyzeLimiter: analyzeLimiter}
+	s := &server{svc: svc, credits: creditStore, db: backend, shutdown: ctx, analyzeLimiter: analyzeLimiter}
 	srv := newServer(s)
 
 	// MPP payment configuration (for when Stripe enables SPTs)
@@ -100,20 +111,26 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	// protection out of the box. Explicit GEMOT_NONCE_STORE=memory is
 	// still honored for single-process local dev where avoiding the
 	// Postgres round-trip per request matters more than durability.
-	switch store := strings.TrimSpace(os.Getenv("GEMOT_NONCE_STORE")); store {
-	case "", "postgres":
-		pg := auth.NewPostgresNonceCache(db, 0)
-		pg.StartJanitor(ctx, 0)
-		nonceCache = pg
-		fmt.Fprintf(os.Stderr, "gemot: envelope nonce cache: postgres (durable, multi-instance safe)\n")
-	case "memory":
+	// Demo mode (no SQL DB) always uses the memory cache — there's no
+	// other option, and there's only one instance anyway.
+	if demoMode {
 		nonceCache = auth.NewMemoryNonceCache(0, 0)
-		fmt.Fprintf(os.Stderr, "gemot: envelope nonce cache: memory (single-instance only)\n")
-	default:
-		fmt.Fprintf(os.Stderr, "gemot: WARNING: unknown GEMOT_NONCE_STORE=%q — defaulting to postgres\n", store)
-		pg := auth.NewPostgresNonceCache(db, 0)
-		pg.StartJanitor(ctx, 0)
-		nonceCache = pg
+	} else {
+		switch store := strings.TrimSpace(os.Getenv("GEMOT_NONCE_STORE")); store {
+		case "", "postgres":
+			pg := auth.NewPostgresNonceCache(db, 0)
+			pg.StartJanitor(ctx, 0)
+			nonceCache = pg
+			fmt.Fprintf(os.Stderr, "gemot: envelope nonce cache: postgres (durable, multi-instance safe)\n")
+		case "memory":
+			nonceCache = auth.NewMemoryNonceCache(0, 0)
+			fmt.Fprintf(os.Stderr, "gemot: envelope nonce cache: memory (single-instance only)\n")
+		default:
+			fmt.Fprintf(os.Stderr, "gemot: WARNING: unknown GEMOT_NONCE_STORE=%q — defaulting to postgres\n", store)
+			pg := auth.NewPostgresNonceCache(db, 0)
+			pg.StartJanitor(ctx, 0)
+			nonceCache = pg
+		}
 	}
 	envelopeMiddleware := EnvelopeMiddleware(svc, nonceCache, envelopeMode, 0)
 	if envelopeMode != EnvelopeOff {
@@ -354,7 +371,7 @@ No API key needed — the join code is your credential.
 	// block, tight enough that a shared join code can't flood prod.
 	a2aSandboxLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
 	a2aAuth := A2AAuthMiddleware(apiSecret, creditStore, a2aLimiter, svc, a2aSandboxLimiter)
-	a2aHandler := A2AHandler(svc, creditStore, gemotDB, gemotDB)
+	a2aHandler := A2AHandler(svc, creditStore, backend, backend)
 	mux.Handle("POST /a2a", a2aAuth(envelopeMiddleware(a2aHandler)))
 
 	// SSE event stream — real-time deliberation state changes
@@ -374,28 +391,36 @@ No API key needed — the join code is your credential.
 			next(w, r)
 		}
 	}
-	mux.HandleFunc("/checkout", rateLimitCheckout(payments.CheckoutHandler(creditStore, baseURL)))
-	mux.HandleFunc("/checkout/success", rateLimitCheckout(payments.SuccessHandler(creditStore)))
-	mux.HandleFunc("/checkout/cancel", payments.CancelHandler())
+	if !demoMode {
+		mux.HandleFunc("/checkout", rateLimitCheckout(payments.CheckoutHandler(creditStore, baseURL)))
+		mux.HandleFunc("/checkout/success", rateLimitCheckout(payments.SuccessHandler(creditStore)))
+		mux.HandleFunc("/checkout/cancel", payments.CancelHandler())
 
-	// Stripe Webhook — credit accounts on successful payment (Stripe-signed, IP rate-limited)
-	webhookHandler := payments.WebhookHandler(creditStore)
-	mux.HandleFunc("POST /webhook/stripe", func(w http.ResponseWriter, r *http.Request) {
-		ip := ClientIP(r)
-		if !endpointLimiter.Allow("webhook:" + ip) {
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-		webhookHandler(w, r)
-	})
+		// Stripe Webhook — credit accounts on successful payment (Stripe-signed, IP rate-limited)
+		webhookHandler := payments.WebhookHandler(creditStore)
+		mux.HandleFunc("POST /webhook/stripe", func(w http.ResponseWriter, r *http.Request) {
+			ip := ClientIP(r)
+			if !endpointLimiter.Allow("webhook:" + ip) {
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+			webhookHandler(w, r)
+		})
+	}
 
 	// Agent card (A2A discovery) — generated from the Version constant so it
 	// can never drift from the released binary. See agent_card.go.
 	mux.HandleFunc("/.well-known/agent-card.json", AgentCardHandler)
 
-	// Health check (public) — verifies DB connectivity
+	// Health check (public) — verifies DB connectivity in production,
+	// always reports ok in demo mode (the in-memory backend is part of
+	// the process, so liveness == health).
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if demoMode {
+			_, _ = fmt.Fprintf(w, `{"status":"ok","service":"gemot","version":"%s","mode":"demo"}`, Version)
+			return
+		}
 		if err := db.PingContext(r.Context()); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = fmt.Fprintf(w, `{"status":"down","service":"gemot","version":"%s","reason":"database unreachable"}`, Version)
@@ -404,8 +429,11 @@ No API key needed — the join code is your credential.
 		_, _ = fmt.Fprintf(w, `{"status":"ok","service":"gemot","version":"%s"}`, Version)
 	})
 
-	// Metrics (admin only)
-	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+	// Metrics (admin only) — Postgres-only because it queries the
+	// physical schema. In demo mode the in-memory backend has no
+	// equivalent counters and the route stays unregistered.
+	if !demoMode {
+		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		auth := r.Header.Get("Authorization")
 		token := strings.TrimPrefix(auth, "Bearer ")
@@ -439,30 +467,31 @@ No API key needed — the join code is your credential.
 		db.QueryRow("SELECT COALESCE(AVG(c), 0) FROM (SELECT COUNT(*) c FROM positions GROUP BY deliberation_id)").Scan(&stats.AvgPositionsPerD) //nolint:errcheck
 
 		json.NewEncoder(w).Encode(stats) //nolint:errcheck
-	})
+		})
 
-	// Balance check (authenticated, rate-limited)
-	mux.HandleFunc("/balance", func(w http.ResponseWriter, r *http.Request) {
-		ip := ClientIP(r)
-		if !endpointLimiter.Allow("balance:" + ip) {
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer gmt_") {
-			http.Error(w, `{"error":"provide API key as Bearer token"}`, http.StatusUnauthorized)
-			return
-		}
-		key := strings.TrimPrefix(auth, "Bearer ")
-		balance, err := creditStore.GetBalance(key)
-		if err != nil {
-			http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
-			return
-		}
-		_, _ = fmt.Fprintf(w, `{"credits_remaining":%d,"cost_per_analyze":{"sonnet":%d,"opus":%d,"haiku":%d}}`,
-			balance, payments.CostSonnet, payments.CostOpus, payments.CostHaiku)
-	})
+		// Balance check (authenticated, rate-limited)
+		mux.HandleFunc("/balance", func(w http.ResponseWriter, r *http.Request) {
+			ip := ClientIP(r)
+			if !endpointLimiter.Allow("balance:" + ip) {
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			auth := r.Header.Get("Authorization")
+			if !strings.HasPrefix(auth, "Bearer gmt_") {
+				http.Error(w, `{"error":"provide API key as Bearer token"}`, http.StatusUnauthorized)
+				return
+			}
+			key := strings.TrimPrefix(auth, "Bearer ")
+			balance, err := creditStore.GetBalance(key)
+			if err != nil {
+				http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"credits_remaining":%d,"cost_per_analyze":{"sonnet":%d,"opus":%d,"haiku":%d}}`,
+				balance, payments.CostSonnet, payments.CostOpus, payments.CostHaiku)
+		})
+	} // end !demoMode block (skips Postgres-only routes)
 
 	// Pricing page (public)
 	mux.HandleFunc("/pricing", func(w http.ResponseWriter, r *http.Request) {
