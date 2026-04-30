@@ -1015,13 +1015,18 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
-		opLog, err := s.db.GetAuditLog(args.DeliberationID, 50)
-		if err != nil {
-			opLog = nil
-		}
+		// s.db is nil only in stdio mode (mcp.Run), which doesn't wire a
+		// backend. The other two log surfaces fall back to nil/empty so
+		// the response shape stays consistent.
+		var opLog []map[string]string
 		var analysisAudit []deliberation.AuditEntry
-		if result, err := s.db.GetLatestAnalysisResult(ctx, args.DeliberationID); err == nil && result != nil {
-			analysisAudit = result.AuditLog
+		if s.db != nil {
+			if log, err := s.db.GetAuditLog(args.DeliberationID, 50); err == nil {
+				opLog = log
+			}
+			if result, err := s.db.GetLatestAnalysisResult(ctx, args.DeliberationID); err == nil && result != nil {
+				analysisAudit = result.AuditLog
+			}
 		}
 		// Tamper-evident log: every write action is ordered through
 		// a BFT state machine, so a client holding this log can
