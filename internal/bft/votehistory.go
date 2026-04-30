@@ -40,7 +40,7 @@ type VoteHistoryStore interface {
 // InMemoryVoteHistoryStore is a reference implementation for tests.
 // Enforces monotonic writes and thread-safe access.
 type InMemoryVoteHistoryStore struct {
-	mu            sync.Mutex
+	mu           sync.Mutex
 	lastVoted    View
 	lastProposed View
 }

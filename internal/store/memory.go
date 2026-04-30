@@ -90,25 +90,25 @@ type MemoryStore struct {
 	mu sync.RWMutex
 
 	// Core deliberation data
-	deliberations map[string]*deliberation.Deliberation       // id -> deliberation
-	statusChanged map[string]time.Time                        // id -> when status last changed
-	positions     map[string]*deliberation.Position           // id -> position
-	votes         map[string]*deliberation.Vote               // id -> vote
-	delegations   map[string]*deliberation.Delegation         // id -> delegation
-	commitments   map[string]*deliberation.Commitment         // id -> commitment
+	deliberations map[string]*deliberation.Deliberation           // id -> deliberation
+	statusChanged map[string]time.Time                            // id -> when status last changed
+	positions     map[string]*deliberation.Position               // id -> position
+	votes         map[string]*deliberation.Vote                   // id -> vote
+	delegations   map[string]*deliberation.Delegation             // id -> delegation
+	commitments   map[string]*deliberation.Commitment             // id -> commitment
 	analyses      map[string]map[int]*deliberation.AnalysisResult // delibID -> round -> result
 
 	// Access control
-	joinCodes    map[string]*deliberation.JoinCode  // code -> jc
-	acl          map[string]map[string]bool         // delibID -> keyID -> true
-	invitations  map[string]*deliberation.Invitation
-	shareTokens  map[string]shareToken              // token -> {groupID, expiresAt}
+	joinCodes   map[string]*deliberation.JoinCode // code -> jc
+	acl         map[string]map[string]bool        // delibID -> keyID -> true
+	invitations map[string]*deliberation.Invitation
+	shareTokens map[string]shareToken // token -> {groupID, expiresAt}
 
 	// Moderation
-	disputes       map[string]*deliberation.Dispute
-	disputeProcessed map[string]time.Time           // disputeID -> processedAt
-	abuseReports   []abuseReport
-	contextAccess  map[string]bool                  // "delibID|agentID|round" -> true
+	disputes         map[string]*deliberation.Dispute
+	disputeProcessed map[string]time.Time // disputeID -> processedAt
+	abuseReports     []abuseReport
+	contextAccess    map[string]bool // "delibID|agentID|round" -> true
 
 	// Agent keys (envelope signing)
 	agentKeys map[string]agentKey // agentID -> {publicKey, algo}
@@ -124,7 +124,6 @@ type MemoryStore struct {
 
 	// Reputation (no-op friendly: returns empty / unit weights)
 	reputation map[string]reputationRecord
-	trustEdges []trustEdge
 }
 
 type shareToken struct {
@@ -175,14 +174,6 @@ type reputationRecord struct {
 	Score         float64
 	SurvivedCount int
 	UpdatedAt     time.Time
-}
-
-type trustEdge struct {
-	From           string
-	To             string
-	Weight         float64
-	DeliberationID string
-	UpdatedAt      time.Time
 }
 
 // NewMemoryStore returns an empty in-memory store ready for use.

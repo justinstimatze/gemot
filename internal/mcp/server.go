@@ -1036,9 +1036,9 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 			tamperEvident = nil
 		}
 		return jsonResult(map[string]any{
-			"operations":          opLog,
-			"analysis_decisions":  analysisAudit,
-			"tamper_evident_log":  tamperEvident,
+			"operations":         opLog,
+			"analysis_decisions": analysisAudit,
+			"tamper_evident_log": tamperEvident,
 		})
 
 	case "list_templates":
@@ -1050,9 +1050,9 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 			return errResult(err)
 		}
 		return jsonResult(map[string]any{
-			"public_key_hex":  fmt.Sprintf("%x", pub),
-			"algorithm":       "bls12-381-g2",
-			"usage":           "verify `proof` fields in get_audit_log's tamper_evident_log",
+			"public_key_hex": fmt.Sprintf("%x", pub),
+			"algorithm":      "bls12-381-g2",
+			"usage":          "verify `proof` fields in get_audit_log's tamper_evident_log",
 		})
 
 	case "get_votes":

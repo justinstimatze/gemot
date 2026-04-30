@@ -185,7 +185,7 @@ func llmCall(ctx context.Context, apiKey, system, user string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()              //nolint:errcheck
 	respBody, _ := io.ReadAll(resp.Body) //nolint:errcheck
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("anthropic API %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
