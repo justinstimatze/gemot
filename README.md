@@ -23,7 +23,19 @@ claude mcp add --transport http gemot https://gemot.dev/mcp \
 
 Then prompt Claude with something like *"Use gemot to start a deliberation about whether we should adopt RFC-9999, then submit positions from three different perspectives and run the analysis."* The [agent card](https://gemot.dev/.well-known/agent-card.json) lists every skill the model can invoke.
 
-Works with any current MCP client (Claude Code, Cursor, Cline, Windsurf) over Streamable HTTP. Legacy SSE transport is also available at `https://gemot.dev/mcp/sse`. Local install: `go build -o gemot . && ./gemot serve`.
+Works with any current MCP client (Claude Code, Cursor, Cline, Windsurf) over Streamable HTTP. Legacy SSE transport is also available at `https://gemot.dev/mcp/sse`.
+
+### Run locally (demo mode)
+
+If you'd rather run gemot in-process — to read the source, hack on it, or use it without depending on the hosted service — you can:
+
+```bash
+docker run -p 8080:8080 -e ANTHROPIC_API_KEY=sk-ant-... ghcr.io/justinstimatze/gemot:latest
+# or build from source
+go build -o gemot . && ./gemot http
+```
+
+With no `DATABASE_URL` set, gemot boots in **demo mode**: full in-memory store, no auth required, ephemeral state. Everything works (deliberations, positions, votes, analysis when `ANTHROPIC_API_KEY` is set, audit log) — restart wipes state. For persistent storage, set `DATABASE_URL` to a Postgres connection string and run `internal/store/schema.sql`. Either way, point your MCP client at `http://localhost:8080/mcp`.
 
 ## Why
 

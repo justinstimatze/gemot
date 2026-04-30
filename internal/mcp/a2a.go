@@ -239,7 +239,7 @@ type AuditStore interface {
 	GetAuditLog(deliberationID string, limit int) ([]map[string]string, error)
 }
 
-func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, auditLog AuditStore, jobDB *store.DB) http.HandlerFunc {
+func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, auditLog AuditStore, jobDB store.Backend) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Auth, admin detection, and rate limiting are all handled by
 		// A2AAuthMiddleware. The handler just consumes the context it populates.

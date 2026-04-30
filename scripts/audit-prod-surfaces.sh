@@ -90,10 +90,18 @@ fi
 #    because the registry is in preview and the namespace may not be
 #    published yet)
 REG_RESP="$(curl -fsS --max-time 10 "https://registry.modelcontextprotocol.io/v0/servers?search=$SERVER_JSON_NAME" 2>/dev/null || echo "")"
+# Registry response shape: {"servers":[{"server":{...}, "_meta":{...}}, ...]}
+# Each entry wraps the server fields under .server, with publish metadata
+# (isLatest, publishedAt, status) under ._meta.io.modelcontextprotocol.registry/official.
+# Pick the entry with isLatest=true to handle older versions still being active.
 if [[ -z "$REG_RESP" ]]; then
   echo "[WARN]  MCP registry      query failed (preview API may be down — non-fatal)"
-elif echo "$REG_RESP" | jq -e ".servers[]? | select(.name==\"$SERVER_JSON_NAME\")" >/dev/null 2>&1; then
-  reg_ver=$(echo "$REG_RESP" | jq -r ".servers[] | select(.name==\"$SERVER_JSON_NAME\") | .version" | head -1)
+elif echo "$REG_RESP" | jq -e --arg n "$SERVER_JSON_NAME" '.servers[]? | select(.server.name==$n)' >/dev/null 2>&1; then
+  reg_ver=$(echo "$REG_RESP" | jq -r --arg n "$SERVER_JSON_NAME" '.servers[] | select(.server.name==$n) | select(._meta["io.modelcontextprotocol.registry/official"].isLatest==true) | .server.version' | head -1)
+  if [[ -z "$reg_ver" ]]; then
+    # No isLatest=true entry; fall back to first match
+    reg_ver=$(echo "$REG_RESP" | jq -r --arg n "$SERVER_JSON_NAME" '.servers[] | select(.server.name==$n) | .server.version' | head -1)
+  fi
   if [[ "$reg_ver" == "$LOCAL" ]]; then
     echo "[ OK ]  MCP registry      version=$reg_ver"
   else
