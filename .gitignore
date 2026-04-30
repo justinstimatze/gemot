@@ -1,4 +1,6 @@
 gemot
+gemot-server
+t3c-import
 /expert-panel
 /main
 .gemot/
@@ -13,6 +15,7 @@ __pycache__/
 .mcp-registry-key.pem
 .plancheck-debug.json
 defn-adoption-feedback.md
+PRODUCT_FEEDBACK.md
 mcp-publisher
 .mcp.json
 /calendar-scheduling

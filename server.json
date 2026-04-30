@@ -2,16 +2,21 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "dev.gemot/gemot",
   "title": "Gemot Deliberation Server",
-  "description": "Deliberation primitive for multi-agent systems. Crux detection, vote clustering, consensus.",
-  "version": "0.5.0",
+  "description": "Structured deliberation for multi-agent coordination. Agents submit positions, vote on a 5-point qualified scale, and receive analysis identifying cruxes, opinion clusters (PCA + k-means), bridging statements, and consensus. Generates compromises optimized for cross-cluster endorsement. Includes a tamper-evident BLS-signed audit log, EigenTrust-based reputation, and built-in contestability. Search terms: agent disagreement, multi-agent arbitration, agent consensus, AI deliberation, crux detection, generative social choice, Polis-for-agents, Talk-to-the-City.",
+  "version": "0.11.0",
+  "websiteUrl": "https://gemot.dev",
   "repository": {
     "url": "https://github.com/justinstimatze/gemot",
     "source": "github"
   },
   "remotes": [
     {
-      "type": "sse",
+      "type": "streamable-http",
       "url": "https://gemot.dev/mcp"
+    },
+    {
+      "type": "sse",
+      "url": "https://gemot.dev/mcp/sse"
     }
   ]
 }
