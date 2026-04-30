@@ -79,10 +79,10 @@ func Load() *Config {
 	loadDotenv(".env")
 
 	cfg := &Config{
-		DatabaseURL:                 envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
-		AnthropicKey:                envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
-		Model:                       envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
-		StabilitySamples:            envInt("GEMOT_STABILITY_SAMPLES", 0),
+		DatabaseURL:      envOr("DATABASE_URL", "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"),
+		AnthropicKey:     envOr("ANTHROPIC_API_KEY", os.Getenv("GEMOT_ANTHROPIC_KEY")),
+		Model:            envOr("GEMOT_MODEL", "claude-sonnet-4-6"),
+		StabilitySamples: envInt("GEMOT_STABILITY_SAMPLES", 0),
 		// Defaults updated 2026-04-19 per feedback_darpa_always_on: the
 		// hardening work is always-on by default, not gated behind an
 		// env-var opt-in that most deployments never flip. Values below

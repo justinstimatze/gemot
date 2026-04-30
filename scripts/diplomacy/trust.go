@@ -48,8 +48,8 @@ func extractPromises(messages []Message) map[string]map[string][]string {
 	// Must reference a unit type (A/F) or a territory abbreviation.
 	supportPatterns := []string{
 		"support a ", "support f ", // "I will support A VIE", "support F TRI"
-		"s a ", "s f ",             // shorthand: "A GAL S A VIE"
-		"order support",            // "I'll order support for your unit"
+		"s a ", "s f ", // shorthand: "A GAL S A VIE"
+		"order support",                      // "I'll order support for your unit"
 		"support your a ", "support your f ", // "support your A BUD"
 		"support into", "support move", "support hold", // tactical support language
 	}

@@ -643,13 +643,13 @@ type pendingPosition struct {
 
 // powerCoordinates maps Diplomacy powers to real-world capital lat/lon for gemotvis.
 var powerCoordinates = map[string][2]float64{
-	"austria": {48.21, 16.37},  // Vienna
-	"england": {51.51, -0.13},  // London
-	"france":  {48.86, 2.35},   // Paris
-	"germany": {52.52, 13.40},  // Berlin
-	"italy":   {41.90, 12.50},  // Rome
-	"russia":  {55.76, 37.62},  // Moscow
-	"turkey":  {41.01, 28.98},  // Istanbul
+	"austria": {48.21, 16.37}, // Vienna
+	"england": {51.51, -0.13}, // London
+	"france":  {48.86, 2.35},  // Paris
+	"germany": {52.52, 13.40}, // Berlin
+	"italy":   {41.90, 12.50}, // Rome
+	"russia":  {55.76, 37.62}, // Moscow
+	"turkey":  {41.01, 28.98}, // Istanbul
 }
 
 // analyzeScopes processes all scopes through a 3-stage pipeline:

@@ -434,39 +434,39 @@ No API key needed — the join code is your credential.
 	// equivalent counters and the route stays unregistered.
 	if !demoMode {
 		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		auth := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(auth, "Bearer ")
-		if apiSecret != "" && (!strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1) {
-			http.Error(w, `{"error":"admin access required"}`, http.StatusUnauthorized)
-			return
-		}
-		var stats struct {
-			Deliberations    int     `json:"deliberations"`
-			ActiveDelibs     int     `json:"active_deliberations"`
-			Positions        int     `json:"positions"`
-			Votes            int     `json:"votes"`
-			Analyses         int     `json:"analyses"`
-			Disputes         int     `json:"disputes"`
-			APIKeys          int     `json:"api_keys"`
-			TotalCredits     int     `json:"total_credits_remaining"`
-			CacheEntries     int     `json:"cache_entries"`
-			UniqueAgents     int     `json:"unique_agents"`
-			AvgPositionsPerD float64 `json:"avg_positions_per_deliberation"`
-		}
-		db.QueryRow("SELECT COUNT(*) FROM deliberations").Scan(&stats.Deliberations)                                                             //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM deliberations WHERE status IN ('open','analyzing')").Scan(&stats.ActiveDelibs)                         //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM positions").Scan(&stats.Positions)                                                                     //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM votes").Scan(&stats.Votes)                                                                             //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM analysis_results").Scan(&stats.Analyses)                                                               //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM disputes").Scan(&stats.Disputes)                                                                       //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM api_keys").Scan(&stats.APIKeys)                                                                        //nolint:errcheck
-		db.QueryRow("SELECT COALESCE(SUM(credits_remaining), 0) FROM api_keys").Scan(&stats.TotalCredits)                                        //nolint:errcheck
-		db.QueryRow("SELECT COUNT(*) FROM llm_cache").Scan(&stats.CacheEntries)                                                                  //nolint:errcheck
-		db.QueryRow("SELECT COUNT(DISTINCT agent_id) FROM positions").Scan(&stats.UniqueAgents)                                                  //nolint:errcheck
-		db.QueryRow("SELECT COALESCE(AVG(c), 0) FROM (SELECT COUNT(*) c FROM positions GROUP BY deliberation_id)").Scan(&stats.AvgPositionsPerD) //nolint:errcheck
+			w.Header().Set("Content-Type", "application/json")
+			auth := r.Header.Get("Authorization")
+			token := strings.TrimPrefix(auth, "Bearer ")
+			if apiSecret != "" && (!strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1) {
+				http.Error(w, `{"error":"admin access required"}`, http.StatusUnauthorized)
+				return
+			}
+			var stats struct {
+				Deliberations    int     `json:"deliberations"`
+				ActiveDelibs     int     `json:"active_deliberations"`
+				Positions        int     `json:"positions"`
+				Votes            int     `json:"votes"`
+				Analyses         int     `json:"analyses"`
+				Disputes         int     `json:"disputes"`
+				APIKeys          int     `json:"api_keys"`
+				TotalCredits     int     `json:"total_credits_remaining"`
+				CacheEntries     int     `json:"cache_entries"`
+				UniqueAgents     int     `json:"unique_agents"`
+				AvgPositionsPerD float64 `json:"avg_positions_per_deliberation"`
+			}
+			db.QueryRow("SELECT COUNT(*) FROM deliberations").Scan(&stats.Deliberations)                                                             //nolint:errcheck
+			db.QueryRow("SELECT COUNT(*) FROM deliberations WHERE status IN ('open','analyzing')").Scan(&stats.ActiveDelibs)                         //nolint:errcheck
+			db.QueryRow("SELECT COUNT(*) FROM positions").Scan(&stats.Positions)                                                                     //nolint:errcheck
+			db.QueryRow("SELECT COUNT(*) FROM votes").Scan(&stats.Votes)                                                                             //nolint:errcheck
+			db.QueryRow("SELECT COUNT(*) FROM analysis_results").Scan(&stats.Analyses)                                                               //nolint:errcheck
+			db.QueryRow("SELECT COUNT(*) FROM disputes").Scan(&stats.Disputes)                                                                       //nolint:errcheck
+			db.QueryRow("SELECT COUNT(*) FROM api_keys").Scan(&stats.APIKeys)                                                                        //nolint:errcheck
+			db.QueryRow("SELECT COALESCE(SUM(credits_remaining), 0) FROM api_keys").Scan(&stats.TotalCredits)                                        //nolint:errcheck
+			db.QueryRow("SELECT COUNT(*) FROM llm_cache").Scan(&stats.CacheEntries)                                                                  //nolint:errcheck
+			db.QueryRow("SELECT COUNT(DISTINCT agent_id) FROM positions").Scan(&stats.UniqueAgents)                                                  //nolint:errcheck
+			db.QueryRow("SELECT COALESCE(AVG(c), 0) FROM (SELECT COUNT(*) c FROM positions GROUP BY deliberation_id)").Scan(&stats.AvgPositionsPerD) //nolint:errcheck
 
-		json.NewEncoder(w).Encode(stats) //nolint:errcheck
+			json.NewEncoder(w).Encode(stats) //nolint:errcheck
 		})
 
 		// Balance check (authenticated, rate-limited)

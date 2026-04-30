@@ -9,11 +9,11 @@ import "testing"
 // threshold overrides) silently, so it's worth keeping mechanical.
 func TestRuleInt(t *testing.T) {
 	cases := []struct {
-		name   string
-		rules  map[string]any
-		key    string
-		def    int
-		want   int
+		name  string
+		rules map[string]any
+		key   string
+		def   int
+		want  int
 	}{
 		{"nil rules returns default", nil, "k", 42, 42},
 		{"missing key returns default", map[string]any{"other": 1}, "k", 7, 7},
@@ -37,11 +37,11 @@ func TestRuleInt(t *testing.T) {
 // require_second / other boolean gates.
 func TestRuleBool(t *testing.T) {
 	cases := []struct {
-		name   string
-		rules  map[string]any
-		key    string
-		def    bool
-		want   bool
+		name  string
+		rules map[string]any
+		key   string
+		def   bool
+		want  bool
 	}{
 		{"nil rules returns default (true)", nil, "k", true, true},
 		{"nil rules returns default (false)", nil, "k", false, false},

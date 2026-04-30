@@ -26,14 +26,14 @@ func AgentCard() map[string]any {
 		"url": "https://gemot.dev",
 		"supportedInterfaces": []map[string]any{
 			{
-				"url":              "https://gemot.dev/mcp",
-				"protocolBinding":  "MCP/streamable-http",
-				"description":      "Modern MCP transport (Streamable HTTP). Recommended for Claude Code, Cursor, Cline, Windsurf, and any current MCP client.",
+				"url":             "https://gemot.dev/mcp",
+				"protocolBinding": "MCP/streamable-http",
+				"description":     "Modern MCP transport (Streamable HTTP). Recommended for Claude Code, Cursor, Cline, Windsurf, and any current MCP client.",
 			},
 			{
-				"url":              "https://gemot.dev/mcp/sse",
-				"protocolBinding":  "MCP/sse",
-				"description":      "Legacy MCP transport (HTTP+SSE). Supported for older clients; modern clients should prefer the streamable endpoint above.",
+				"url":             "https://gemot.dev/mcp/sse",
+				"protocolBinding": "MCP/sse",
+				"description":     "Legacy MCP transport (HTTP+SSE). Supported for older clients; modern clients should prefer the streamable endpoint above.",
 			},
 		},
 		"version": Version,
