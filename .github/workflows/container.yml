@@ -1,0 +1,70 @@
+name: Container
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Computes a sensible tag set automatically:
+      #   push to main         → :latest, :main, :main-<short-sha>
+      #   tag v0.12.0          → :0.12.0, :0.12, :0, :latest
+      #   tag v0.12.0-rc1      → :0.12.0-rc1
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=main-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Gemot
+            org.opencontainers.image.description=Deliberation primitive for multi-agent coordination — cruxes, vote clustering, consensus.
+            org.opencontainers.image.url=https://gemot.dev
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build + push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Two platforms covers both Apple Silicon devs and standard x86
+          # Linux servers, which is the only audience that matters for the
+          # demo-mode pitch (`docker run gemot/gemot`). Add others later
+          # if anyone asks.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
