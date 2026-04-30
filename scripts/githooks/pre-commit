@@ -1,0 +1,44 @@
+#!/bin/bash
+# Gemot pre-commit hook. Tracked in scripts/githooks/. Wire up with:
+#
+#   ./scripts/install-githooks.sh
+#
+# Runs editorial / health checks on staged content. Soft-warns by default;
+# hard-fails only on structural drift that would break a release. Anything
+# enforced here is also covered by the test suite, so this hook is for
+# fast feedback, not the source of truth.
+
+set -uo pipefail
+
+# 1. CodeScene delta analysis (warning only, requires `cs` CLI)
+if command -v cs &> /dev/null; then
+  if ! cs delta --staged > /dev/null 2>&1; then
+    echo "⚠️  CodeScene flagged code-health issues on staged changes (warning, not blocking)."
+  fi
+fi
+
+# 2. CHANGELOG-touched nudge: when production internal/ Go code changes
+#    without a CHANGELOG.md update in the same commit, surface a reminder.
+#    Test-only changes are exempt — they don't need release notes.
+if git diff --cached --name-only | grep -E '^internal/.*\.go$' | grep -vqE '_test\.go$'; then
+  if ! git diff --cached --name-only | grep -q '^CHANGELOG\.md$'; then
+    echo "ℹ️  internal/ production code changed but CHANGELOG.md isn't staged — "
+    echo "    add a line to the Unreleased section if this commit is user-visible."
+  fi
+fi
+
+# 3. Version-sync sanity: if Version constant or server.json was touched,
+#    make sure they still match. Read the *staged* contents (not the
+#    working tree) so unstaged edits in either file don't fool the check.
+#    Hard-fails the commit on drift; the Go test enforces this on full
+#    test runs but pre-commit catches it before the CI roundtrip.
+if git diff --cached --name-only | grep -qE '^(internal/mcp/server\.go|server\.json)$'; then
+  STAGED_GO=$(git show ":internal/mcp/server.go" 2>/dev/null | grep -E '^const Version = ' | sed -E 's/.*"([^"]+)".*/\1/')
+  STAGED_JSON=$(git show ":server.json" 2>/dev/null | jq -r '.version' 2>/dev/null)
+  if [[ -n "$STAGED_GO" && -n "$STAGED_JSON" && "$STAGED_GO" != "$STAGED_JSON" ]]; then
+    echo "❌ Staged version drift: server.go=$STAGED_GO server.json=$STAGED_JSON — run scripts/bump-version.sh."
+    exit 1
+  fi
+fi
+
+exit 0

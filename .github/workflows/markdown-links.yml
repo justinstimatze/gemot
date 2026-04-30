@@ -1,0 +1,50 @@
+name: Markdown Links
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.md'
+      - '.github/workflows/markdown-links.yml'
+      - '.github/markdown-link-check.json'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.md'
+      - '.github/workflows/markdown-links.yml'
+      - '.github/markdown-link-check.json'
+  schedule:
+    # Weekly Monday 14:00 UTC sweep — catches external links that rotted
+    # without any local change.
+    - cron: '0 14 * * 1'
+
+# Minimum permissions: read-only repo content, no write access. The link
+# checker doesn't need anything else; explicit is safer than relying on
+# repo-default permissions which can be set workflow-wide.
+permissions:
+  contents: read
+
+jobs:
+  link-check:
+    runs-on: ubuntu-latest
+    # Cap runtime so a hung external link can't keep the job alive
+    # indefinitely (each request has its own timeout, but pathological
+    # combinations of retries × many links could otherwise stack).
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # gaurav-nelson/github-action-markdown-link-check is a third-party
+      # action with no secret access in this workflow's permission scope.
+      # Pinned to a tag rather than a SHA: the action runs read-only,
+      # has no token access (permissions: contents: read), and a
+      # supply-chain compromise would only affect this one job's
+      # exit code, not the repo. Re-evaluate if scope grows.
+      - name: Check markdown links
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: 'yes'
+          use-verbose-mode: 'yes'
+          config-file: '.github/markdown-link-check.json'
+          folder-path: '.,docs,specs'
+          file-extension: '.md'

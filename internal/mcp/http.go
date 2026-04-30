@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"html"
 	"html/template"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -137,6 +136,14 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 	// sseKeepalive wraps an http.Handler to send SSE comment keepalives every 10s.
 	// Prevents Fly.io proxy from killing idle SSE connections during long analyses.
 	// Uses a mutex to synchronize writes with the underlying SSE handler.
+	//
+	// Also primes the response so the SDK's first event (endpoint URL) reaches
+	// the client without being held in Fly's proxy buffer. Sends headers + a
+	// short comment line + immediate flush before delegating, so subsequent SDK
+	// writes flow through. Without priming, the endpoint event sits in the
+	// proxy until enough additional bytes accumulate and SSE clients see only
+	// headers (manifests as Fly proxy "could not finish reading HTTP body"
+	// noise on connection close).
 	sseKeepalive := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {
@@ -151,6 +158,21 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, db *sql.DB, addr st
 			// Wrap the writer with a mutex to prevent concurrent writes
 			// between the keepalive goroutine and the SSE handler.
 			sw := &syncWriter{w: w, f: flusher}
+
+			// Set SSE response headers before the SDK runs so the proxy sees
+			// them on the first byte and treats the response as a stream.
+			// X-Accel-Buffering: no is honored by nginx-style proxies; Fly's
+			// behavior is best-effort, so we also pre-flush a comment line to
+			// force the proxy to commit to streaming mode. We deliberately do
+			// NOT set Connection: keep-alive — it's the default on HTTP/1.1
+			// and forbidden as a connection-specific header on HTTP/2 (RFC
+			// 7540 §8.1.2.2), so Go's stack would just strip it on h2.
+			h := sw.Header()
+			h.Set("Content-Type", "text/event-stream")
+			h.Set("Cache-Control", "no-cache")
+			h.Set("X-Accel-Buffering", "no")
+			sw.WriteAndFlush([]byte(": gemot-sse-init\n\n"))
+
 			done := make(chan struct{})
 			go func() {
 				ticker := time.NewTicker(10 * time.Second)
@@ -367,12 +389,9 @@ No API key needed — the join code is your credential.
 		webhookHandler(w, r)
 	})
 
-	// Serve .well-known/agent-card.json (public)
-	staticRoot, err := fs.Sub(staticFS, "static")
-	if err != nil {
-		return fmt.Errorf("embedded static fs: %w", err)
-	}
-	mux.Handle("/.well-known/", http.FileServer(http.FS(staticRoot)))
+	// Agent card (A2A discovery) — generated from the Version constant so it
+	// can never drift from the released binary. See agent_card.go.
+	mux.HandleFunc("/.well-known/agent-card.json", AgentCardHandler)
 
 	// Health check (public) — verifies DB connectivity
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
