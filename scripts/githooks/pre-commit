@@ -27,7 +27,23 @@ if git diff --cached --name-only | grep -E '^internal/.*\.go$' | grep -vqE '_tes
   fi
 fi
 
-# 3. Version-sync sanity: if Version constant or server.json was touched,
+# 3. gofmt sanity: catch the formatting issues that golangci-lint flags
+#    on CI before the commit lands. CI failures from gofmt drift went
+#    unnoticed for a week (b0bafcc → eff05bc) because nothing local ran
+#    gofmt. Hard-fails on staged Go files only, so the hook stays fast
+#    even with pre-existing drift in untouched parts of the repo.
+staged_go=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.go$' || true)
+if [[ -n "$staged_go" ]]; then
+  unfmt=$(gofmt -l $staged_go 2>/dev/null || true)
+  if [[ -n "$unfmt" ]]; then
+    echo "❌ gofmt issues in staged files:"
+    echo "$unfmt" | sed 's/^/    /'
+    echo "    Fix with: gofmt -w $unfmt"
+    exit 1
+  fi
+fi
+
+# 4. Version-sync sanity: if Version constant or server.json was touched,
 #    make sure they still match. Read the *staged* contents (not the
 #    working tree) so unstaged edits in either file don't fool the check.
 #    Hard-fails the commit on drift; the Go test enforces this on full
@@ -39,6 +55,19 @@ if git diff --cached --name-only | grep -qE '^(internal/mcp/server\.go|server\.j
     echo "❌ Staged version drift: server.go=$STAGED_GO server.json=$STAGED_JSON — run scripts/bump-version.sh."
     exit 1
   fi
+fi
+
+# 5. go vet sanity: cheap, catches obvious bugs (printf args, unreachable
+#    code, lock copies). Hard fail. Skipped if `go` isn't on PATH so the
+#    hook stays portable to non-Go contributors.
+if command -v go &>/dev/null && [[ -n "$staged_go" ]]; then
+  if ! go vet ./... > /tmp/gemot-vet.log 2>&1; then
+    echo "❌ go vet ./... failed:"
+    sed 's/^/    /' /tmp/gemot-vet.log
+    rm -f /tmp/gemot-vet.log
+    exit 1
+  fi
+  rm -f /tmp/gemot-vet.log
 fi
 
 exit 0
