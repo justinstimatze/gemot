@@ -231,13 +231,19 @@ type participateParams struct {
 	Draft          bool           `json:"draft,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
 	PositionID     string         `json:"position_id,omitempty"`
-	Value          any            `json:"value,omitempty"`
-	Qualifier      string         `json:"qualifier,omitempty"`
-	Caveat         string         `json:"caveat,omitempty"`
-	CriterionID    string         `json:"criterion_id,omitempty"`
-	ExcludeAgentID *string        `json:"exclude_agent_id,omitempty"`
-	Round          *int           `json:"round,omitempty"`
-	Shuffle        *bool          `json:"shuffle,omitempty"`
+	// Value is intentionally typed `int` so the auto-derived JSON schema
+	// emits {"type":"integer"} and not {} (the wildcard that strict zod
+	// validators — Glama's, for one — reject as `Invalid input`). The A2A
+	// path keeps `coerceVoteValue(any)` for backwards compatibility with
+	// callers sending the string forms ("strongly_agree" etc.); MCP
+	// callers use the documented integer form -2..+2.
+	Value          int     `json:"value,omitempty"`
+	Qualifier      string  `json:"qualifier,omitempty"`
+	Caveat         string  `json:"caveat,omitempty"`
+	CriterionID    string  `json:"criterion_id,omitempty"`
+	ExcludeAgentID *string `json:"exclude_agent_id,omitempty"`
+	Round          *int    `json:"round,omitempty"`
+	Shuffle        *bool   `json:"shuffle,omitempty"`
 	// Signature is a base64-encoded ed25519 signature over the canonical
 	// position/vote payload (see internal/auth). Verified against the agent's
 	// registered public key when signature_policy != "none".
@@ -519,19 +525,18 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
 			return errResult(err)
 		}
-		value, err := coerceVoteValue(args.Value)
-		if err != nil {
-			return errResult(err)
+		if args.Value < -2 || args.Value > 2 {
+			return errResult(fmt.Errorf("vote value must be -2, -1, 0, 1, or 2 (got %d)", args.Value))
 		}
 		if args.Signature != "" {
 			sigBytes, err := base64.StdEncoding.DecodeString(args.Signature)
 			if err != nil {
 				return errResult(fmt.Errorf("signature must be base64-encoded: %w", err))
 			}
-			if err := s.svc.SubmitSignedVoteWithSigningID(ctx, args.DeliberationID, args.AgentID, unscopedVoteAgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID, sigBytes); err != nil {
+			if err := s.svc.SubmitSignedVoteWithSigningID(ctx, args.DeliberationID, args.AgentID, unscopedVoteAgentID, args.PositionID, args.Value, args.Qualifier, args.Caveat, args.CriterionID, sigBytes); err != nil {
 				return errResult(err)
 			}
-		} else if err := s.svc.Vote(ctx, args.DeliberationID, args.AgentID, args.PositionID, value, args.Qualifier, args.Caveat, args.CriterionID); err != nil {
+		} else if err := s.svc.Vote(ctx, args.DeliberationID, args.AgentID, args.PositionID, args.Value, args.Qualifier, args.Caveat, args.CriterionID); err != nil {
 			return errResult(err)
 		}
 		s.audit(ctx, "participate:vote", args.DeliberationID, args.AgentID)
