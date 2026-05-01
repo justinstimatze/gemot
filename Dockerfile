@@ -5,8 +5,15 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /gemot .
 
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
+FROM debian:trixie-slim
+# Debian-based runtime instead of alpine so this image can be used as
+# a base for tooling that expects apt-get (e.g., Glama's automated
+# build pipeline that prepends Node + mcp-proxy install on top of the
+# user's image). Trade-off: image grows ~50MB vs alpine, but downstream
+# compatibility wins out.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /gemot /usr/local/bin/gemot
 
 # `docker run gemot/gemot` works out of the box: with no DATABASE_URL set,
