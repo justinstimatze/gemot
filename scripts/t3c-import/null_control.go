@@ -41,7 +41,7 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 	}
 
 	// Collect unique speakers from sources (preserve original casing for display)
-	speakerNames := []string{}   // lowercased IDs for lookups
+	speakerNames := []string{}          // lowercased IDs for lookups
 	displayNames := map[string]string{} // id -> original name
 	seen := map[string]bool{}
 	for _, src := range data.Sources {
@@ -109,7 +109,7 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 			s.agents = append(s.agents, agentPlan{
 				ID: fmt.Sprintf("%sspeaker-%s", prefix, label), Role: fmt.Sprintf("Speaker: %s", display),
 				Position: buildClaimsPosition(data, []string{name}, display, false, s.clusters),
-				Kind: "speaker", Round: 1, Cluster: cl,
+				Kind:     "speaker", Round: 1, Cluster: cl,
 			})
 		} else {
 			names := make([]string, len(cl.Members))
@@ -120,7 +120,7 @@ func buildR1Setup(data *ReportData, threshold float64, prefix string) r1Setup {
 			s.agents = append(s.agents, agentPlan{
 				ID: fmt.Sprintf("%ssteelman-%s", prefix, label), Role: fmt.Sprintf("Steelman: %s", displayLabel),
 				Position: buildClaimsPosition(data, cl.Members, displayLabel, true, s.clusters),
-				Kind: "steelman", Round: 1, Cluster: cl,
+				Kind:     "steelman", Round: 1, Cluster: cl,
 			})
 		}
 	}

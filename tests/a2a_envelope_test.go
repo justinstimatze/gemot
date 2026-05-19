@@ -473,4 +473,3 @@ func TestA2AEnvelope_StaleTimestampRejected(t *testing.T) {
 		t.Fatalf("stale timestamp on /a2a must 401, got %d", rw.Code)
 	}
 }
-

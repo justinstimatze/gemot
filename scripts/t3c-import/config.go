@@ -20,23 +20,23 @@ type pipelineConfig struct {
 
 // reportInput bundles all data needed to generate a markdown report.
 type reportInput struct {
-	Data         *ReportData
-	R1JSON       string
-	R2JSON       string
-	R3JSON       string
-	R1Compromise string
-	R2Compromise string
-	R3Compromise string
-	R1Agents     []agentPlan
-	R2Agents     []agentPlan
-	R3Agents     []agentPlan
-	Template     string
-	DelibID      string
-	JoinCode     string
-	NullControl  *nullControlResult
-	SpotCheck      *spotCheckResult
-	CruxSpotCheck  *spotCheckResult
-	Named          bool
-	Replication    *replicationResult
-	Coverage       *coverageResult
+	Data          *ReportData
+	R1JSON        string
+	R2JSON        string
+	R3JSON        string
+	R1Compromise  string
+	R2Compromise  string
+	R3Compromise  string
+	R1Agents      []agentPlan
+	R2Agents      []agentPlan
+	R3Agents      []agentPlan
+	Template      string
+	DelibID       string
+	JoinCode      string
+	NullControl   *nullControlResult
+	SpotCheck     *spotCheckResult
+	CruxSpotCheck *spotCheckResult
+	Named         bool
+	Replication   *replicationResult
+	Coverage      *coverageResult
 }

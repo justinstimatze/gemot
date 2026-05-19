@@ -132,9 +132,9 @@ func collectQuotes(c Claim, sourceIDs map[string]bool) []string {
 
 // cruxForCheck is a simplified crux for spot-checking output quality.
 type cruxForCheck struct {
-	Claim   string
-	Stances []stanceForCheck
-	Agree   []string
+	Claim    string
+	Stances  []stanceForCheck
+	Agree    []string
 	Disagree []string
 }
 

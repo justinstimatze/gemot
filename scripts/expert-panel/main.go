@@ -269,7 +269,7 @@ func main() {
 			Content string
 			Score   float64 `json:"bridging_score"`
 		} `json:"bridging_statements"`
-		CompromiseProposal string `json:"compromise_proposal"`
+		CompromiseProposal string                            `json:"compromise_proposal"`
 		TopicSummaries     []struct{ Topic, Summary string } `json:"topic_summaries"`
 	}
 	json.Unmarshal([]byte(resultJSON), &result)
