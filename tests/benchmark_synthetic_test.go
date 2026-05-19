@@ -36,7 +36,7 @@ func TestSyntheticAgentDeliberation(t *testing.T) {
 	svc := deliberation.NewService(db, analyzer)
 
 	// Create deliberation
-	delib, err := svc.CreateDeliberation(context.Background(), 
+	delib, err := svc.CreateDeliberation(context.Background(),
 		"AI Development Governance",
 		"How should frontier AI development be governed? Consider international coordination, industry self-regulation, compute governance, open-source policy, and safety requirements.",
 	)

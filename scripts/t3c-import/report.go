@@ -751,9 +751,9 @@ func insertTOC(report string) string {
 func anonymizeSpeakers(report string, agents []agentPlan) string {
 	// Build name → pseudonym mapping from agent roles
 	type nameEntry struct {
-		full  string // "Speaker E"
+		full  string   // "Speaker E"
 		parts []string // ["Sam", "Speaker E"] — for last-name-only references
-		label string // "Speaker C"
+		label string   // "Speaker C"
 	}
 
 	var entries []nameEntry

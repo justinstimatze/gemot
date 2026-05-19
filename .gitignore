@@ -1,6 +1,6 @@
-gemot
-gemot-server
-t3c-import
+/gemot
+/gemot-server
+/t3c-import
 /expert-panel
 /main
 .gemot/
@@ -23,3 +23,9 @@ mcp-publisher
 
 # TLA+ model-checker scratch dir
 specs/states/
+
+# Local-only hook experiments (active hooks path is scripts/githooks/)
+.githooks/
+
+# Raw t3c source data (pre-anonymization) — only committed outputs go in
+integrations/t3c/AI Manifestos-*.json

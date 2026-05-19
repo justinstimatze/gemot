@@ -506,7 +506,7 @@ func main() {
 			NullControl:   *nullControl,
 			SpotCheck:     *spotCheck,
 			ReplicateN:    *replicate,
-			CoverageAudit:  *coverageAudit,
+			CoverageAudit: *coverageAudit,
 			ResumeID:      *resumeID,
 			Named:         *named,
 		}
@@ -1445,8 +1445,8 @@ func seedR2Votes(session *sdkmcp.ClientSession, r1Agents, r2Agents []agentPlan, 
 	positions := getPositions(session, delibID)
 
 	// Build lookup: which R1 agents are on which side of R1 cruxes
-	agreeAgents := map[string]bool{}  // agents that appear in "agree" on any R1 crux
-	disagreeAgents := map[string]bool{} // agents that appear in "disagree" on any R1 crux
+	agreeAgents := map[string]bool{}     // agents that appear in "agree" on any R1 crux
+	disagreeAgents := map[string]bool{}  // agents that appear in "disagree" on any R1 crux
 	consensusAgents := map[string]bool{} // agents that appear in consensus
 	for _, c := range r1Analysis.Cruxes {
 		for _, a := range c.Agree {
@@ -1635,10 +1635,10 @@ type analysisResult struct {
 		} `json:"stances"`
 	} `json:"cruxes"`
 	DiscardedCruxes []struct {
-		Claim       string   `json:"crux_claim"`
-		Agree       []string `json:"agree_agents"`
-		Disagree    []string `json:"disagree_agents"`
-		Degenerate  bool     `json:"degenerate"`
+		Claim      string   `json:"crux_claim"`
+		Agree      []string `json:"agree_agents"`
+		Disagree   []string `json:"disagree_agents"`
+		Degenerate bool     `json:"degenerate"`
 	} `json:"discarded_cruxes"`
 	ConsensusStatements []struct{ Content string } `json:"consensus_statements"`
 	BridgingStatements  []struct {
