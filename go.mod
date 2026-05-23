@@ -3,11 +3,11 @@ module github.com/justinstimatze/gemot
 go 1.25.7
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.43.0
+	github.com/anthropics/anthropic-sdk-go v1.45.0
 	github.com/consensys/gnark-crypto v0.20.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
-	github.com/modelcontextprotocol/go-sdk v1.6.0
+	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/stripe/stripe-go/v82 v82.5.1
 	gonum.org/v1/gonum v0.17.0
 )
