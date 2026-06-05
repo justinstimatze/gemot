@@ -117,7 +117,9 @@ func newServer(s *server) *sdkmcp.Server {
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{
 		Name:    "gemot",
 		Version: Version,
-	}, nil)
+	}, &sdkmcp.ServerOptions{
+		Instructions: serverInstructions,
+	})
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "deliberation",
