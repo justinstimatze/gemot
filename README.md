@@ -242,7 +242,7 @@ Analysis results include `integrity_warnings` flagging:
 | **Polis NZ Biodiversity** | 529 agents, 29K votes | 3 clusters at 0.76-0.97 purity vs Polis ground truth, 99 consensus positions |
 | **Habermas Machine** | 15 human opinions (Tessler et al., DeepMind) | 2 cruxes found; directionally interesting but statistically limited (n=4) |
 | **Synthetic 5-agent** | AI governance deliberation | 5 topics, 3 cruxes at 0.97 avg controversy, 130s with Sonnet |
-| **Calibration corpus v2** | 25 GPQA Diamond questions (Rein et al., arXiv:2311.12022) | Fleet **40%** vs solo Sonnet **32%** (**+8pp lift**, 95% CI [0.23, 0.59]). Vote-only fleet: 28% — voting alone is *worse* than asking one agent; the compromise-generation step contributes +12pp over vote-only. Held-out subset (n=5) shows fleet 60% vs solo 20%. See [docs/calibration.md](docs/calibration.md). |
+| **Calibration corpus v2** | 25 GPQA Diamond questions (Rein et al., arXiv:2311.12022) | **Reference class withheld pending re-run.** Initial publish reported fleet 40% vs solo 32% (+8pp), but a same-session head-to-head check found the 32% baseline was a bare-prompt artifact: a chain-of-thought solo prompt got 56–60% on the same questions across two runs, which would invert the published lift. The reasoning bucket has been emptied from the embedded snapshot; `analyze action:get_result` correctly omits the `calibration` field until a defensible re-run lands. See [docs/calibration.md](docs/calibration.md) for the full integrity-check trace. |
 
 ## Security
 

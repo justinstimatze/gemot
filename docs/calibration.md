@@ -4,6 +4,33 @@ Gemot publishes a `calibration` field on `analyze action:get_result` so callers 
 
 This document covers the methodology, the corpus, the known traps, and how to interpret the rate.
 
+## Status: v2 baseline rolled back 2026-06-04
+
+The reasoning reference class shipped on 2026-06-04 (fleet 40% vs solo 32%, +8pp lift on n=25 GPQA Diamond) was withdrawn the same day after a follow-up integrity check (`gemot calibration validate-solo`) found the 32% baseline was an artifact of bare prompting plus small-n sampling noise:
+
+| Path | Run 1 | Run 2 | Wilson 95% (run 1) |
+|---|---|---|---|
+| Bare-prompt solo (same code as shipped Solo) | 48% | 44% | [0.30, 0.67] |
+| Chain-of-thought solo | 60% | 56% | [0.41, 0.77] |
+| Shipped fleet (frozen) | 40% | 40% | [0.23, 0.59] |
+| Shipped solo (frozen) | 32% | 32% | — |
+
+Two findings:
+
+1. **Bare-prompt solo varies by ~16pp run-to-run** at n=25 on these questions. The shipped 32% was a low-tail sample of the same distribution that produced 44–48% in the validation runs. Without n≥50 the published headline rate can't be distinguished from the lower-bound of the sampling distribution.
+2. **CoT solo materially exceeds the shipped fleet rate** (mean ~58% vs 40%). With a properly-prompted baseline, the published +8pp fleet-vs-solo lift inverts to roughly -18pp; the mechanism does not beat a single chain-of-thought agent on this corpus.
+
+Action taken: the `reasoning` entry has been deleted from `internal/calibration/embed/latest.json`, so `Lookup()` returns nil and `analyze action:get_result` omits the `calibration` field. This is the per-design invariant — the mechanism never claims accuracy it can't back — applied to its own self-published rate.
+
+What needs to happen before the reference class can ship again:
+
+- Solo baseline uses chain-of-thought prompting (parity with how a thoughtful human would prompt a single agent in the field).
+- Fleet agents also use chain-of-thought when first picking their option, so the comparison isolates the *mechanism's* contribution rather than the prompting style.
+- n ≥ 50 on the public subset to tighten the Wilson CI from ±18pp to ±13pp.
+- Validate-solo head-to-head reported alongside the run rate so future drift is visible without a separate check.
+
+The integrity-check subcommand (`gemot calibration validate-solo`) stays shipped — it's the right gate, and running it on every release should be the standing requirement before re-publishing any reference class.
+
 ## What the field reports
 
 ```json
@@ -20,7 +47,7 @@ This document covers the methodology, the corpus, the known traps, and how to in
 }
 ```
 
-These are the actual numbers shipped in the v2 embedded snapshot. The +12pp `compromise_lift` and the +8pp lift over `solo_baseline_rate` are the load-bearing claims: the compromise-generation layer is doing real work, and the full mechanism beats a single agent. The vote-only rate being *below* the solo baseline (-4pp) is itself a useful disclosure — naive voting hurts; the compromise layer is what makes the mechanism worth its cost.
+These were the numbers shipped on 2026-06-04 and rolled back the same day (see Status section above). The example is retained to illustrate the field shape; the embedded snapshot currently has no reference classes, so `analyze action:get_result` omits the `calibration` field entirely until a re-run with the integrity fixes lands.
 
 **Three rates, one decomposition.** The headline `rate` is what the full mechanism (fleet deliberation, analysis pipeline, forced-choice compromise generation) achieves. `vote_only_rate` is what the same fleet achieves by majority vote alone — no compromise generation. `solo_baseline_rate` is a single Sonnet call with no deliberation. The lift between vote-only and rate tells you whether the compromise layer is earning its 50-credit cost; the lift between solo and vote-only tells you whether voting alone over a fleet beats one agent.
 

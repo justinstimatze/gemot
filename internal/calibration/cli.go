@@ -33,6 +33,8 @@ func CLI(args []string) int {
 		return cmdReport(args[1:])
 	case "questions":
 		return cmdQuestions(args[1:])
+	case "validate-solo":
+		return cmdValidateSolo(args[1:])
 	default:
 		usage()
 		return 2
@@ -44,6 +46,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  run                  Run the embedded corpus through fleet + solo baseline; write embed/latest.json")
 	fmt.Fprintln(os.Stderr, "  report               Print a human-readable summary of the latest run")
 	fmt.Fprintln(os.Stderr, "  questions            List corpus questions (id, type, source)")
+	fmt.Fprintln(os.Stderr, "  validate-solo        Re-run bare Solo + chain-of-thought Solo on public corpus; check shipped baseline")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Environment:")
 	fmt.Fprintln(os.Stderr, "  GEMOT_CALIBRATION_CORPUS  override path to a corpus JSON (development)")
@@ -222,6 +225,148 @@ func cmdReport(_ []string) int {
 		})
 	}
 	fmt.Println(FormatReport(run, corpus))
+	return 0
+}
+
+// cmdValidateSolo is the TIER 1 follow-up to the shipped v2 baseline.
+// Literature reports Sonnet 4.6 ~70% on GPQA Diamond with chain-of-thought;
+// the shipped Solo() got 32% with bare prompting. This subcommand runs
+// both bare Solo and SoloCoT head-to-head on the public corpus subset in
+// one session, so any baseline shift attributable to prompting is visible
+// independent of session/timing noise. Read-only: writes nothing to disk
+// or Postgres, only prints a summary.
+func cmdValidateSolo(_ []string) int {
+	cfg := config.Load()
+	if cfg.AnthropicKey == "" {
+		fmt.Fprintln(os.Stderr, "calibration: ANTHROPIC_API_KEY is required")
+		return 1
+	}
+	client := llm.NewClient(cfg.AnthropicKey, cfg.Model)
+
+	corpus, err := LoadCorpus()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "calibration: loading corpus: %v\n", err)
+		return 1
+	}
+
+	// Public subset only, same as the shipped reference class.
+	public := make([]Question, 0, len(corpus.Questions))
+	for _, q := range corpus.Questions {
+		if !q.HeldOut {
+			public = append(public, q)
+		}
+	}
+	// Convert ground-truth letters → option text, matching runner.Run.
+	for i := range public {
+		if gt := public[i].GroundTruth; len(gt) == 1 && gt >= "A" && gt <= "D" {
+			idx := int(gt[0] - 'A')
+			if idx < len(public[i].Options) {
+				public[i].GroundTruth = public[i].Options[idx]
+			}
+		}
+	}
+
+	type pairResult struct {
+		idx         int
+		bareAnswer  string
+		cotAnswer   string
+		bareCorrect bool
+		cotCorrect  bool
+		bareErr     error
+		cotErr      error
+	}
+
+	fmt.Fprintf(os.Stderr, "calibration: validate-solo on %d public questions (corpus %s, model %s)\n",
+		len(public), corpus.Version, cfg.Model)
+
+	ctx := context.Background()
+	sem := make(chan struct{}, 4)
+	results := make([]pairResult, len(public))
+	var wg sync.WaitGroup
+	for i, q := range public {
+		wg.Add(1)
+		go func(i int, q Question) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			pr := pairResult{idx: i}
+			var inner sync.WaitGroup
+			inner.Add(2)
+			go func() {
+				defer inner.Done()
+				a, err := Solo(ctx, client, q.Text, q.Options)
+				pr.bareAnswer, pr.bareErr = a, err
+			}()
+			go func() {
+				defer inner.Done()
+				a, _, err := SoloCoT(ctx, client, q.Text, q.Options)
+				pr.cotAnswer, pr.cotErr = a, err
+			}()
+			inner.Wait()
+			pr.bareCorrect = pr.bareErr == nil && pr.bareAnswer == q.GroundTruth
+			pr.cotCorrect = pr.cotErr == nil && pr.cotAnswer == q.GroundTruth
+			results[i] = pr
+			status := "."
+			if pr.bareErr != nil || pr.cotErr != nil {
+				status = "!"
+			}
+			fmt.Fprintf(os.Stderr, "  %s [%2d/%2d] %s bare=%v cot=%v\n",
+				status, i+1, len(public), q.ID, pr.bareCorrect, pr.cotCorrect)
+		}(i, q)
+	}
+	wg.Wait()
+
+	bareOK, cotOK, n := 0, 0, len(public)
+	var bareErrs, cotErrs int
+	for _, r := range results {
+		if r.bareCorrect {
+			bareOK++
+		}
+		if r.cotCorrect {
+			cotOK++
+		}
+		if r.bareErr != nil {
+			bareErrs++
+		}
+		if r.cotErr != nil {
+			cotErrs++
+		}
+	}
+
+	bareCI := WilsonInterval(bareOK, n)
+	cotCI := WilsonInterval(cotOK, n)
+
+	fmt.Printf("\nValidate-solo head-to-head (corpus %s, n=%d)\n", corpus.Version, n)
+	fmt.Println(strings.Repeat("-", 72))
+	fmt.Printf("%-24s %5s %10s %14s\n", "prompt", "ok", "rate", "ci_95")
+	fmt.Println(strings.Repeat("-", 72))
+	fmt.Printf("%-24s %5d %9.1f%% [%.2f, %.2f]\n", "bare (shipped Solo)", bareOK, float64(bareOK)/float64(n)*100, bareCI[0], bareCI[1])
+	fmt.Printf("%-24s %5d %9.1f%% [%.2f, %.2f]\n", "chain-of-thought", cotOK, float64(cotOK)/float64(n)*100, cotCI[0], cotCI[1])
+	fmt.Println(strings.Repeat("-", 72))
+
+	// Compare to shipped baseline from embedded run.
+	if er, err := LoadEmbeddedRun(); err == nil && er != nil {
+		if rc, ok := er.ReferenceClasses["reasoning"]; ok && rc.N > 0 {
+			fmt.Printf("\nShipped embed/latest.json reasoning bucket: solo=%.1f%% fleet=%.1f%% n=%d\n",
+				rc.SoloBaselineRate*100, rc.Rate*100, rc.N)
+			shippedLift := (rc.Rate - rc.SoloBaselineRate) * 100
+			cotRate := float64(cotOK) / float64(n)
+			impliedLift := (rc.Rate - cotRate) * 100
+			fmt.Printf("Shipped fleet-vs-solo lift: %+.1fpp\n", shippedLift)
+			fmt.Printf("Implied fleet-vs-CoT-solo lift (using CoT as baseline): %+.1fpp\n", impliedLift)
+			if impliedLift < 0 && shippedLift > 0 {
+				fmt.Println("\nVERDICT: shipped lift INVERTS under CoT baseline. The published fleet-vs-solo rate is misleading and should be revised.")
+			} else if impliedLift < shippedLift-5 {
+				fmt.Printf("\nVERDICT: shipped lift shrinks by %.1fpp under CoT baseline; finding is materially weakened.\n", shippedLift-impliedLift)
+			} else {
+				fmt.Println("\nVERDICT: shipped lift survives the CoT baseline check.")
+			}
+		}
+	}
+
+	if bareErrs > 0 || cotErrs > 0 {
+		fmt.Fprintf(os.Stderr, "calibration: warning — bare errors=%d cot errors=%d (counted as incorrect)\n", bareErrs, cotErrs)
+	}
 	return 0
 }
 
