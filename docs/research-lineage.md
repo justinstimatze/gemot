@@ -109,3 +109,42 @@ What they had that gemot could learn from:
 15. Botti, V. (2025). "Agentic AI and Multiagentic: Are We Reinventing the Wheel?" *arXiv:2506.01463*.
 16. "From Semantic Web and MAS to Agentic AI: A Unified Narrative of the Web of Agents." (2025). *arXiv:2507.10644*.
 17. "A Survey of Agent Interoperability Protocols: MCP, ACP, A2A, and ANP." (2025). *arXiv:2505.02279*.
+
+## Multi-agent debate 2025/26
+
+The 2024–2026 literature on multi-agent LLM debate moved from "does it help" to "when does it actively hurt." The findings map onto gemot's existing primitives unusually cleanly, which is the point of this section: future contributors thinking about adding debate mechanisms to the calibration runner or the deliberation service should read this first to avoid rebuilding what `internal/deliberation/service.go` already has.
+
+### The dominant failure modes (verified in 2025 literature)
+
+- **Sycophantic / conformist drift.** Agents updating on peers tend to adopt majority positions even when the minority is correct. Disagreement rate decreases over rounds and correlates with performance degradation. ([Peacemaker or Troublemaker](https://arxiv.org/abs/2509.23055), Sept 2025; [Talk Isn't Always Cheap](https://arxiv.org/abs/2509.05396), Sept 2025; [Can LLM Agents Really Debate?](https://arxiv.org/abs/2511.07784), Nov 2025.)
+- **Identity bias.** Agents are prone to self-bias (stubbornly adhering to own prior output) and peer-identity sycophancy (adopting a peer's view because of *who* said it, not the argument). Sycophancy is far more prevalent than self-bias. Anonymization mitigates. ([When Identity Skews Debate](https://arxiv.org/abs/2510.07517), Oct 2025.)
+- **Confidence-weighted persuasion as a measurement of being misled.** The CW-POR (Confidence-Weighted Persuasion Override Rate) metric captures both how often a judge is deceived by peer reasoning AND how strongly it believes the incorrect choice. Smaller LLMs can advocate confidently for false claims, eliciting high-confidence errors from a judge. The paper presents CW-POR as a calibration/severity *metric*, not a design recommendation against confidence weighting per se. ([When Persuasion Overrides Truth](https://arxiv.org/abs/2504.00374), Apr 2025.)
+- **Structural parameters dominate less than expected.** Controlled study finds that *intrinsic reasoning strength* and *group diversity* are the dominant drivers of debate success, while structural parameters like order or confidence visibility offer limited gains. Majority pressure suppresses independent correction. ([Can LLM Agents Really Debate?](https://arxiv.org/abs/2511.07784), Nov 2025.)
+- **Confidence communication can help — when calibrated.** Separately, vanilla MAD lacks *explicit, calibrated confidence communication* and *diversity of initial viewpoints*; adding both can systematically improve outcomes. This is in tension with the "limited gains from confidence visibility" finding above — the resolution appears to be that *calibrated* confidence helps, raw or uncalibrated confidence visibility doesn't. ([Demystifying Multi-Agent Debate](https://arxiv.org/abs/2601.19921), Jan 2026.)
+- **Cost-side waste.** Unnecessary debate cascades error and burns tokens. Adaptive stopping (debate-only-when-necessary) saves ~6× compute while preserving accuracy. ([Debate Only When Necessary](https://arxiv.org/abs/2504.05047), Apr 2025.)
+- **Empirical benchmark of debate strategies.** Hyperparameter-tuned MAD can outperform alternatives; vanilla MAD often underperforms, suggesting the approach is sensitive to optimization. ([Should we be going MAD?](https://arxiv.org/abs/2311.17371), 2023.)
+
+### How gemot's primitives map onto the SOTA prescription
+
+| Literature finding (2025/26) | Gemot primitive | Status |
+|---|---|---|
+| Anti-sycophancy: spotlight minority cruxes | `buildDiversityNudge` (service.go:1639–1677), FREE-MAD pattern, included in `AgentContext` via `GetContext` | Built, used by `participate action:get_context`, **bypassed by calibration runner** |
+| Bridging / minority amplification | `BridgingStatements` extracted in `text.go:1063–1091`, surfaced by `buildStrategicNudge` (service.go:1771–1810) | Built, used by `GetContext`, **bypassed by calibration runner** |
+| Anonymization for identity bias | `agent_id` is first-class throughout positions/nudges; not stripped | **Not built**; needs anonymized rendering path for revision context |
+| Adaptive stopping | `AdvanceRound` exists (storage layer); no convergence-based stop verdict | **Not built**; integrity warnings (`CRUX_INSTABILITY`, `ARTIFICIAL_CONSENSUS`) flag but don't stop |
+| Group-diversity dominance | `ConsistencyModel` cross-family OOD check (`llm/secondary.go`); single-family primary fleet | Partial — diversity is a verification check, not a primary fleet composition |
+| Aggregation that isn't trivially gameable by confident-but-wrong agents | Vote tally is +2 (self/match) / -1 (mismatch); no raw confidence weighting at the aggregation layer (CW-POR shows persuasive-but-wrong agents can exploit raw-confidence weighting). Calibrated confidence *communication* (per Demystifying MAD) is a separately interesting gap — agents don't currently express explicit confidence in their rationales. | Aggregation: correctly absent. Confidence communication: open question. |
+| Reputation / agent weighting | EigenTrust with cold-start cap (`internal/analysis/eigentrust.go`); enabled by default in deliberation service | Built, **not wired into calibration runner** |
+| Integrity warnings for artificial consensus | `ARTIFICIAL_CONSENSUS`, `CROSS_FAMILY_DRIFT`, `AGGREGATION_DRIFT`, `CRUX_INSTABILITY` (`internal/analysis/integrity.go`) | Built; surfaced via analysis pipeline, not used as a stopping condition |
+
+The pattern: gemot's original design anticipated most of the 2025/26 failure modes and built primitives to defend against them. The calibration runner has been a stripped-down simulation that orchestrates the deliberation service's outer surface (`CreateDeliberation → SubmitPosition → Vote → Analyze → ProposeCompromise`) but bypasses the inner anti-conformity / bridging / reputation primitives. Restoration of those primitives in the calibration runner — not invention of new ones — is the recommended next step.
+
+### What's genuinely new (post-restoration, if measurements still flatline)
+
+After GetContext-grounded revision is wired in, the remaining gaps relative to 2025/26 SOTA are:
+
+1. **Agent anonymization** in revision context (literature-grounded; modest code add).
+2. **Convergence-based adaptive stopping** (literature-grounded; modest code add).
+3. **Heterogeneous-model fleet as primary mode**, not just verification (literature finding: diversity dominates; bigger architectural change to the calibration runner).
+
+Role-based agents (proponent/skeptic/judge) and more rounds-by-default are NOT in the post-restoration plan — literature finds the former encodes the conclusion in the role assignment, and the latter shows diminishing or negative returns. Raw confidence-weighted aggregation is not recommended (CW-POR shows it as gameable), but *calibrated confidence communication* in rationales (per Demystifying MAD) is an open question worth investigating separately.
