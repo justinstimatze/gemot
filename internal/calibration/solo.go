@@ -1,0 +1,70 @@
+package calibration
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/justinstimatze/gemot/internal/llm"
+)
+
+// SoloPrompt is the instruction template used by the single-agent baseline.
+// It mirrors what a fleet participant sees when they submit a position on a
+// calibration corpus question: same framing, same options, same answer
+// space. The only difference is the absence of any deliberation context —
+// no other positions, no votes, no compromise generation. This isolates
+// the bottleneck the design note targets ("Claude exercising judgement in
+// choosing goals") to a single-call comparison.
+const SoloPrompt = `You are answering a direction-judgment question. Consider the options carefully and select exactly one.
+
+Question:
+%s
+
+Options:
+%s
+
+Pick the option you believe is most correct. Provide brief reasoning in the rationale field.`
+
+const soloSystemPrompt = "You are a careful judgment-making assistant. When asked to choose among options, weigh each option's merits and select the single best answer."
+
+// Solo runs the single-agent baseline for one calibration question. Returns
+// the verbatim option string the LLM selected (one of `options`). Uses the
+// LLM client's structured-output path with a JSON-schema enum constraint, so
+// extraction is near-deterministic at the tool_use layer — same reliability
+// guarantee as GenerateCompromiseWithChoice.
+//
+// Cost tracking flows through llm.Client.OnUsage automatically when the
+// runner passes a context with a deliberation_id key set; calibration runs
+// tag their solo calls under a "_calibration_solo" namespace so the
+// tracker can separate them from fleet costs.
+func Solo(ctx context.Context, client *llm.Client, question string, options []string) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("solo: nil llm client")
+	}
+	if len(options) == 0 {
+		return "", fmt.Errorf("solo: options required")
+	}
+
+	var optionsText string
+	for _, o := range options {
+		optionsText += "  - " + o + "\n"
+	}
+	prompt := fmt.Sprintf(SoloPrompt, question, optionsText)
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"selected_option": map[string]any{"type": "string", "enum": options},
+			"rationale":       map[string]any{"type": "string"},
+		},
+		"required": []string{"selected_option", "rationale"},
+	}
+
+	var output struct {
+		SelectedOption string `json:"selected_option"`
+		Rationale      string `json:"rationale"`
+	}
+	if err := client.StructuredOutput(ctx, soloSystemPrompt, prompt, schema, &output); err != nil {
+		return "", fmt.Errorf("solo structured output: %w", err)
+	}
+	return output.SelectedOption, nil
+}

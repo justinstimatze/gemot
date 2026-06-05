@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/justinstimatze/gemot/internal/analysis"
+	"github.com/justinstimatze/gemot/internal/calibration"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/llm"
 	"github.com/justinstimatze/gemot/internal/payments"
@@ -102,6 +103,12 @@ func CoreReframe(ctx context.Context, svc *deliberation.Service, credits *paymen
 
 // CoreGetAnalysisResult returns an analysis result for a deliberation.
 // If round is non-nil, returns that specific round; otherwise returns the latest.
+//
+// The result includes a `calibration` field when the deliberation's type
+// matches a reference class in the embedded calibration run with
+// sufficient n. The field is absent (nil pointer, json omitempty) when
+// no match exists — the mechanism never claims accuracy it can't back.
+// See internal/calibration/lookup.go.
 func CoreGetAnalysisResult(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string, round *int) (*deliberation.AnalysisResult, error) {
 	if deliberationID == "" {
 		return nil, fmt.Errorf("deliberation_id is required")
@@ -109,13 +116,23 @@ func CoreGetAnalysisResult(ctx context.Context, svc *deliberation.Service, delib
 	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return nil, err
 	}
+	var result *deliberation.AnalysisResult
+	var err error
 	if round != nil {
-		return svc.GetAnalysisResult(ctx, deliberationID, *round)
+		result, err = svc.GetAnalysisResult(ctx, deliberationID, *round)
+	} else {
+		result, err = svc.GetLatestAnalysisResult(ctx, deliberationID)
 	}
-	return svc.GetLatestAnalysisResult(ctx, deliberationID)
+	if err != nil || result == nil {
+		return result, err
+	}
+	attachCalibration(ctx, svc, deliberationID, result)
+	return result, nil
 }
 
 // CoreGetAllAnalysisResults returns all rounds of analysis for a deliberation.
+// Each round's calibration field is populated the same way as
+// CoreGetAnalysisResult.
 func CoreGetAllAnalysisResults(ctx context.Context, svc *deliberation.Service, deliberationID, keyID string) ([]deliberation.AnalysisResult, error) {
 	if deliberationID == "" {
 		return nil, fmt.Errorf("deliberation_id is required")
@@ -123,7 +140,33 @@ func CoreGetAllAnalysisResults(ctx context.Context, svc *deliberation.Service, d
 	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
 		return nil, err
 	}
-	return svc.GetAllAnalysisResults(ctx, deliberationID)
+	results, err := svc.GetAllAnalysisResults(ctx, deliberationID)
+	if err != nil {
+		return results, err
+	}
+	for i := range results {
+		attachCalibration(ctx, svc, deliberationID, &results[i])
+	}
+	return results, nil
+}
+
+// attachCalibration looks up the deliberation's type and populates the
+// result's Calibration field if a matching reference class exists in the
+// embedded calibration run. Failures (missing deliberation, missing
+// embed, etc.) are silently swallowed — the field is absent rather than
+// erroring the whole get_result call.
+func attachCalibration(ctx context.Context, svc *deliberation.Service, deliberationID string, result *deliberation.AnalysisResult) {
+	if result == nil {
+		return
+	}
+	d, err := svc.GetDeliberation(ctx, deliberationID)
+	if err != nil || d == nil {
+		return
+	}
+	const minN = 8
+	if cf := calibration.Lookup(d.Type, minN); cf != nil {
+		result.Calibration = cf
+	}
 }
 
 // CoreExportDeliberation returns the complete multi-round history of a deliberation.

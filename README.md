@@ -3,7 +3,7 @@
 [![Tests](https://github.com/justinstimatze/gemot/actions/workflows/test.yml/badge.svg)](https://github.com/justinstimatze/gemot/actions/workflows/test.yml)
 [![Container](https://github.com/justinstimatze/gemot/actions/workflows/container.yml/badge.svg)](https://github.com/justinstimatze/gemot/actions/workflows/container.yml)
 
-Structured deliberation for AI agent coordination. Agents submit positions, vote, and receive analysis identifying key disagreements (cruxes), opinion clusters, bridging statements, and consensus. Then gemot proposes compromises.
+Structured deliberation for AI agent coordination. Submit positions, vote, get analysis of cruxes, clusters, bridging statements, and consensus — then compromise proposals optimized for cross-cluster endorsement, with a tamper-evident audit trail.
 
 **Gemot** = Old English for "assembly" (as in *Witenagemot*, "council of wise men").
 
@@ -42,9 +42,9 @@ With no `DATABASE_URL` set, gemot boots in **demo mode**: full in-memory store, 
 
 ## Why
 
-Multi-agent systems need a way to handle disagreement that isn't "the loudest agent wins." When different people's agents negotiate a deal, draft policy, or review code, which opinion wins? Gemot provides the deliberation primitive: agents state positions, vote on each other's, and get structured analysis of where they agree, disagree, and what the core disagreements actually are. Then it proposes compromises optimized for cross-group endorsement.
+AI agents are weak at the parts of research and engineering that depend on **taste**: choosing which problems matter, assessing reliability, recognizing dead ends. Anthropic recently named this as the durable bottleneck — *"large performance gaps persist when it comes to Claude exercising judgement in choosing goals in both engineering and research"* ([source](https://www.anthropic.com/institute/recursive-self-improvement)) — even as the cost of *doing* (writing code, running experiments) approaches zero.
 
-Moltbook (2.5M agents, acquired by Meta) proved empirically that agent societies don't self-organize without structural mechanisms. Gemot provides that structure.
+Gemot is the mechanism that lets a fleet of agents have collective taste even when no individual agent does. Agents state positions, vote on each other's, and receive structured analysis of where they agree, disagree, and what the actual cruxes are. Compromise proposals are optimized for cross-cluster endorsement, and every move is written to a tamper-evident log so any audit can follow the reasoning back to its source. Moltbook (2.5M agents, acquired by Meta) proved empirically that agent societies don't self-organize without structural mechanisms; gemot provides that structure as a credibly-neutral protocol with a verifiable audit trail.
 
 ## How it works
 
@@ -242,6 +242,7 @@ Analysis results include `integrity_warnings` flagging:
 | **Polis NZ Biodiversity** | 529 agents, 29K votes | 3 clusters at 0.76-0.97 purity vs Polis ground truth, 99 consensus positions |
 | **Habermas Machine** | 15 human opinions (Tessler et al., DeepMind) | 2 cruxes found; directionally interesting but statistically limited (n=4) |
 | **Synthetic 5-agent** | AI governance deliberation | 5 topics, 3 cruxes at 0.97 avg controversy, 130s with Sonnet |
+| **Calibration corpus v2** | 25 GPQA Diamond questions (Rein et al., arXiv:2311.12022) | Fleet **40%** vs solo Sonnet **32%** (**+8pp lift**, 95% CI [0.23, 0.59]). Vote-only fleet: 28% — voting alone is *worse* than asking one agent; the compromise-generation step contributes +12pp over vote-only. Held-out subset (n=5) shows fleet 60% vs solo 20%. See [docs/calibration.md](docs/calibration.md). |
 
 ## Security
 

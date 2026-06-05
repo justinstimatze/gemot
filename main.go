@@ -12,6 +12,7 @@ import (
 
 	"github.com/justinstimatze/gemot/internal/analysis"
 	"github.com/justinstimatze/gemot/internal/bft"
+	"github.com/justinstimatze/gemot/internal/calibration"
 	"github.com/justinstimatze/gemot/internal/config"
 	"github.com/justinstimatze/gemot/internal/cost"
 	"github.com/justinstimatze/gemot/internal/deliberation"
@@ -23,7 +24,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: gemot <serve|http> [--addr :8080]\n")
+		fmt.Fprintf(os.Stderr, "Usage: gemot <serve|http|calibration> [args...]\n")
 		os.Exit(1)
 	}
 
@@ -36,6 +37,8 @@ func main() {
 		httpFlags.StringVar(&addr, "addr", ":8080", "HTTP listen address")
 		httpFlags.Parse(os.Args[2:]) //nolint:errcheck
 		cmdServe(true, addr)
+	case "calibration":
+		os.Exit(calibration.CLI(os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
 		os.Exit(1)

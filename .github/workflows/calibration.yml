@@ -1,0 +1,93 @@
+name: Calibration Run
+
+# Refresh the embedded calibration snapshot on release-tag pushes. NOT
+# triggered on PRs — a full run costs ~$5-15 in Anthropic credits and
+# running it on every PR would burn the budget. Manual workflow_dispatch
+# is available for ad-hoc reruns.
+#
+# The job runs `gemot calibration run`, copies the resulting JSON into
+# internal/calibration/embed/latest.json, and pushes the update back to
+# the release tag commit. The next gemot build to land on prod will
+# include the refreshed snapshot — the `calibration` field on
+# analyze action:get_result will reflect the new run.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  run-benchmark:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # required to commit/push the embed JSON back
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: gemot
+          POSTGRES_PASSWORD: gemot
+          POSTGRES_DB: gemot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gemot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMOT_VERSION: ${{ github.ref_name }}
+      GEMOT_CALIBRATION_OUT: ${{ github.workspace }}/calibration_latest.json
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Use a token with push rights so the commit-back step works on
+          # release tags. The default GITHUB_TOKEN works because we set
+          # permissions.contents: write above.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Build gemot
+        run: go build -o gemot .
+
+      - name: Run calibration benchmark
+        # Capture stderr+stdout so the next step can verify the
+        # discrimination check passed. The CLI prints a WARNING line
+        # to stderr if no question separated fleet from solo.
+        run: |
+          ./gemot calibration run 2>&1 | tee /tmp/calibration_output.log
+
+      - name: Verify corpus is discriminating
+        run: |
+          if grep -q "no question separated fleet from solo" /tmp/calibration_output.log; then
+            echo "::error::Calibration corpus produced no fleet-vs-solo discrimination — corpus needs revision before publishing the rate"
+            exit 1
+          fi
+
+      - name: Copy snapshot into embed path
+        run: cp "$GEMOT_CALIBRATION_OUT" internal/calibration/embed/latest.json
+
+      - name: Commit and push embed snapshot
+        # REF_NAME is passed through env: to avoid shell injection via
+        # crafted tag names — see GitHub's workflow-injection guidance.
+        # Direct ${{ github.ref_name }} in run: is unsafe.
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet internal/calibration/embed/latest.json; then
+            echo "no change to embed/latest.json — nothing to commit"
+            exit 0
+          fi
+          git add internal/calibration/embed/latest.json
+          git commit -m "Refresh calibration embed for ${REF_NAME}"
+          # Push to main so the snapshot is part of the canonical history,
+          # not just the tag commit. The next deploy will pick this up.
+          git push origin HEAD:main

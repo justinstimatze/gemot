@@ -170,6 +170,15 @@ type CompromiseGenerator interface {
 	GenerateCompromise(ctx context.Context, topic string, result *AnalysisResult) (string, error)
 }
 
+// ChoiceCompromiseGenerator is the forced-choice variant used by the
+// calibration runner. The mechanism's compromise is constrained to
+// exactly one of `options` via the LLM tool_use schema enum, so the
+// fleet's "answer" is deterministically extractable for scoring against
+// a known-correct corpus answer key.
+type ChoiceCompromiseGenerator interface {
+	GenerateCompromiseWithChoice(ctx context.Context, topic string, result *AnalysisResult, options []string) (statement, selectedOption string, err error)
+}
+
 // Reframer restates positions emphasizing common ground.
 type Reframer interface {
 	Reframe(ctx context.Context, position, otherPositions, cruxes string) (string, error)
@@ -495,6 +504,37 @@ func (s *Service) ProposeCompromise(ctx context.Context, deliberationID string) 
 	}
 
 	return s.compromiser.GenerateCompromise(ctx, d.Topic, result)
+}
+
+// ProposeCompromiseWithChoice is the forced-choice variant used by the
+// calibration runner. The configured compromiser must also implement
+// ChoiceCompromiseGenerator; if not, returns an error. Returns the
+// compromise statement AND the LLM's selected option (one of the entries
+// in `options`).
+func (s *Service) ProposeCompromiseWithChoice(ctx context.Context, deliberationID string, options []string) (string, string, error) {
+	if s.compromiser == nil {
+		return "", "", fmt.Errorf("compromise generation not available")
+	}
+	choicer, ok := s.compromiser.(ChoiceCompromiseGenerator)
+	if !ok {
+		return "", "", fmt.Errorf("compromise generator does not support forced-choice mode")
+	}
+
+	d, err := s.store.GetDeliberation(ctx, deliberationID)
+	if err != nil {
+		return "", "", fmt.Errorf("deliberation not found: %w", err)
+	}
+
+	result, err := s.store.GetLatestAnalysisResult(ctx, deliberationID)
+	if err != nil {
+		return "", "", fmt.Errorf("no analysis results — run analyze first: %w", err)
+	}
+
+	if len(result.Cruxes) == 0 {
+		return "", "", fmt.Errorf("no cruxes detected — nothing to compromise on")
+	}
+
+	return choicer.GenerateCompromiseWithChoice(ctx, d.Topic, result, options)
 }
 
 // DeliberationOption configures optional fields on a deliberation.
