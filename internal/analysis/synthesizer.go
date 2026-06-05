@@ -56,8 +56,8 @@ func (s *Synthesizer) GenerateCompromise(ctx context.Context, topic string, resu
 
 // GenerateCompromiseWithChoice is the forced-choice variant used by the
 // calibration runner. See TextAnalyzer.GenerateCompromiseWithChoice.
-func (s *Synthesizer) GenerateCompromiseWithChoice(ctx context.Context, topic string, result *deliberation.AnalysisResult, options []string) (string, string, error) {
-	return s.text.GenerateCompromiseWithChoice(ctx, topic, result, options)
+func (s *Synthesizer) GenerateCompromiseWithChoice(ctx context.Context, topic string, result *deliberation.AnalysisResult, options []string, optionVotes map[string]int) (string, string, error) {
+	return s.text.GenerateCompromiseWithChoice(ctx, topic, result, options, optionVotes)
 }
 
 // Reframe restates a position emphasizing common ground.

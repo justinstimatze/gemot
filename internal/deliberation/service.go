@@ -174,9 +174,13 @@ type CompromiseGenerator interface {
 // calibration runner. The mechanism's compromise is constrained to
 // exactly one of `options` via the LLM tool_use schema enum, so the
 // fleet's "answer" is deterministically extractable for scoring against
-// a known-correct corpus answer key.
+// a known-correct corpus answer key. optionVotes carries the per-option
+// agent vote distribution so the compromise prompt can treat the agents'
+// explicit choices as a strong prior — without it the LLM synthesizes
+// from claim-level analysis alone and can override unanimous votes
+// (root cause of the 2026-06-05 Haiku fleet-vs-vote-only gap).
 type ChoiceCompromiseGenerator interface {
-	GenerateCompromiseWithChoice(ctx context.Context, topic string, result *AnalysisResult, options []string) (statement, selectedOption string, err error)
+	GenerateCompromiseWithChoice(ctx context.Context, topic string, result *AnalysisResult, options []string, optionVotes map[string]int) (statement, selectedOption string, err error)
 }
 
 // Reframer restates positions emphasizing common ground.
@@ -506,12 +510,21 @@ func (s *Service) ProposeCompromise(ctx context.Context, deliberationID string) 
 	return s.compromiser.GenerateCompromise(ctx, d.Topic, result)
 }
 
-// ProposeCompromiseWithChoice is the forced-choice variant used by the
-// calibration runner. The configured compromiser must also implement
-// ChoiceCompromiseGenerator; if not, returns an error. Returns the
-// compromise statement AND the LLM's selected option (one of the entries
-// in `options`).
-func (s *Service) ProposeCompromiseWithChoice(ctx context.Context, deliberationID string, options []string) (string, string, error) {
+// ProposeCompromiseWithChoiceAndVotes is the forced-choice variant used
+// by the calibration runner. The configured compromiser must also
+// implement ChoiceCompromiseGenerator; if not, returns an error. Returns
+// the compromise statement AND the LLM's selected option (one of the
+// entries in `options`). optionVotes is the per-option agent choice
+// distribution, surfaced to the compromise LLM as a strong prior so
+// option-level consensus isn't overridden by claim-level rationale
+// noise (the 2026-06-05 Haiku failure mode).
+//
+// The "no cruxes detected" guard the prior signature had has been
+// removed: the runner now short-circuits unanimous cases before
+// calling this, so reaching here implies real disagreement worth
+// asking the LLM to resolve even if cruxes haven't crystallized at
+// the analysis layer.
+func (s *Service) ProposeCompromiseWithChoiceAndVotes(ctx context.Context, deliberationID string, options []string, optionVotes map[string]int) (string, string, error) {
 	if s.compromiser == nil {
 		return "", "", fmt.Errorf("compromise generation not available")
 	}
@@ -530,11 +543,7 @@ func (s *Service) ProposeCompromiseWithChoice(ctx context.Context, deliberationI
 		return "", "", fmt.Errorf("no analysis results — run analyze first: %w", err)
 	}
 
-	if len(result.Cruxes) == 0 {
-		return "", "", fmt.Errorf("no cruxes detected — nothing to compromise on")
-	}
-
-	return choicer.GenerateCompromiseWithChoice(ctx, d.Topic, result, options)
+	return choicer.GenerateCompromiseWithChoice(ctx, d.Topic, result, options, optionVotes)
 }
 
 // DeliberationOption configures optional fields on a deliberation.

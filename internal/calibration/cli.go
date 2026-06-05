@@ -118,7 +118,11 @@ func cmdRun(_ []string) int {
 		Seed:         1, // deterministic across reruns; the LLM itself is not seedable
 	}
 
-	ctx := context.Background()
+	// Pin temperature to 0 so calibration measures the mechanism's signal
+	// rather than per-call sampling noise. Anthropic's default is 1.0;
+	// without this pin Haiku swung 60→28% on the same 25 questions across
+	// successive runs (2026-06-05), making n=25 measurements meaningless.
+	ctx := context.WithValue(context.Background(), llm.ContextKeyTemperature{}, float64(0))
 	fmt.Fprintf(os.Stderr, "calibration: running %d questions (concurrency %d)\n", len(corpus.Questions), runner.Concurrency)
 	run, err := runner.Run(ctx, corpus)
 	if err != nil {
@@ -279,7 +283,8 @@ func cmdValidateSolo(_ []string) int {
 	fmt.Fprintf(os.Stderr, "calibration: validate-solo on %d public questions (corpus %s, model %s)\n",
 		len(public), corpus.Version, cfg.Model)
 
-	ctx := context.Background()
+	// Same temp=0 pin as the main run path — see cmdRun comment.
+	ctx := context.WithValue(context.Background(), llm.ContextKeyTemperature{}, float64(0))
 	sem := make(chan struct{}, 4)
 	results := make([]pairResult, len(public))
 	var wg sync.WaitGroup

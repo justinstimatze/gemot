@@ -104,9 +104,10 @@ func Load() *Config {
 
 	// Validate model is in known set
 	validModels := map[string]bool{
-		"claude-sonnet-4-6": true,
-		"claude-opus-4-6":   true,
-		"claude-haiku-4-5":  true,
+		"claude-sonnet-4-6":         true,
+		"claude-opus-4-6":           true,
+		"claude-haiku-4-5":          true,
+		"claude-haiku-4-5-20251001": true,
 	}
 	if !validModels[cfg.Model] {
 		fmt.Fprintf(os.Stderr, "gemot: WARNING: unknown GEMOT_MODEL %q — analysis may fail\n", cfg.Model)

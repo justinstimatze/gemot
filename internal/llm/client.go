@@ -29,6 +29,12 @@ type UsageCallback func(ctx context.Context, inputTokens, outputTokens int)
 // If set in the context, it takes precedence over the client's default model.
 type ContextKeyModel struct{}
 
+// ContextKeyTemperature overrides the sampling temperature for a specific
+// request. Anthropic's default is 1.0; calibration runs set 0 so per-call
+// variance doesn't drown out the rates being measured (60→28 swings on
+// the same 25 questions, 2026-06-05).
+type ContextKeyTemperature struct{}
+
 // AllowedModels is the set of models agents can request.
 var AllowedModels = map[string]bool{
 	"claude-sonnet-4-6": true,
@@ -146,6 +152,9 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 			},
 		},
 		ToolChoice: anthropic.ToolChoiceParamOfTool("output"),
+	}
+	if temp, ok := ctx.Value(ContextKeyTemperature{}).(float64); ok {
+		params.Temperature = anthropic.Float(temp)
 	}
 
 	var resp *anthropic.Message

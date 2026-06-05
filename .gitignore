@@ -29,3 +29,7 @@ specs/states/
 
 # Raw t3c source data (pre-anonymization) — only committed outputs go in
 integrations/t3c/AI Manifestos-*.json
+
+# Calibration run outputs (transient experiment artifacts; the embedded
+# snapshot at internal/calibration/embed/latest.json is the source of truth)
+/calibration_*.json

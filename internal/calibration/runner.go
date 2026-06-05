@@ -39,15 +39,93 @@ type agentChoice struct {
 	Rationale    string `json:"rationale"`
 }
 
-const agentSystemPrompt = "You are a careful judgment-making assistant participating in a multi-agent deliberation. You will be shown a question and a fixed set of options, and you must pick one option as your initial position. Other agents will see your reasoning and may agree or disagree."
+// agentSystemPrompt elicits the same chain-of-thought reasoning the
+// SoloCoT baseline uses, so the fleet-vs-solo comparison isolates the
+// deliberation-and-compromise mechanism rather than measuring CoT vs
+// bare prompting. The 2026-06-04 rollback documented why this matters:
+// asymmetric prompting between fleet and solo can flip the sign of the
+// measured lift. See docs/calibration.md.
+const agentSystemPrompt = "You are an expert participating in a multi-agent deliberation on a graduate-level science question. Always reason step-by-step before committing to an answer; show your work in the rationale so the other agents can engage with it. Never guess."
 
-const agentPromptTemplate = `Question:
+const agentPromptTemplate = `You are answering a graduate-level science question as one of several agents who will independently take a position before deliberating.
+
+Question:
 %s
 
 Options:
 %s
 
-Pick the option you believe is most correct. Give your reasoning in the rationale field; it will be visible to the other agents and may shape the collective deliberation.`
+Reason step-by-step:
+1. Identify what the question is actually asking.
+2. List the relevant principles, formulas, or facts.
+3. Work through the analysis explicitly, including any numerical computation.
+4. Evaluate each option against your analysis.
+5. State your final answer.
+
+Put the full step-by-step reasoning in the rationale field; it will be visible to the other agents and may shape the collective deliberation. Then set chosen_option to your final answer (verbatim, one of the listed options).`
+
+// agentRevise is round 2. The agent sees the question + options as before,
+// plus its own initial choice/rationale, the OTHER agents' choices and
+// rationales (which it hasn't seen before), and the cruxes surfaced by
+// analysis. It then re-picks via the same enum-constrained schema —
+// either confirming or changing its choice.
+//
+// The prompt is intentionally neutral on stay-vs-change: the point is to
+// measure whether agents *can* update on each other when given the
+// opportunity, not to push them toward agreement. Sycophancy/cascade risk
+// is real, so we frame revision as "did anyone make a stronger argument?"
+// rather than "consider whether you were wrong" or "see what the majority
+// thinks". The change-rate is itself a measurement — if zero agents ever
+// change, the deliberation framing is mechanically empty on this corpus.
+const reviseSystemPrompt = "You are an expert in a multi-agent deliberation, now in the revision round. You will see the other agents' initial rationales and the cruxes (disagreements) the analysis surfaced. You may keep your original answer or change it. Change only if another agent made a genuinely stronger argument or if a crux reveals a flaw in your reasoning. Independence is valued — do not change just because others disagreed."
+
+const revisePromptTemplate = `You initially answered a graduate-level science question. Now you can revise your choice after seeing what the other agents argued.
+
+Question:
+%s
+
+Options:
+%s
+
+YOUR INITIAL CHOICE: %s
+YOUR INITIAL RATIONALE:
+%s
+
+OTHER AGENTS' POSITIONS:
+%s
+
+CRUXES (disagreements detected by analysis):
+%s
+
+Reason step-by-step:
+1. Restate the core of your initial reasoning.
+2. Identify the strongest opposing argument from another agent.
+3. Identify any crux that reveals a real flaw in your reasoning (if any).
+4. Decide: keep your initial choice, or change. Independence is fine — keep your answer if no one made a genuinely stronger case.
+5. State your final answer.
+
+Set chosen_option to your FINAL answer (verbatim, one of the listed options). Put your step-by-step reasoning in rationale.`
+
+func (r *Runner) agentRevise(ctx context.Context, agentID string, q Question, ownChoice, ownRationale, othersText, cruxesText string) (*agentChoice, error) {
+	var optionsText string
+	for _, o := range q.Options {
+		optionsText += "  - " + o + "\n"
+	}
+	prompt := fmt.Sprintf(revisePromptTemplate, q.Text, optionsText, ownChoice, ownRationale, othersText, cruxesText)
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"chosen_option": map[string]any{"type": "string", "enum": q.Options},
+			"rationale":     map[string]any{"type": "string"},
+		},
+		"required": []string{"chosen_option", "rationale"},
+	}
+	var out agentChoice
+	if err := r.Client.StructuredOutput(ctx, reviseSystemPrompt, prompt, schema, &out); err != nil {
+		return nil, fmt.Errorf("agent %s revise: %w", agentID, err)
+	}
+	return &out, nil
+}
 
 // agentChoose calls the LLM once to get one agent's independent choice.
 func (r *Runner) agentChoose(ctx context.Context, agentID string, q Question) (*agentChoice, error) {
@@ -103,32 +181,43 @@ func (r *Runner) runQuestion(ctx context.Context, q Question) Result {
 	res := Result{QuestionID: q.ID}
 
 	// 1) Solo baseline (single LLM call) — runs in parallel with the
-	// fleet path to halve wall time per question.
+	// fleet path to halve wall time per question. Uses SoloCoT (not bare
+	// Solo) so the comparison is symmetric with the CoT prompting used by
+	// agentChoose; the 2026-06-04 rollback showed bare-vs-CoT asymmetry
+	// can flip the sign of the measured fleet-vs-solo lift. The bare Solo()
+	// path remains exposed for `validate-solo` so future drift between
+	// bare and CoT baselines stays measurable.
 	type soloResult struct {
 		answer string
 		err    error
 	}
 	soloCh := make(chan soloResult, 1)
 	go func() {
-		// Tag solo cost under a calibration namespace so the tracker can
-		// separate it from the fleet's per-deliberation accounting.
 		soloCtx := context.WithValue(ctx, deliberation.ContextKeyDeliberationID{}, "_calibration_solo:"+q.ID)
-		answer, err := Solo(soloCtx, r.Client, q.Text, q.Options)
+		answer, _, err := SoloCoT(soloCtx, r.Client, q.Text, q.Options)
 		soloCh <- soloResult{answer, err}
 	}()
 
 	// 2) Fleet path: create deliberation, agents pick + submit + vote,
-	// analyze, propose compromise with forced choice.
+	// analyze, propose compromise with forced choice. The topic is just
+	// the question ID — keeping it short stays under the service's 500-char
+	// topic cap (a UI ergonomic, not a system limit) for GPQA questions
+	// that can run to 1500+ chars. The full question text is in the
+	// description and is also re-stated in each agent's prompt.
 	numAgents := r.NumAgents
 	if numAgents <= 0 {
 		numAgents = 5
 	}
-	d, err := r.Svc.CreateDeliberation(ctx, q.Text, "calibration corpus question "+q.ID,
+	d, err := r.Svc.CreateDeliberation(ctx, "calibration corpus question "+q.ID, q.Text,
 		deliberation.WithType(q.DeliberationType),
 	)
 	if err != nil {
 		res.Notes = "create deliberation: " + err.Error()
-		<-soloCh
+		solo := <-soloCh
+		if solo.err == nil {
+			res.SoloAnswer = solo.answer
+			res.SoloCorrect = res.SoloAnswer == q.GroundTruth
+		}
 		return res
 	}
 	res.DeliberationID = d.ID
@@ -157,7 +246,11 @@ func (r *Runner) runQuestion(ctx context.Context, q Question) Result {
 		for i, e := range errs {
 			if e != nil {
 				res.Notes = "agent " + agentIDs[i] + " choose: " + e.Error()
-				<-soloCh
+				solo := <-soloCh
+				if solo.err == nil {
+					res.SoloAnswer = solo.answer
+					res.SoloCorrect = res.SoloAnswer == q.GroundTruth
+				}
 				return res
 			}
 		}
@@ -170,7 +263,11 @@ func (r *Runner) runQuestion(ctx context.Context, q Question) Result {
 		p, err := r.Svc.SubmitPosition(ctx, d.ID, agentIDs[i], content)
 		if err != nil {
 			res.Notes = "submit position: " + err.Error()
-			<-soloCh
+			solo := <-soloCh
+			if solo.err == nil {
+				res.SoloAnswer = solo.answer
+				res.SoloCorrect = res.SoloAnswer == q.GroundTruth
+			}
 			return res
 		}
 		positions[i] = p
@@ -191,7 +288,11 @@ func (r *Runner) runQuestion(ctx context.Context, q Question) Result {
 			}
 			if err := r.Svc.Vote(ctx, d.ID, voter, p.ID, value, "", ""); err != nil {
 				res.Notes = "vote: " + err.Error()
-				<-soloCh
+				solo := <-soloCh
+				if solo.err == nil {
+					res.SoloAnswer = solo.answer
+					res.SoloCorrect = res.SoloAnswer == q.GroundTruth
+				}
 				return res
 			}
 		}
@@ -203,9 +304,14 @@ func (r *Runner) runQuestion(ctx context.Context, q Question) Result {
 	analyzeCtx := context.WithValue(ctx, analysis.ContextKeyMaxTopics{}, 3)
 	analyzeCtx = context.WithValue(analyzeCtx, analysis.ContextKeyMaxSubtopics{}, 2)
 	analyzeCtx = context.WithValue(analyzeCtx, deliberation.ContextKeyDeliberationID{}, d.ID)
-	if _, err := r.Svc.Analyze(analyzeCtx, d.ID); err != nil {
+	analysisResult, err := r.Svc.Analyze(analyzeCtx, d.ID)
+	if err != nil {
 		res.Notes = "analyze: " + err.Error()
-		<-soloCh
+		solo := <-soloCh
+		if solo.err == nil {
+			res.SoloAnswer = solo.answer
+			res.SoloCorrect = res.SoloAnswer == q.GroundTruth
+		}
 		return res
 	}
 
@@ -235,12 +341,98 @@ func (r *Runner) runQuestion(ctx context.Context, q Question) Result {
 	}
 	res.VoteOnlyAnswer = voteOnlyAnswer
 
-	// 8) Fleet answer via forced-choice compromise.
-	_, fleetAnswer, err := r.Svc.ProposeCompromiseWithChoice(analyzeCtx, d.ID, q.Options)
-	if err != nil {
-		res.Notes = "propose_compromise_with_choice: " + err.Error()
+	// 7.5) Revision round (MVP test, 2026-06-05). Each agent re-picks
+	// after seeing the other agents' rationales and the cruxes. The
+	// fleet path below continues to use round-1 choices so the existing
+	// fleet/vote_only measurements stay comparable; the new RevisedAnswer
+	// captures the round-2 plurality. The mechanism's deliberation claim
+	// is only mechanically meaningful if revision changes any answers —
+	// if ChangedCount is 0 across the corpus, the framing is empty here.
+	var cruxesText string
+	for i, c := range analysisResult.Cruxes {
+		cruxesText += fmt.Sprintf("%d. %s\n   Agree: %v\n   Disagree: %v\n\n",
+			i+1, c.Claim, c.AgreeAgents, c.DisagreeAgents)
+	}
+	if cruxesText == "" {
+		cruxesText = "(No cruxes detected — agents agreed at the claim level.)"
+	}
+	revisedChoices := make([]*agentChoice, numAgents)
+	{
+		var wg sync.WaitGroup
+		revisedErrs := make([]error, numAgents)
+		for i := 0; i < numAgents; i++ {
+			i := i
+			var othersText string
+			for j := 0; j < numAgents; j++ {
+				if j == i {
+					continue
+				}
+				othersText += fmt.Sprintf("---\nAgent %s chose: %s\nRationale:\n%s\n",
+					agentIDs[j], choices[j].ChosenOption, choices[j].Rationale)
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rev, e := r.agentRevise(ctx, agentIDs[i], q,
+					choices[i].ChosenOption, choices[i].Rationale,
+					othersText, cruxesText)
+				revisedChoices[i] = rev
+				revisedErrs[i] = e
+			}()
+		}
+		wg.Wait()
+		for i, e := range revisedErrs {
+			if e != nil || revisedChoices[i] == nil {
+				// On revision error, fall back to round-1 choice rather
+				// than dropping the agent — keeps n=5 per question.
+				revisedChoices[i] = choices[i]
+			}
+		}
+	}
+	revisedCounts := make(map[string]int)
+	for _, rc := range revisedChoices {
+		revisedCounts[rc.ChosenOption]++
+	}
+	for i := range revisedChoices {
+		if revisedChoices[i].ChosenOption != choices[i].ChosenOption {
+			res.ChangedCount++
+		}
+	}
+	var revisedAnswer string
+	bestCount := -1
+	for _, opt := range q.Options {
+		if c := revisedCounts[opt]; c > bestCount {
+			bestCount = c
+			revisedAnswer = opt
+		}
+	}
+	res.RevisedAnswer = revisedAnswer
+	res.RevisedCorrect = revisedAnswer == q.GroundTruth
+
+	// 8) Fleet answer. Short-circuit when all agents picked the same
+	// option: that's a 5/5 consensus and the LLM compromise step has no
+	// claim-level disagreement to resolve. The 2026-06-05 Haiku run
+	// surfaced 9 questions where vote-only was right and the compromise
+	// step overrode the unanimous agent vote with a different option —
+	// the compromise prompt never saw the agents' explicit choices, only
+	// the cluster/crux analysis, which can diverge from option-level
+	// agreement on the intermediate reasoning even when the final
+	// answer is unanimous.
+	choiceCounts := make(map[string]int)
+	for _, ag := range choices {
+		choiceCounts[ag.ChosenOption]++
+	}
+	if len(choiceCounts) == 1 {
+		for opt := range choiceCounts {
+			res.FleetAnswer = opt
+		}
 	} else {
-		res.FleetAnswer = fleetAnswer
+		_, fleetAnswer, err := r.Svc.ProposeCompromiseWithChoiceAndVotes(analyzeCtx, d.ID, q.Options, choiceCounts)
+		if err != nil {
+			res.Notes = "propose_compromise_with_choice: " + err.Error()
+		} else {
+			res.FleetAnswer = fleetAnswer
+		}
 	}
 
 	// 9) Solo baseline join.
