@@ -1,0 +1,19 @@
+{
+  "corpus_version": "v2",
+  "gemot_version": "dev",
+  "model_version": "claude-sonnet-4-6",
+  "measured_at": "2026-06-04T23:09:43.152183953-07:00",
+  "reference_classes": {
+    "reasoning": {
+      "deliberation_type": "reasoning",
+      "rate": 0.4,
+      "vote_only_rate": 0.28,
+      "solo_baseline_rate": 0.32,
+      "n": 25,
+      "ci_95": [
+        0.23403057664190918,
+        0.5926087221487266
+      ]
+    }
+  }
+}

@@ -17,6 +17,7 @@ type AgentContext = types.AgentContext
 type AuditEntry = types.AuditEntry
 type ExtractedClaim = types.ExtractedClaim
 type AnalysisResult = types.AnalysisResult
+type CalibrationField = types.CalibrationField
 type NullControlResult = types.NullControlResult
 type PipelineMetrics = types.PipelineMetrics
 type VerificationResult = types.VerificationResult

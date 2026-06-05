@@ -4,6 +4,7 @@ Gemot is an MCP server written in Go that exposes structured deliberation as too
 
 ## Quick Context
 
+- **Frame**: Judgment-aggregation mechanism for AI fleets whose individual agents lack research taste
 - **What**: Deliberation primitive for agents — submit positions, vote, get crux analysis
 - **Why**: Moltbook proved agent societies need structural mechanisms; deliberation platforms provide that
 - **How**: Go MCP server using official Go SDK, Postgres storage (pgx), Anthropic Claude for LLM analysis

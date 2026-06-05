@@ -441,9 +441,62 @@ CREATE TABLE IF NOT EXISTS bft_replica_keys (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Judgment-aggregation calibration (session 9). The corpus, runs, and
+-- per-question results that back the `calibration` field on
+-- analyze action:get_result. The runtime field is populated from an
+-- embedded JSON snapshot of the latest CI run (internal/calibration/
+-- embed/latest.json) — these tables let a self-hoster running
+-- `gemot calibration run` keep a queryable history beyond the embedded
+-- snapshot. Demo mode (memory store) skips these tables entirely.
+--
+-- corpus_version is frozen per-row: a v2 corpus authoring does NOT
+-- mutate v1 rows, so historical runs remain comparable.
+CREATE TABLE IF NOT EXISTS calibration_questions (
+    id TEXT PRIMARY KEY,
+    corpus_version TEXT NOT NULL,
+    question_text TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    ground_truth TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_ref TEXT DEFAULT '',
+    deliberation_type TEXT NOT NULL,
+    held_out INTEGER DEFAULT 0,
+    tags TEXT DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_calibration_questions_corpus ON calibration_questions(corpus_version, deliberation_type);
+
+CREATE TABLE IF NOT EXISTS calibration_runs (
+    id TEXT PRIMARY KEY,
+    corpus_version TEXT NOT NULL,
+    gemot_version TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    seed BIGINT NOT NULL,
+    started_at TIMESTAMPTZ DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    fleet_rate DOUBLE PRECISION,
+    vote_only_rate DOUBLE PRECISION,
+    solo_rate DOUBLE PRECISION,
+    n INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_calibration_runs_started ON calibration_runs(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS calibration_results (
+    run_id TEXT NOT NULL REFERENCES calibration_runs(id),
+    question_id TEXT NOT NULL,
+    fleet_answer TEXT,
+    fleet_correct INTEGER,
+    vote_only_answer TEXT,
+    vote_only_correct INTEGER,
+    solo_answer TEXT,
+    solo_correct INTEGER,
+    deliberation_id TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    PRIMARY KEY (run_id, question_id)
+);
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (8) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (9) ON CONFLICT DO NOTHING;

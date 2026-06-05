@@ -85,6 +85,88 @@ func (a *TextAnalyzer) SetSecondary(s llm.SecondaryStructuredOutput, sampleK int
 	a.SecondarySampleK = sampleK
 }
 
+// GenerateCompromiseWithChoice is the same as GenerateCompromise but the
+// LLM is also required to pick exactly one of `options` as its
+// `selected_option`. Used by the calibration runner to drive a
+// deliberation toward a forced-choice answer key (A/B/C/D) on
+// multiple-choice direction-judgment corpus questions. The
+// structured-output schema enum makes this near-deterministic at the
+// tool_use layer — no free-text parsing involved.
+//
+// Returns (compromise_statement, selected_option) where selected_option
+// is one of the entries in `options`. When options is empty, behaves
+// identically to GenerateCompromise and returns an empty selected_option.
+func (a *TextAnalyzer) GenerateCompromiseWithChoice(ctx context.Context, topic string, result *deliberation.AnalysisResult, options []string) (string, string, error) {
+	if len(options) == 0 {
+		s, err := a.GenerateCompromise(ctx, topic, result)
+		return s, "", err
+	}
+
+	var cruxesText string
+	for i, c := range result.Cruxes {
+		cruxesText += fmt.Sprintf("%d. %s (controversy: %.0f%%)\n   Agree: %v\n   Disagree: %v\n\n",
+			i+1, c.Claim, c.ControversyScore*100, c.AgreeAgents, c.DisagreeAgents)
+	}
+	if cruxesText == "" {
+		cruxesText = "No cruxes detected."
+	}
+
+	var bridgingText string
+	for i, b := range result.BridgingStatements {
+		bridgingText += fmt.Sprintf("%d. [bridging score: %.0f%%] %s (by %s)\n",
+			i+1, b.BridgingScore*100, b.Content, b.AgentID)
+	}
+	if bridgingText == "" {
+		bridgingText = "No bridging statements detected."
+	}
+
+	var clusterText string
+	for _, c := range result.Clusters {
+		clusterText += fmt.Sprintf("Cluster %d (%d agents: %v)\n", c.ID, c.Size, c.AgentIDs)
+		for _, rep := range c.RepresentativePositions {
+			clusterText += fmt.Sprintf("  Representative: %s\n", rep)
+		}
+		clusterText += "\n"
+	}
+	if clusterText == "" {
+		clusterText = "No clusters detected."
+	}
+
+	var optionsText string
+	for _, opt := range options {
+		optionsText += "  - " + opt + "\n"
+	}
+
+	choicePrompt := strings.NewReplacer(
+		"{{TOPIC}}", topic,
+		"{{CRUXES}}", cruxesText,
+		"{{BRIDGING}}", bridgingText,
+		"{{CLUSTERS}}", clusterText,
+	).Replace(compromisePrompt) + "\n\nThis deliberation is being scored against a fixed answer key. You MUST also select exactly ONE of the following options as the final direction this fleet endorses:\n" + optionsText + "\nThe selected_option field MUST be one of the listed options verbatim."
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"compromise_statement": map[string]any{"type": "string"},
+			"rationale":            map[string]any{"type": "string"},
+			"cruxes_addressed":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"selected_option":      map[string]any{"type": "string", "enum": options},
+		},
+		"required": []string{"compromise_statement", "rationale", "cruxes_addressed", "selected_option"},
+	}
+
+	var output struct {
+		Statement       string   `json:"compromise_statement"`
+		Rationale       string   `json:"rationale"`
+		CruxesAddressed []string `json:"cruxes_addressed"`
+		SelectedOption  string   `json:"selected_option"`
+	}
+	if err := a.structuredOutput(ctx, systemPrompt, choicePrompt, schema, &output); err != nil {
+		return "", "", err
+	}
+	return output.Statement, output.SelectedOption, nil
+}
+
 // GenerateCompromise produces a compromise statement based on analysis results.
 func (a *TextAnalyzer) GenerateCompromise(ctx context.Context, topic string, result *deliberation.AnalysisResult) (string, error) {
 	// Format cruxes

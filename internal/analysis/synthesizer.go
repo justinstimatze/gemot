@@ -54,6 +54,12 @@ func (s *Synthesizer) GenerateCompromise(ctx context.Context, topic string, resu
 	return s.text.GenerateCompromise(ctx, topic, result)
 }
 
+// GenerateCompromiseWithChoice is the forced-choice variant used by the
+// calibration runner. See TextAnalyzer.GenerateCompromiseWithChoice.
+func (s *Synthesizer) GenerateCompromiseWithChoice(ctx context.Context, topic string, result *deliberation.AnalysisResult, options []string) (string, string, error) {
+	return s.text.GenerateCompromiseWithChoice(ctx, topic, result, options)
+}
+
 // Reframe restates a position emphasizing common ground.
 func (s *Synthesizer) Reframe(ctx context.Context, position, otherPositions, cruxes string) (string, error) {
 	return s.text.Reframe(ctx, position, otherPositions, cruxes)

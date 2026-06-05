@@ -156,6 +156,34 @@ type AnalysisResult struct {
 	Verification         *VerificationResult  `json:"verification,omitempty"`
 	Replication          *ReplicationResult   `json:"replication,omitempty"`
 	CoverageGaps         []CoverageGap        `json:"coverage_gaps,omitempty"`
+	Calibration          *CalibrationField    `json:"calibration,omitempty"`
+}
+
+// CalibrationField reports how the gemot mechanism has historically performed
+// on direction-judgment questions of this deliberation's type, based on the
+// embedded calibration corpus. The field is absent (nil) when no matching
+// reference class exists for this deliberation type — the mechanism never
+// claims accuracy it can't back with measurement.
+//
+// Rate is the full-mechanism rate (fleet deliberation + propose_compromise).
+// VoteOnlyRate is what the same fleet achieves by majority vote alone, with
+// no compromise generation — the delta CompromiseLift quantifies what the
+// compromise layer is worth. SoloBaselineRate is a single-agent baseline on
+// the same corpus questions, using the same default model.
+//
+// CI95 is a Wilson-score 95% confidence interval on Rate. Basis names the
+// reference class ("reasoning-type deliberations in corpus v1") so the
+// number can't be misread as a per-deliberation property.
+type CalibrationField struct {
+	Rate             float64    `json:"rate"`
+	VoteOnlyRate     float64    `json:"vote_only_rate"`
+	SoloBaselineRate float64    `json:"solo_baseline_rate"`
+	CompromiseLift   float64    `json:"compromise_lift"`
+	N                int        `json:"n"`
+	Basis            string     `json:"basis"`
+	CI95             [2]float64 `json:"ci_95"`
+	CorpusVersion    string     `json:"corpus_version"`
+	MeasuredAt       time.Time  `json:"measured_at"`
 }
 
 type NullControlResult struct {
