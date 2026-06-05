@@ -17,6 +17,10 @@ Headlines:
 
 ## Unreleased
 
+## 0.12.0 — 2026-06-05
+
+Release theme: closes the `go install gemot@latest` demo-mode trap (v0.11.0 silently attached to localhost Postgres; demo mode shipped only on `@main`) by cutting a tagged release that includes everything since v0.11.0 — calibration runner correctness + game-outcome reference class, DARPA Track 1 BFT/EigenTrust/reputation hardening as always-on defaults, TLA+ deliberation spec, cross-family OOD consistency check, durable nonce cache, and the new MCP server `instructions` affordance contract + vendor-neutral `gemot.invite` payload convention so connecting sessions actually reach for gemot when work would ripple between projects.
+
 ### New Features
 
 - **MCP server instructions + agent-to-agent invite convention (2026-06-05)**: the MCP server registration now sets the `instructions` field (`internal/mcp/instructions.go`), so every connecting session receives an affordance contract at `initialize` time describing when to reach for gemot (contested tradeoff, cross-project ripple, addressable critique of another agent's proposal) and the typical initiate (`deliberation create` → `participate submit_position` → `coordinate generate_join_code` → share) / join (`coordinate join` → `participate get_positions` → `participate submit_position`) flow. Companion docs page `docs/agent-to-agent-invites.md` documents a vendor-neutral `payload: {type: "gemot.invite", deliberation_id, join_code}` convention any chat-shaped MCP can use to deliver join codes between concurrent agent sessions, with `gemot.role` reserved for forward-compat. gemot has no opinion on which messaging substrate carries the invite (filesystem-IPC, NATS, mailbox) — no supply-chain coupling, no shared code, just a payload shape.
