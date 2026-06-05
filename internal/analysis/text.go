@@ -96,7 +96,7 @@ func (a *TextAnalyzer) SetSecondary(s llm.SecondaryStructuredOutput, sampleK int
 // Returns (compromise_statement, selected_option) where selected_option
 // is one of the entries in `options`. When options is empty, behaves
 // identically to GenerateCompromise and returns an empty selected_option.
-func (a *TextAnalyzer) GenerateCompromiseWithChoice(ctx context.Context, topic string, result *deliberation.AnalysisResult, options []string) (string, string, error) {
+func (a *TextAnalyzer) GenerateCompromiseWithChoice(ctx context.Context, topic string, result *deliberation.AnalysisResult, options []string, optionVotes map[string]int) (string, string, error) {
 	if len(options) == 0 {
 		s, err := a.GenerateCompromise(ctx, topic, result)
 		return s, "", err
@@ -134,7 +134,7 @@ func (a *TextAnalyzer) GenerateCompromiseWithChoice(ctx context.Context, topic s
 
 	var optionsText string
 	for _, opt := range options {
-		optionsText += "  - " + opt + "\n"
+		optionsText += fmt.Sprintf("  - %s   (chosen by %d agent(s))\n", opt, optionVotes[opt])
 	}
 
 	choicePrompt := strings.NewReplacer(
@@ -142,7 +142,7 @@ func (a *TextAnalyzer) GenerateCompromiseWithChoice(ctx context.Context, topic s
 		"{{CRUXES}}", cruxesText,
 		"{{BRIDGING}}", bridgingText,
 		"{{CLUSTERS}}", clusterText,
-	).Replace(compromisePrompt) + "\n\nThis deliberation is being scored against a fixed answer key. You MUST also select exactly ONE of the following options as the final direction this fleet endorses:\n" + optionsText + "\nThe selected_option field MUST be one of the listed options verbatim."
+	).Replace(compromisePrompt) + "\n\nThis deliberation is being scored against a fixed answer key. The agents independently chose options before deliberating; their vote distribution is shown below in parentheses. Treat the option-level vote as a strong prior — agents commit to a final answer based on their full reasoning, and the vote captures that commitment in a way claim-level analysis can miss. Only override the plurality vote if the cruxes/clusters provide concrete evidence that the plurality reasoning is flawed.\n\nYou MUST select exactly ONE of the following options as the final direction this fleet endorses:\n" + optionsText + "\nThe selected_option field MUST be one of the listed options verbatim."
 
 	schema := map[string]any{
 		"type": "object",

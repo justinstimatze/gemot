@@ -171,5 +171,60 @@ func FormatReport(run *Run, corpus *Corpus) string {
 			heldOut.Rate*100, heldOut.VoteOnlyRate*100, heldOut.SoloBaselineRate*100,
 		)
 	}
+
+	// Revision summary (2026-06-05 MVP test). The question is whether
+	// agents update on each other given the chance, and whether that
+	// update lifts plurality accuracy above one-shot ensemble vote. If
+	// changed_total is 0 across the run, the deliberation framing is
+	// mechanically empty on this corpus.
+	var pubR1OK, pubR2OK, pubN, pubChanged int
+	var heldR1OK, heldR2OK, heldN, heldChanged int
+	qByID := make(map[string]Question, len(corpus.Questions))
+	for _, q := range corpus.Questions {
+		qByID[q.ID] = q
+	}
+	for _, r := range run.Results {
+		q, ok := qByID[r.QuestionID]
+		if !ok {
+			continue
+		}
+		if q.HeldOut {
+			heldN++
+			if r.VoteOnlyCorrect {
+				heldR1OK++
+			}
+			if r.RevisedCorrect {
+				heldR2OK++
+			}
+			heldChanged += r.ChangedCount
+		} else {
+			pubN++
+			if r.VoteOnlyCorrect {
+				pubR1OK++
+			}
+			if r.RevisedCorrect {
+				pubR2OK++
+			}
+			pubChanged += r.ChangedCount
+		}
+	}
+	if pubChanged+heldChanged > 0 || pubN > 0 {
+		fmt.Fprintln(&b)
+		fmt.Fprintln(&b, "Revision round (round-1 → round-2 plurality after agents see other rationales + cruxes):")
+		fmt.Fprintln(&b, strings.Repeat("-", 78))
+		if pubN > 0 {
+			fmt.Fprintf(&b, "  public  n=%2d  round1=%5.1f%%  round2=%5.1f%%  Δ=%+.1fpp  changed_picks=%d/%d\n",
+				pubN, float64(pubR1OK)/float64(pubN)*100, float64(pubR2OK)/float64(pubN)*100,
+				(float64(pubR2OK)-float64(pubR1OK))/float64(pubN)*100,
+				pubChanged, pubN*5)
+		}
+		if heldN > 0 {
+			fmt.Fprintf(&b, "  held    n=%2d  round1=%5.1f%%  round2=%5.1f%%  Δ=%+.1fpp  changed_picks=%d/%d\n",
+				heldN, float64(heldR1OK)/float64(heldN)*100, float64(heldR2OK)/float64(heldN)*100,
+				(float64(heldR2OK)-float64(heldR1OK))/float64(heldN)*100,
+				heldChanged, heldN*5)
+		}
+		fmt.Fprintln(&b, strings.Repeat("-", 78))
+	}
 	return b.String()
 }

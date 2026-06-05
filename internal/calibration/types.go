@@ -40,12 +40,23 @@ type Corpus struct {
 }
 
 // Result is the outcome of one Question being scored against one Run.
+//
+// VoteOnly is the round-1 ensemble vote (agents pick independently before
+// seeing each other). Revised is the round-2 vote after each agent reads
+// the other positions + cruxes and re-picks. The delta tests whether the
+// deliberation mechanism's claim — that agents update on each other's
+// arguments — is mechanically real or just one-shot ensemble voting.
+// ChangedCount is how many of the N agents changed their choice across
+// the revision round.
 type Result struct {
 	QuestionID      string `json:"question_id"`
 	FleetAnswer     string `json:"fleet_answer"` // A/B/C/D, empty if extraction failed
 	FleetCorrect    bool   `json:"fleet_correct"`
-	VoteOnlyAnswer  string `json:"vote_only_answer"` // A/B/C/D from raw vote majority, no compromise call
+	VoteOnlyAnswer  string `json:"vote_only_answer"` // round-1 plurality
 	VoteOnlyCorrect bool   `json:"vote_only_correct"`
+	RevisedAnswer   string `json:"revised_answer,omitempty"` // round-2 plurality (after revision)
+	RevisedCorrect  bool   `json:"revised_correct,omitempty"`
+	ChangedCount    int    `json:"changed_count,omitempty"`
 	SoloAnswer      string `json:"solo_answer"`
 	SoloCorrect     bool   `json:"solo_correct"`
 	DeliberationID  string `json:"deliberation_id,omitempty"`
