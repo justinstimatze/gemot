@@ -33,3 +33,7 @@ integrations/t3c/AI Manifestos-*.json
 # Calibration run outputs (transient experiment artifacts; the embedded
 # snapshot at internal/calibration/embed/latest.json is the source of truth)
 /calibration_*.json
+
+# Private notes: session hand-off docs, draft specs, brainstorm artifacts
+# that may or may not graduate into the repo when something ships.
+.notes/
