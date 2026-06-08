@@ -17,6 +17,10 @@ Headlines:
 
 ## Unreleased
 
+## 0.12.1 — 2026-06-08
+
+Landing-page copy tightening. Removed two overreaching slogans on gemot.dev: the "actionable compromise" guarantee in the hero tagline (the anti-sycophancy guard exists precisely to refuse fake convergence — don't promise convergence the mechanism is built to refuse) and the "deliberation primitive for the agentic era" close on the second pitch (totalizing category claim already covered by the page header). New hero reads "Find the cruxes. Generate proposals. Deliberate over what actually divides." Contrastive "actually divide people" callout kept — that "actually" is load-bearing, not insistence. HTML is `//go:embed`'d into the binary, so this ships as a rebuild + redeploy.
+
 ## 0.12.0 — 2026-06-05
 
 Release theme: closes the `go install gemot@latest` demo-mode trap (v0.11.0 silently attached to localhost Postgres; demo mode shipped only on `@main`) by cutting a tagged release that includes everything since v0.11.0 — calibration runner correctness + game-outcome reference class, DARPA Track 1 BFT/EigenTrust/reputation hardening as always-on defaults, TLA+ deliberation spec, cross-family OOD consistency check, durable nonce cache, and the new MCP server `instructions` affordance contract + vendor-neutral `gemot.invite` payload convention so connecting sessions actually reach for gemot when work would ripple between projects.
