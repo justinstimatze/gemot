@@ -58,7 +58,7 @@ Round N: ...until cruxes are resolved
 
 Analysis runs a two-engine pipeline:
 
-1. **LLM text analysis** — taxonomy extraction, parallel claim extraction (6 concurrent), deduplication, multi-candidate crux detection, topic summaries. Adapted from [Talk to the City](https://github.com/AIObjectives/talktothe.city).
+1. **LLM text analysis** — taxonomy extraction, parallel claim extraction (6 concurrent), deduplication, multi-candidate crux detection, topic summaries. Adapted from [Talk to the City](https://github.com/AIObjectives/tttc-light-js).
 2. **Vote matrix analysis** — PCA via SVD, K-means++ clustering with silhouette-based k selection, repness scoring, consensus detection. Inspired by [Polis](https://pol.is).
 
 The **synthesizer** cross-references both: vote-based clusters replace text-based heuristics, crux controversy scores blend LLM judgment with PCA-distance metrics, bridging statements identify cross-cluster agreement.
@@ -294,7 +294,7 @@ Apache 2.0 — see [LICENSE](LICENSE)
 
 ## Acknowledgments
 
-- [Talk to the City (T3C)](https://github.com/AIObjectives/talktothe.city) — claim extraction and crux detection pipeline
+- [Talk to the City (T3C)](https://github.com/AIObjectives/tttc-light-js) — claim extraction and crux detection pipeline
 - [Polis](https://pol.is) — vote matrix analysis, bridging scores concept
 - [Plurality (Weyl, Tang et al.)](https://github.com/pluralitybook/plurality) — correlation discounting, quadratic voting, broad listening framework
 - [Habermas Machine](https://www.science.org/doi/10.1126/science.adq2852) — AI mediator generating common-ground statements, 5,734 UK participants (Tessler, Bakker et al., Science, 2024)

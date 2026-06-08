@@ -1,6 +1,6 @@
 # Calibration
 
-Gemot publishes a `calibration` field on `analyze action:get_result` so callers can see how the mechanism has historically performed on deliberations like theirs, with the evidence base named explicitly. The field is the operational answer to the question raised in [FEATURE_REQUEST_judgment-aggregation-lens.md](../FEATURE_REQUEST_judgment-aggregation-lens.md): does aggregating judgment across a fleet actually do real work, and if so, how should a caller weight gemot's output against what their own model would have produced solo?
+Gemot publishes a `calibration` field on `analyze action:get_result` so callers can see how the mechanism has historically performed on deliberations like theirs, with the evidence base named explicitly. The field is the operational answer to the judgment-aggregation-lens question: does aggregating judgment across a fleet actually do real work, and if so, how should a caller weight gemot's output against what their own model would have produced solo?
 
 This document covers what the field publishes today, the evidence base behind each reference class, what's still unresolved, and how to extend the data.
 
@@ -164,7 +164,7 @@ A placebo briefing template lives in `scripts/diplomacy/briefing.go` (the legiti
 
 ## Related
 
-- [FEATURE_REQUEST_judgment-aggregation-lens.md](../FEATURE_REQUEST_judgment-aggregation-lens.md) — design rationale; portfolio context with plancheck and hindcast.
+- Judgment-aggregation-lens design note (internal, not in-tree) — portfolio split: gemot owns judgment aggregation, plancheck owns verdict calibration, hindcast owns the outcome prior.
 - [scripts/diplomacy/FINDINGS.md](../scripts/diplomacy/FINDINGS.md) — the v10 finding that motivated the design: gemot amplifies coordination quality.
 - [docs/research-lineage.md](research-lineage.md#multi-agent-debate-202526) — why gemot's existing primitives align with 2025/26 multi-agent debate SOTA.
 - [tests/benchmark_polis_test.go](../tests/) — existing benchmark test genre.

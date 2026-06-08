@@ -4,7 +4,7 @@
 
 ## What This Is
 
-[Talk to the City](https://github.com/AIObjectives/talktothe.city) takes raw text (survey responses, interviews, forum posts) and produces structured reports: claims, cruxes, speaker-crux matrices, bridging scores. The report tells you *what* people think and *where* they disagree.
+[Talk to the City](https://github.com/AIObjectives/tttc-light-js) takes raw text (survey responses, interviews, forum posts) and produces structured reports: claims, cruxes, speaker-crux matrices, bridging scores. The report tells you *what* people think and *where* they disagree.
 
 Gemot takes T3C reports and turns them into live deliberations. The cruxes become deliberation topics. The speakers (or the discourse topology itself) become agents. Voting, compromise proposals, commitment tracking, and multi-round convergence happen on top of what T3C extracted.
 
