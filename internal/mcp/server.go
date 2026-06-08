@@ -110,7 +110,7 @@ func (s *server) audit(ctx context.Context, method, deliberationID, agentID stri
 }
 
 // Version is the current gemot release version.
-const Version = "0.12.0"
+const Version = "0.12.1"
 
 // newServer creates an MCP server with 6 grouped tools.
 func newServer(s *server) *sdkmcp.Server {
