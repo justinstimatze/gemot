@@ -82,18 +82,27 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 	// Anthropic quota. Anonymous (no-key) requests share a pool keyed
 	// by IP via a separate limiter downstream.
 	analyzeLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
-	s := &server{svc: svc, credits: creditStore, db: backend, shutdown: ctx, analyzeLimiter: analyzeLimiter}
-	srv := newServer(s)
 
-	// MPP payment configuration (for when Stripe enables SPTs)
+	// MPP payment configuration. All three secrets are required: STRIPE_SECRET_KEY
+	// to settle the PaymentIntent, STRIPE_PROFILE_ID as the networkId routing the
+	// SPT, and GEMOT_API_SECRET as the HMAC secret that binds challenge IDs to
+	// their parameters. With any one missing we'd advertise challenges that can
+	// never validate, so Enabled requires all three.
 	mppCfg := payments.Config{
 		StripeSecretKey: os.Getenv("STRIPE_SECRET_KEY"),
+		StripeProfileID: os.Getenv("STRIPE_PROFILE_ID"),
 		HMACSecret:      os.Getenv("GEMOT_API_SECRET"),
 		Realm:           "gemot.dev",
 		PricePerAnalyze: 50, // $0.50
 		Currency:        "usd",
-		Enabled:         os.Getenv("STRIPE_SECRET_KEY") != "",
+		Enabled: os.Getenv("STRIPE_SECRET_KEY") != "" &&
+			os.Getenv("STRIPE_PROFILE_ID") != "" &&
+			os.Getenv("GEMOT_API_SECRET") != "",
 	}
+
+	s := &server{svc: svc, credits: creditStore, db: backend, shutdown: ctx, analyzeLimiter: analyzeLimiter, mppCfg: mppCfg}
+	srv := newServer(s)
+
 	paymentMiddleware := payments.Middleware(ctx, mppCfg, apiSecret, creditStore)
 
 	// Envelope signature middleware (Phase B2): optional per-request ed25519

@@ -33,6 +33,10 @@ type server struct {
 	// Set by RunHTTP; nil when running via `serve` (stdio, trusted
 	// single agent) where rate limiting adds no value.
 	analyzeLimiter *payments.RateLimiter
+	// mppCfg is the MPP payment config used by the MCP transport layer
+	// to emit -32042 challenges and verify _meta credentials. Enabled
+	// when both STRIPE_SECRET_KEY and STRIPE_PROFILE_ID are set.
+	mppCfg payments.Config
 }
 
 // RunAnalysisAsync starts an analysis in a background goroutine with proper
@@ -637,7 +641,7 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 	}
 }
 
-func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolRequest, args analyzeToolParams) (*sdkmcp.CallToolResult, any, error) {
+func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequest, args analyzeToolParams) (*sdkmcp.CallToolResult, any, error) {
 	keyID, _ := ctx.Value(payments.ContextKeyKeyID{}).(string)
 
 	switch args.Action {
@@ -648,8 +652,8 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 		if args.Model != "" && !llm.AllowedModels[args.Model] {
 			return errResult(fmt.Errorf("unsupported model %q — allowed: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5", args.Model))
 		}
-		// Per-key rate limit BEFORE credit deduction. A rejected request
-		// must not charge the caller, so the limiter check comes first.
+		// Per-key rate limit BEFORE any funding consumption (credits OR
+		// MPP credential). A rejected request must not charge the caller.
 		// Nil limiter (stdio / trusted mode) is a pass-through.
 		if s.analyzeLimiter != nil {
 			bucket := keyID
@@ -660,44 +664,76 @@ func (s *server) handleAnalyzeTool(ctx context.Context, _ *sdkmcp.CallToolReques
 				return errResult(fmt.Errorf("rate limit exceeded: max 10 analyses per minute per API key — slow down or batch requests"))
 			}
 		}
-		// Sandbox users get 1 free analysis per deliberation
+		// Validate deliberation exists and has quorum BEFORE any charge.
+		// MPP-paid requests consume a one-time Stripe SPT; refunding it
+		// requires a Stripe Refund API call we don't yet wire. Doing the
+		// structural validation first means we never consume a credential
+		// for a service we can't render. Credits path benefits too —
+		// avoids a deduct + refund round-trip on bad requests.
+		if _, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err != nil {
+			return errResult(fmt.Errorf("deliberation not found: %w", err))
+		}
+		if err := s.svc.CheckQuorum(ctx, args.DeliberationID); err != nil {
+			return errResult(fmt.Errorf("%w — submit more positions before analyzing", err))
+		}
+
+		// MPP-over-MCP credential check. Per mpp.dev/protocol/transports/mcp,
+		// credentials arrive under _meta["org.paymentauth/credential"]. A
+		// valid credential bypasses the credits/sandbox path and attaches
+		// a receipt to the result. Reserved AFTER structural validation
+		// so we never reserve a credential we can't honor.
+		var mppReceipt *payments.Receipt
+		if s.mppCfg.Enabled && req != nil && req.Params != nil {
+			r, err := payments.VerifyMCPCredential(ctx, s.mppCfg, req.Params.GetMeta())
+			if err != nil {
+				return nil, nil, fmt.Errorf("MPP credential verification failed: %w", err)
+			}
+			mppReceipt = r
+		}
+
+		// Sandbox users get 1 free analysis per deliberation. After that,
+		// they must either provide an API key or pay via MPP (the MCP
+		// transport returns -32042 with payment challenges).
 		if sandbox, _ := ctx.Value(payments.ContextKeySandbox{}).(bool); sandbox {
 			apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
-			if apiKey == "" {
+			if apiKey == "" && mppReceipt == nil {
 				existing, _ := s.svc.GetLatestAnalysisResult(ctx, args.DeliberationID)
 				if existing != nil {
+					if s.mppCfg.Enabled {
+						return nil, nil, payments.PaymentRequiredError(s.mppCfg, fmt.Sprintf("analyze:run for deliberation %s", args.DeliberationID))
+					}
 					return errResult(fmt.Errorf("sandbox deliberations get 1 free analysis — get an API key at https://gemot.dev/pricing for more"))
 				}
 			}
 		}
 		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
 		var creditCost int
-		if apiKey != "" && s.credits != nil {
+		// MPP receipt substitutes for credit deduction — the agent already
+		// paid via Stripe SPT (or Tempo, when wired). No credits to deduct.
+		if mppReceipt == nil && apiKey != "" && s.credits != nil {
 			creditCost = payments.CreditCost(args.Model)
 			if _, err := s.credits.Deduct(apiKey, creditCost); err != nil {
 				balance, _ := s.credits.GetBalance(apiKey)
 				return errResult(fmt.Errorf("insufficient credits: have %d, need %d — buy more at https://gemot.dev/pricing", balance, creditCost))
 			}
 		}
-		if _, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err != nil {
-			if creditCost > 0 && s.credits != nil {
-				_, _ = s.credits.AddCredits(apiKey, creditCost)
-			}
-			return errResult(fmt.Errorf("deliberation not found: %w", err))
-		}
-		// Pre-check quorum before launching async analysis — fail fast with a clear message
-		if err := s.svc.CheckQuorum(ctx, args.DeliberationID); err != nil {
-			if creditCost > 0 && s.credits != nil {
-				_, _ = s.credits.AddCredits(apiKey, creditCost)
-			}
-			return errResult(fmt.Errorf("%w — submit more positions before analyzing", err))
-		}
 		s.audit(ctx, "analyze:run", args.DeliberationID, "")
+		// Log MPP-paid runs with the Stripe PaymentIntent reference so accounting
+		// and dispute resolution can correlate analyses to settlements — the
+		// audit-log schema doesn't carry payment metadata.
+		if mppReceipt != nil {
+			slog.Info("MPP-paid analysis", "deliberation_id", args.DeliberationID, "payment_method", mppReceipt.Method, "payment_ref", mppReceipt.Reference)
+		}
 		RunAnalysisAsync(s.svc, s.db, s.credits, args.DeliberationID, args.Model, apiKey, creditCost)
-		return textResult(fmt.Sprintf(
+		result := textResult(fmt.Sprintf(
 			"Analysis started for deliberation %s. Poll deliberation action:get to track progress (sub_status will show: taxonomy → extracting → crux_detection → clustering). Results available via analyze action:get_result once status returns to 'open'.",
 			args.DeliberationID,
-		)), nil, nil
+		))
+		// Attach MPP receipt to tool result per mpp.dev/protocol/transports/mcp.
+		if mppReceipt != nil {
+			result.Meta = payments.ReceiptMeta(mppReceipt)
+		}
+		return result, nil, nil
 
 	case "get_result":
 		// round:-1 returns all rounds as an array

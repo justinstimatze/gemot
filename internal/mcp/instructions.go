@@ -28,4 +28,6 @@ Joining (given a code, possibly via a gemot.invite payload):
 
 Most exchanges resolve in 2-4 turns. If a weighed decision is needed, ` + "`analyze run`" + ` then ` + "`analyze get_result`" + ` for cruxes and synthesis. ` + "`decide commit`" + ` records agreed outcomes for tracking via ` + "`decide reputation`" + `.
 
-Don't reach for it for solo-appropriate decisions, internal-only questions, or anything trivially answerable from code.`
+Don't reach for it for solo-appropriate decisions, internal-only questions, or anything trivially answerable from code.
+
+Payment: gemot accepts MPP (Machine Payments Protocol) over MCP per mpp.dev/protocol/transports/mcp. Paid actions (analyze:run) return JSON-RPC error -32042 with payment challenges when no funded API key is present; pay via _meta["org.paymentauth/credential"] on the retry. Free sandbox tier: one analyze:run per deliberation. API keys at https://gemot.dev/pricing.`
