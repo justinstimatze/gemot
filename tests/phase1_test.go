@@ -74,6 +74,18 @@ func TestOnBehalfOf(t *testing.T) {
 	}
 }
 
+func TestCommitEmptyStatement(t *testing.T) {
+	db := tempDB(t)
+	svc := deliberation.NewService(db, &mockAnalyzer{})
+
+	d, _ := svc.CreateDeliberation(context.Background(), "Commit validation test", "")
+	for _, statement := range []string{"", "   "} {
+		if _, err := svc.Commit(context.Background(), d.ID, "alice", statement, ""); err == nil {
+			t.Fatalf("expected error for statement %q, got nil", statement)
+		}
+	}
+}
+
 func TestCommitBasic(t *testing.T) {
 	db := tempDB(t)
 	svc := deliberation.NewService(db, &mockAnalyzer{})

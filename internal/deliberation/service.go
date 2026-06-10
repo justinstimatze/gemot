@@ -1979,6 +1979,9 @@ func (s *Service) PublishPosition(ctx context.Context, positionID string) error 
 }
 
 func (s *Service) Commit(ctx context.Context, deliberationID, agentID, statement, conditional string) (*Commitment, error) {
+	if strings.TrimSpace(statement) == "" {
+		return nil, fmt.Errorf("statement is required")
+	}
 	d, err := s.store.GetDeliberation(ctx, deliberationID)
 	if err != nil {
 		return nil, fmt.Errorf("deliberation not found: %w", err)
