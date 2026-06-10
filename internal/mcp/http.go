@@ -100,7 +100,13 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 			os.Getenv("GEMOT_API_SECRET") != "",
 	}
 
-	s := &server{svc: svc, credits: creditStore, db: backend, shutdown: ctx, analyzeLimiter: analyzeLimiter, mppCfg: mppCfg}
+	// Sandbox unified daily quota across paid analyze actions. 20 calls per
+	// 24h per IP is generous for sandbox exploration while bounding cost
+	// exposure if MPP/credits funding isn't engaged. Tune via env later if
+	// abuse signal emerges.
+	sandboxQuota := payments.NewSandboxQuota(20, 24*time.Hour)
+
+	s := &server{svc: svc, credits: creditStore, db: backend, shutdown: ctx, analyzeLimiter: analyzeLimiter, mppCfg: mppCfg, sandboxQuota: sandboxQuota}
 	srv := newServer(s)
 
 	paymentMiddleware := payments.Middleware(ctx, mppCfg, apiSecret, creditStore)

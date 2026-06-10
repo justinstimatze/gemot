@@ -11,7 +11,7 @@ import (
 
 func TestPaymentRequiredError_WithProfileID(t *testing.T) {
 	cfg := testCfg()
-	err := PaymentRequiredError(cfg, "test charge")
+	err := PaymentRequiredError(cfg, testScope(), "test charge")
 	if err == nil {
 		t.Fatal("expected non-nil jsonrpc.Error")
 	}
@@ -68,7 +68,7 @@ func TestPaymentRequiredError_WithProfileID(t *testing.T) {
 func TestPaymentRequiredError_NoProfileID(t *testing.T) {
 	cfg := testCfg()
 	cfg.StripeProfileID = ""
-	err := PaymentRequiredError(cfg, "test charge")
+	err := PaymentRequiredError(cfg, testScope(), "test charge")
 	if err == nil {
 		t.Fatal("expected non-nil jsonrpc.Error")
 	}
@@ -84,8 +84,8 @@ func TestPaymentRequiredError_NoProfileID(t *testing.T) {
 
 func TestPaymentRequiredError_ChallengeIDHMACBound(t *testing.T) {
 	cfg := testCfg()
-	err1 := PaymentRequiredError(cfg, "first")
-	err2 := PaymentRequiredError(cfg, "second")
+	err1 := PaymentRequiredError(cfg, testScope(), "first")
+	err2 := PaymentRequiredError(cfg, testScope(), "second")
 
 	id1 := extractChallengeID(t, err1)
 	id2 := extractChallengeID(t, err2)
@@ -125,7 +125,7 @@ func extractChallengeID(t *testing.T, jrErr interface{}) string {
 func TestVerifyMCPCredential_NilMeta(t *testing.T) {
 	resetReplayCache()
 	cfg := testCfg()
-	r, err := VerifyMCPCredential(context.Background(), cfg, nil)
+	r, err := VerifyMCPCredential(context.Background(), cfg, nil, testScope())
 	if err != nil {
 		t.Errorf("nil meta should not error, got %v", err)
 	}
@@ -137,7 +137,7 @@ func TestVerifyMCPCredential_NilMeta(t *testing.T) {
 func TestVerifyMCPCredential_EmptyMeta(t *testing.T) {
 	resetReplayCache()
 	cfg := testCfg()
-	r, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{})
+	r, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{}, testScope())
 	if err != nil {
 		t.Errorf("empty meta should not error, got %v", err)
 	}
@@ -151,7 +151,7 @@ func TestVerifyMCPCredential_NoCredentialKey(t *testing.T) {
 	cfg := testCfg()
 	r, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{
 		"some.other/key": "irrelevant",
-	})
+	}, testScope())
 	if err != nil {
 		t.Errorf("meta without credential key should not error, got %v", err)
 	}
@@ -177,7 +177,7 @@ func TestVerifyMCPCredential_WrongType(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{
 				MetaCredentialKey: tc.val,
-			})
+			}, testScope())
 			if err == nil {
 				t.Errorf("expected error for credential value of type %s, got nil", tc.name)
 			}
@@ -190,7 +190,7 @@ func TestVerifyMCPCredential_MalformedString(t *testing.T) {
 	cfg := testCfg()
 	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{
 		MetaCredentialKey: "!!!not-valid-base64!!!",
-	})
+	}, testScope())
 	if err == nil {
 		t.Fatal("expected error for malformed base64 credential string")
 	}
@@ -210,7 +210,7 @@ func TestVerifyMCPCredential_TamperedViaObject(t *testing.T) {
 	}
 	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{
 		MetaCredentialKey: credObj,
-	})
+	}, testScope())
 	if err == nil {
 		t.Fatal("expected error for tampered credential delivered as object")
 	}
@@ -233,7 +233,7 @@ func TestVerifyMCPCredential_ObjectFormReachesSettlement(t *testing.T) {
 	}
 	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{
 		MetaCredentialKey: credObj,
-	})
+	}, testScope())
 	// Stripe call will fail (no API key, no test backend), but the error
 	// must be a stripe error, NOT one of our pre-Stripe rejection errors.
 	if err == nil {
@@ -288,7 +288,7 @@ func TestVerifyMCPCredential_RoundTripReachesSettlement(t *testing.T) {
 
 	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{
 		MetaCredentialKey: credB64,
-	})
+	}, testScope())
 	if err == nil {
 		t.Log("Stripe call unexpectedly succeeded — test env likely has STRIPE_SECRET_KEY set")
 		return
@@ -302,11 +302,174 @@ func TestVerifyMCPCredential_RoundTripReachesSettlement(t *testing.T) {
 		"invalid credential JSON",
 		"missing spt",
 		"replay",
+		"scope mismatch",
 	}
 	for _, msg := range preStripeFailures {
 		if strings.Contains(err.Error(), msg) {
 			t.Errorf("string-form round-trip failed pre-Stripe with %q — happy path is broken", msg)
 		}
+	}
+}
+
+// TestPaymentRequiredError_PerModelAmount verifies that the challenge
+// emitted by PaymentRequiredError carries the per-model price in its
+// request body. This is the foundation of per-model billing: a Haiku
+// challenge advertises Haiku's price (10¢), Sonnet 30¢, Opus 150¢.
+func TestPaymentRequiredError_PerModelAmount(t *testing.T) {
+	cfg := testCfg()
+	cases := []struct {
+		model      string
+		wantAmount string
+	}{
+		// Haiku (10¢ credit-equivalent) and Sonnet (30¢) get floored to
+		// the 50¢ Stripe SPT minimum — sub-50¢ charges are rejected at
+		// Stripe settlement. Opus (150¢) is above the floor, exact price.
+		{"claude-haiku-4-5", "50"},
+		{"claude-sonnet-4-6", "50"},
+		{"claude-opus-4-6", "150"},
+		// Empty model is defensively resolved inside PaymentRequiredError
+		// to "claude-sonnet-4-6" — credential must always be model-bound.
+		{"", "50"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			scope := testScope()
+			scope.Model = tc.model
+			err := PaymentRequiredError(cfg, scope, "test")
+			id := extractChallengeID(t, err)
+			_ = id
+			// Decode the challenge to confirm amount
+			raw, _ := json.Marshal(err)
+			var wrapper struct {
+				Data struct {
+					Challenges []struct {
+						Request string `json:"request"`
+					} `json:"challenges"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(raw, &wrapper); err != nil {
+				t.Fatalf("re-marshal: %v", err)
+			}
+			reqJSON, decErr := base64.RawURLEncoding.DecodeString(wrapper.Data.Challenges[0].Request)
+			if decErr != nil {
+				t.Fatalf("decode request: %v", decErr)
+			}
+			var reqMap map[string]any
+			if err := json.Unmarshal(reqJSON, &reqMap); err != nil {
+				t.Fatalf("unmarshal request: %v", err)
+			}
+			if reqMap["amount"] != tc.wantAmount {
+				t.Errorf("model %s: got amount %v, want %v", tc.model, reqMap["amount"], tc.wantAmount)
+			}
+			// Scope should also be encoded
+			scopeMap, ok := reqMap["scope"].(map[string]any)
+			if !ok {
+				t.Fatalf("request body missing scope sub-object")
+			}
+			// Empty input model is defensively resolved to Sonnet.
+			wantModel := tc.model
+			if wantModel == "" {
+				wantModel = "claude-sonnet-4-6"
+			}
+			if scopeMap["model"] != wantModel {
+				t.Errorf("scope.model = %v, want %v", scopeMap["model"], wantModel)
+			}
+		})
+	}
+}
+
+// TestVerifyMCPCredential_ScopeMismatchTool — credential bound to one tool,
+// caller redeems against a different tool. Must reject before Stripe.
+func TestVerifyMCPCredential_ScopeMismatchTool(t *testing.T) {
+	resetReplayCache()
+	cfg := testCfg()
+	credScope := testScope() // tool=analyze
+	chal := buildChallengeForTest(t, cfg, "stripe", "charge", validRequestBodyWithScope(cfg, credScope), 5*time.Minute)
+	credB64 := buildCredentialForTest(t, chal, validPayload())
+
+	// Caller expects tool=deliberation (different tool — attempt at reuse)
+	expected := credScope
+	expected.Tool = "deliberation"
+	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{MetaCredentialKey: credB64}, expected)
+	if err == nil {
+		t.Fatal("expected scope-mismatch rejection on tool")
+	}
+	if !strings.Contains(err.Error(), "scope mismatch") {
+		t.Errorf("expected scope mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyMCPCredential_ScopeMismatchAction(t *testing.T) {
+	resetReplayCache()
+	cfg := testCfg()
+	credScope := testScope() // action=run
+	chal := buildChallengeForTest(t, cfg, "stripe", "charge", validRequestBodyWithScope(cfg, credScope), 5*time.Minute)
+	credB64 := buildCredentialForTest(t, chal, validPayload())
+
+	expected := credScope
+	expected.Action = "expert_panel" // cross-action reuse attempt
+	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{MetaCredentialKey: credB64}, expected)
+	if err == nil {
+		t.Fatal("expected scope-mismatch rejection on action")
+	}
+	if !strings.Contains(err.Error(), "scope mismatch") {
+		t.Errorf("expected scope mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyMCPCredential_ScopeMismatchModel(t *testing.T) {
+	resetReplayCache()
+	cfg := testCfg()
+	credScope := testScope() // model=sonnet
+	chal := buildChallengeForTest(t, cfg, "stripe", "charge", validRequestBodyWithScope(cfg, credScope), 5*time.Minute)
+	credB64 := buildCredentialForTest(t, chal, validPayload())
+
+	expected := credScope
+	expected.Model = "claude-opus-4-6" // model-upgrade attack: pay Sonnet, get Opus
+	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{MetaCredentialKey: credB64}, expected)
+	if err == nil {
+		t.Fatal("expected scope-mismatch rejection on model — this is the model-upgrade attack")
+	}
+	if !strings.Contains(err.Error(), "scope mismatch") {
+		t.Errorf("expected scope mismatch error, got: %v", err)
+	}
+}
+
+func TestVerifyMCPCredential_ScopeMismatchDeliberation(t *testing.T) {
+	resetReplayCache()
+	cfg := testCfg()
+	credScope := testScope() // deliberation_id=test-delib-12345
+	chal := buildChallengeForTest(t, cfg, "stripe", "charge", validRequestBodyWithScope(cfg, credScope), 5*time.Minute)
+	credB64 := buildCredentialForTest(t, chal, validPayload())
+
+	expected := credScope
+	expected.DeliberationID = "different-delib-99999"
+	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{MetaCredentialKey: credB64}, expected)
+	if err == nil {
+		t.Fatal("expected scope-mismatch rejection on deliberation_id")
+	}
+	if !strings.Contains(err.Error(), "scope mismatch") {
+		t.Errorf("expected scope mismatch error, got: %v", err)
+	}
+}
+
+// TestChallengeScope_Matches_EmptyFieldsSkipChecks documents that an empty
+// field in the CREDENTIAL's scope means "unbound on this dimension" — the
+// caller's actual value for that field is accepted without comparison. Used
+// when a dimension isn't knowable at challenge-issue time.
+func TestChallengeScope_Matches_EmptyFieldsSkipChecks(t *testing.T) {
+	// Credential scope with empty model — caller can use any model.
+	cred := ChallengeScope{Tool: "analyze", Action: "run"}
+	actual := ChallengeScope{Tool: "analyze", Action: "run", Model: "claude-opus-4-6", DeliberationID: "x"}
+	if err := cred.Matches(actual); err != nil {
+		t.Errorf("empty fields in credential scope should skip check, got: %v", err)
+	}
+
+	// Credential scope with non-empty tool but caller's tool is empty — REJECT.
+	cred2 := ChallengeScope{Tool: "analyze"}
+	actual2 := ChallengeScope{Tool: ""}
+	if err := cred2.Matches(actual2); err == nil {
+		t.Error("non-empty cred.Tool vs empty actual.Tool should reject")
 	}
 }
 
@@ -331,7 +494,7 @@ func TestVerifyMCPCredential_AmountSubstitution(t *testing.T) {
 
 	_, err := VerifyMCPCredential(context.Background(), cfg, map[string]any{
 		MetaCredentialKey: credB64,
-	})
+	}, testScope())
 	if err == nil {
 		t.Fatal("amount-substitution attack should be rejected")
 	}

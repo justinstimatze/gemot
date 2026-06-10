@@ -66,8 +66,25 @@ func validPayload() map[string]any {
 	return map[string]any{"spt": "spt_test_xyz789"}
 }
 
+// testScope is the canonical scope used by happy-path tests. Mismatch tests
+// vary one field at a time and assert rejection.
+func testScope() ChallengeScope {
+	return ChallengeScope{
+		Tool:           "analyze",
+		Action:         "run",
+		Model:          "claude-sonnet-4-6",
+		DeliberationID: "test-delib-12345",
+	}
+}
+
 // validRequestBody is the standard charge request encoded in a challenge.
+// Includes the scope so HMAC bind covers all scope dimensions — tests that
+// vary the scope to assert rejection are doing so deliberately.
 func validRequestBody(cfg Config) map[string]any {
+	return validRequestBodyWithScope(cfg, testScope())
+}
+
+func validRequestBodyWithScope(cfg Config, scope ChallengeScope) map[string]any {
 	return map[string]any{
 		"amount":             fmt.Sprintf("%d", cfg.PricePerAnalyze),
 		"currency":           cfg.Currency,
@@ -75,6 +92,12 @@ func validRequestBody(cfg Config) map[string]any {
 		"description":        "test charge",
 		"paymentMethodTypes": []string{"card", "link"},
 		"networkId":          cfg.StripeProfileID,
+		"scope": map[string]any{
+			"tool":            scope.Tool,
+			"action":          scope.Action,
+			"model":           scope.Model,
+			"deliberation_id": scope.DeliberationID,
+		},
 	}
 }
 
@@ -93,7 +116,7 @@ func TestParseAndValidateCredential_HappyPath(t *testing.T) {
 	chal := buildChallengeForTest(t, cfg, "stripe", "charge", validRequestBody(cfg), 5*time.Minute)
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	cred, req, err := parseAndValidateCredential(cfg, credB64)
+	cred, req, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err != nil {
 		t.Fatalf("expected validation to succeed, got error: %v", err)
 	}
@@ -115,7 +138,7 @@ func TestParseAndValidateCredential_EmptyHMACSecret(t *testing.T) {
 	chal := buildChallengeForTest(t, testCfg(), "stripe", "charge", validRequestBody(testCfg()), 5*time.Minute)
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error when HMACSecret is empty (server misconfiguration)")
 	}
@@ -127,7 +150,7 @@ func TestParseAndValidateCredential_EmptyHMACSecret(t *testing.T) {
 func TestParseAndValidateCredential_MalformedBase64(t *testing.T) {
 	resetReplayCache()
 	cfg := testCfg()
-	_, _, err := parseAndValidateCredential(cfg, "!!!not-base64!!!")
+	_, _, err := parseAndValidateCredential(cfg, "!!!not-base64!!!", testScope())
 	if err == nil {
 		t.Fatal("expected error for malformed base64 credential")
 	}
@@ -141,7 +164,7 @@ func TestParseAndValidateCredential_InvalidJSON(t *testing.T) {
 	cfg := testCfg()
 	// Valid base64 but not valid JSON
 	notJSON := base64.RawURLEncoding.EncodeToString([]byte("this is not json"))
-	_, _, err := parseAndValidateCredential(cfg, notJSON)
+	_, _, err := parseAndValidateCredential(cfg, notJSON, testScope())
 	if err == nil {
 		t.Fatal("expected error for credential body that isn't JSON")
 	}
@@ -158,7 +181,7 @@ func TestParseAndValidateCredential_UnsupportedMethod(t *testing.T) {
 	chal := buildChallengeForTest(t, cfg, "evil_rail", "charge", validRequestBody(cfg), 5*time.Minute)
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for unsupported method")
 	}
@@ -175,7 +198,7 @@ func TestParseAndValidateCredential_TamperedChallengeID(t *testing.T) {
 	chal.ID = strings.Repeat("A", len(chal.ID))
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for tampered challenge ID")
 	}
@@ -193,7 +216,7 @@ func TestParseAndValidateCredential_TamperedRealm(t *testing.T) {
 	chal.Realm = "attacker.example.com"
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for tampered realm")
 	}
@@ -210,7 +233,7 @@ func TestParseAndValidateCredential_TamperedRequestBytes(t *testing.T) {
 	chal.Request = base64.RawURLEncoding.EncodeToString(reqJSON)
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for tampered request bytes (amount substitution attack)")
 	}
@@ -231,7 +254,7 @@ func TestParseAndValidateCredential_RealmMismatch(t *testing.T) {
 	chal := buildChallengeForTest(t, signingCfg, "stripe", "charge", validRequestBody(signingCfg), 5*time.Minute)
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(verifyingCfg, credB64)
+	_, _, err := parseAndValidateCredential(verifyingCfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for realm mismatch")
 	}
@@ -247,7 +270,7 @@ func TestParseAndValidateCredential_ExpiredChallenge(t *testing.T) {
 	chal := buildChallengeForTest(t, cfg, "stripe", "charge", validRequestBody(cfg), -1*time.Minute)
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for expired challenge")
 	}
@@ -267,7 +290,7 @@ func TestParseAndValidateCredential_MissingExpires(t *testing.T) {
 	chal.ID = generateChallengeID(cfg.HMACSecret, cfg.Realm, chal.Method, chal.Intent, chal.Request, "")
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for missing expires field (indefinite credentials defeat replay window)")
 	}
@@ -284,7 +307,7 @@ func TestParseAndValidateCredential_MalformedExpires(t *testing.T) {
 	chal.ID = generateChallengeID(cfg.HMACSecret, cfg.Realm, chal.Method, chal.Intent, chal.Request, "yesterday")
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for malformed expires field")
 	}
@@ -300,11 +323,11 @@ func TestParseAndValidateCredential_Replay(t *testing.T) {
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
 	// First call succeeds.
-	if _, _, err := parseAndValidateCredential(cfg, credB64); err != nil {
+	if _, _, err := parseAndValidateCredential(cfg, credB64, testScope()); err != nil {
 		t.Fatalf("first call should succeed, got: %v", err)
 	}
 	// Second call must reject as replay.
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected replay rejection on second call")
 	}
@@ -327,7 +350,7 @@ func TestParseAndValidateCredential_ReplayConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, err := parseAndValidateCredential(cfg, credB64)
+			_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 			results <- err
 		}()
 	}
@@ -347,6 +370,32 @@ func TestParseAndValidateCredential_ReplayConcurrent(t *testing.T) {
 	}
 }
 
+// TestParseAndValidateCredential_ScopeMismatchDoesNotBurnChallenge proves
+// that a credential rejected for scope mismatch can be retried with the
+// correct scope — the replay cache slot is NOT consumed on scope mismatch.
+// This protects agents whose client builds the wrong scope on first try.
+func TestParseAndValidateCredential_ScopeMismatchDoesNotBurnChallenge(t *testing.T) {
+	resetReplayCache()
+	cfg := testCfg()
+	credScope := testScope()
+	chal := buildChallengeForTest(t, cfg, "stripe", "charge", validRequestBodyWithScope(cfg, credScope), 5*time.Minute)
+	credB64 := buildCredentialForTest(t, chal, validPayload())
+
+	// First attempt: wrong scope (different action) — must reject WITHOUT reserving.
+	wrongScope := credScope
+	wrongScope.Action = "expert_panel"
+	if _, _, err := parseAndValidateCredential(cfg, credB64, wrongScope); err == nil {
+		t.Fatal("expected scope-mismatch rejection")
+	}
+
+	// Second attempt: same credential, correct scope — MUST succeed.
+	// If it fails with "replay", the scope-mismatch attempt incorrectly
+	// burned the slot.
+	if _, _, err := parseAndValidateCredential(cfg, credB64, credScope); err != nil {
+		t.Fatalf("retry with correct scope should succeed, got: %v", err)
+	}
+}
+
 // TestParseAndValidateCredential_BadPayloadDoesNotBurnChallenge verifies
 // that a structurally-valid challenge with a malformed payload is rejected
 // WITHOUT consuming the replay-cache slot — so a client bug that submits a
@@ -361,7 +410,7 @@ func TestParseAndValidateCredential_BadPayloadDoesNotBurnChallenge(t *testing.T)
 
 	// First attempt: missing spt in payload — must reject WITHOUT reserving.
 	badCred := buildCredentialForTest(t, chal, map[string]any{"not_spt": "wrong"})
-	if _, _, err := parseAndValidateCredential(cfg, badCred); err == nil {
+	if _, _, err := parseAndValidateCredential(cfg, badCred, testScope()); err == nil {
 		t.Fatal("expected error for missing spt")
 	}
 
@@ -369,7 +418,7 @@ func TestParseAndValidateCredential_BadPayloadDoesNotBurnChallenge(t *testing.T)
 	// If it fails with "replay", the bad-payload attempt incorrectly burned
 	// the slot.
 	goodCred := buildCredentialForTest(t, chal, validPayload())
-	if _, _, err := parseAndValidateCredential(cfg, goodCred); err != nil {
+	if _, _, err := parseAndValidateCredential(cfg, goodCred, testScope()); err != nil {
 		t.Fatalf("retry with corrected payload should succeed, got: %v", err)
 	}
 }
@@ -382,12 +431,12 @@ func TestParseAndValidateCredential_NonStringSPTDoesNotBurnChallenge(t *testing.
 	chal := buildChallengeForTest(t, cfg, "stripe", "charge", validRequestBody(cfg), 5*time.Minute)
 
 	badCred := buildCredentialForTest(t, chal, map[string]any{"spt": 42})
-	if _, _, err := parseAndValidateCredential(cfg, badCred); err == nil {
+	if _, _, err := parseAndValidateCredential(cfg, badCred, testScope()); err == nil {
 		t.Fatal("expected error for non-string spt")
 	}
 
 	goodCred := buildCredentialForTest(t, chal, validPayload())
-	if _, _, err := parseAndValidateCredential(cfg, goodCred); err != nil {
+	if _, _, err := parseAndValidateCredential(cfg, goodCred, testScope()); err != nil {
 		t.Fatalf("retry with corrected payload should succeed, got: %v", err)
 	}
 }
@@ -405,7 +454,7 @@ func TestParseAndValidateCredential_MalformedRequestField(t *testing.T) {
 	chal.ID = generateChallengeID(cfg.HMACSecret, cfg.Realm, chal.Method, chal.Intent, "!!!notbase64!!!", chal.Expires)
 	credB64 := buildCredentialForTest(t, chal, validPayload())
 
-	_, _, err := parseAndValidateCredential(cfg, credB64)
+	_, _, err := parseAndValidateCredential(cfg, credB64, testScope())
 	if err == nil {
 		t.Fatal("expected error for malformed request field")
 	}

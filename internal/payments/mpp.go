@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,12 @@ type ContextKeyIsAdmin struct{}
 
 // ContextKeySandbox is set to true for unauthenticated sandbox connections.
 type ContextKeySandbox struct{}
+
+// ContextKeyClientIP carries the real client IP from the middleware down
+// to handlers — used by SandboxQuota to throttle per-IP. The middleware
+// resolves this via ClientIP(r) which honors Fly-Client-IP /
+// X-Forwarded-For headers.
+type ContextKeyClientIP struct{}
 
 // Middleware returns HTTP middleware that implements MPP 402 payment gating.
 // It also supports traditional bearer token auth as a fallback.
@@ -97,14 +104,16 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
-				// Allow unauthenticated MCP connections for sandbox mode
-				// Rate-limit by IP to prevent abuse (30 req/min for sandbox)
+				// Allow unauthenticated MCP connections for sandbox mode.
+				// Rate-limit by IP (30 req/min) AND plumb IP into ctx so
+				// downstream handlers can throttle via SandboxQuota.
 				ip := ClientIP(r)
 				if !limiter.Allow("sandbox:" + ip) {
 					http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)
 					return
 				}
 				ctx := context.WithValue(r.Context(), ContextKeySandbox{}, true)
+				ctx = context.WithValue(ctx, ContextKeyClientIP{}, ip)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -134,32 +143,39 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				}
 			}
 
-			// Check for MPP payment credential
+			// Check for MPP payment credential. The HTTP-transport middleware
+			// has no notion of tool/action/deliberation scope — it's a per-
+			// request gate, not a per-tool one. We pass an empty expectedScope,
+			// which means: any scope-bound credential (issued for a specific
+			// MCP tool call) is rejected here because the credential's scope
+			// won't match empty. Only an explicitly unscoped credential
+			// passes, and our code path never issues those. This is by
+			// design — MPP-paid MCP tool calls must go through the MCP
+			// transport with proper scope binding.
 			if strings.HasPrefix(auth, "Payment ") {
 				credB64 := strings.TrimPrefix(auth, "Payment ")
-				rcpt, err := verifyCredential(r.Context(), cfg, credB64)
+				rcpt, err := verifyCredential(r.Context(), cfg, credB64, ChallengeScope{})
 				if err != nil {
 					writePaymentError(w, cfg, "https://paymentauth.org/problems/verification-failed", err.Error())
 					return
 				}
-				// Payment verified — set receipt header and pass through
 				rcptJSON, _ := json.Marshal(rcpt)
 				w.Header().Set("Payment-Receipt", base64.RawURLEncoding.EncodeToString(rcptJSON))
 				next.ServeHTTP(w, r)
 				return
 			}
 
-			// No valid auth — allow sandbox mode for free tools
-			// Rate-limit by IP (10 req/min for sandbox)
-			ip := r.RemoteAddr
-			if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-				ip = strings.Split(fwd, ",")[0]
-			}
-			if !limiter.Allow("sandbox:" + strings.TrimSpace(ip)) {
+			// No valid auth — allow sandbox mode for free tools.
+			// Rate-limit by IP (30 req/min for sandbox) AND plumb the IP
+			// into ctx so downstream handlers can run unified daily quota
+			// checks against it (SandboxQuota).
+			ip := ClientIP(r)
+			if !limiter.Allow("sandbox:" + ip) {
 				http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)
 				return
 			}
 			ctx := context.WithValue(r.Context(), ContextKeySandbox{}, true)
+			ctx = context.WithValue(ctx, ContextKeyClientIP{}, ip)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -181,6 +197,46 @@ type paymentRequest struct {
 	Decimals           int      `json:"decimals"`
 	Description        string   `json:"description"`
 	PaymentMethodTypes []string `json:"paymentMethodTypes"`
+	NetworkID          string   `json:"networkId,omitempty"`
+	// Scope binds the credential to the specific call it was issued for.
+	// The HMAC over the base64url request bytes covers everything here, so
+	// any tampered scope field invalidates the challenge ID. Server-side,
+	// VerifyMCPCredential checks the parsed scope against the expected
+	// scope for the call — mismatch is a hard reject before settlement.
+	// Without this binding, an attacker (or buggy client) could redeem a
+	// credential issued for a cheap action against an expensive one.
+	Scope ChallengeScope `json:"scope"`
+}
+
+// ChallengeScope pins a credential to a specific (tool, action, model,
+// deliberation_id) tuple. Empty fields mean "unbound on this dimension"
+// and the corresponding equality check is skipped — used when a dimension
+// isn't knowable at challenge-issue time (e.g. deliberation_id for
+// expert_panel, where the deliberation doesn't exist yet).
+type ChallengeScope struct {
+	Tool           string `json:"tool,omitempty"`
+	Action         string `json:"action,omitempty"`
+	Model          string `json:"model,omitempty"`
+	DeliberationID string `json:"deliberation_id,omitempty"`
+}
+
+// Matches returns nil if the actual scope matches the credential's scope.
+// Empty fields in `c` are unbound and skipped (the credential intentionally
+// didn't pin that dimension). Returns a descriptive error on first mismatch.
+func (c ChallengeScope) Matches(actual ChallengeScope) error {
+	if c.Tool != "" && c.Tool != actual.Tool {
+		return fmt.Errorf("scope mismatch: credential bound to tool %q, request is for %q", c.Tool, actual.Tool)
+	}
+	if c.Action != "" && c.Action != actual.Action {
+		return fmt.Errorf("scope mismatch: credential bound to action %q, request is for %q", c.Action, actual.Action)
+	}
+	if c.Model != "" && c.Model != actual.Model {
+		return fmt.Errorf("scope mismatch: credential bound to model %q, request is for %q", c.Model, actual.Model)
+	}
+	if c.DeliberationID != "" && c.DeliberationID != actual.DeliberationID {
+		return fmt.Errorf("scope mismatch: credential bound to deliberation %q, request is for %q", c.DeliberationID, actual.DeliberationID)
+	}
+	return nil
 }
 
 type credential struct {
@@ -270,14 +326,21 @@ func reserveChallengeID(id, expires string) bool {
 }
 
 // parseAndValidateCredential decodes a base64url credential, validates its
-// HMAC bind, realm, expiry, and method, and returns the parsed credential
-// + decoded payment request. This is the security-critical surface — all
-// rejection logic lives here. The Stripe settlement is a separate step.
+// HMAC bind, realm, expiry, method, payload, and scope against the caller's
+// expected scope, and returns the parsed credential + decoded payment
+// request. This is the security-critical surface — all rejection logic
+// lives here. The Stripe settlement is a separate step.
+//
+// Scope validation MUST happen here (not after) so a scope-mismatched
+// credential doesn't consume its replay-cache slot — that would let a
+// client bug or buggy retry permanently lock a credential the agent paid
+// for. Pass an empty ChallengeScope to skip scope checks (HTTP transport
+// path that has no notion of MCP scope).
 //
 // Replay protection: this function reserves the challenge ID against
-// reuse — callers must NOT call it twice for the same credential without
-// expecting the second call to fail.
-func parseAndValidateCredential(cfg Config, credB64 string) (*credential, *paymentRequest, error) {
+// reuse as the LAST step, only after every structural check (including
+// scope) has passed.
+func parseAndValidateCredential(cfg Config, credB64 string, expectedScope ChallengeScope) (*credential, *paymentRequest, error) {
 	if cfg.HMACSecret == "" {
 		return nil, nil, fmt.Errorf("server misconfigured: HMACSecret is empty")
 	}
@@ -362,6 +425,15 @@ func parseAndValidateCredential(cfg Config, credB64 string) (*credential, *payme
 		}
 	}
 
+	// Scope validation BEFORE replay reservation. Same rationale as the
+	// payload check: a scope-mismatched credential is a client bug or an
+	// attempted scope-reuse attack, not a legitimate redemption. Burning
+	// the replay slot here would let the bug permanently lock a credential
+	// the agent paid for.
+	if err := req.Scope.Matches(expectedScope); err != nil {
+		return nil, nil, err
+	}
+
 	// Replay protection: reserve the challenge ID. This is the LAST step
 	// in validation — every check above is non-network and structural, so
 	// reaching this point means the credential is well-formed and we're
@@ -374,8 +446,8 @@ func parseAndValidateCredential(cfg Config, credB64 string) (*credential, *payme
 	return &cred, &req, nil
 }
 
-func verifyCredential(ctx context.Context, cfg Config, credB64 string) (*Receipt, error) {
-	cred, _, err := parseAndValidateCredential(cfg, credB64)
+func verifyCredential(ctx context.Context, cfg Config, credB64 string, expectedScope ChallengeScope) (*Receipt, error) {
+	cred, req, err := parseAndValidateCredential(cfg, credB64, expectedScope)
 	if err != nil {
 		return nil, err
 	}
@@ -385,12 +457,19 @@ func verifyCredential(ctx context.Context, cfg Config, credB64 string) (*Receipt
 	// assertion here is infallible.
 	spt := cred.Payload["spt"].(string)
 
-	// Create PaymentIntent with the SPT. Amount/currency come from cfg, not
-	// from the credential — the HMAC binds these to the challenge we issued,
-	// so they MUST match cfg.PricePerAnalyze/cfg.Currency, but we use the
-	// server-side values as canonical to defend against any future drift.
+	// Per-model amount comes from the (now scope-bound) request body, NOT
+	// from cfg. The credential's scope.Model is HMAC-bound and was validated
+	// against the caller's expectation above, so we trust req.Amount to be
+	// the price for that model. Currency stays cfg-canonical (we only
+	// support one).
+	amountCents, err := strconv.ParseInt(req.Amount, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("malformed amount in credential request: %w", err)
+	}
+
+	// Create PaymentIntent with the SPT.
 	params := &stripe.PaymentIntentParams{
-		Amount:   stripe.Int64(cfg.PricePerAnalyze),
+		Amount:   stripe.Int64(amountCents),
 		Currency: stripe.String(cfg.Currency),
 	}
 	params.Context = ctx

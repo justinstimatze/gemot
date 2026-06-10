@@ -183,3 +183,38 @@ func CreditCost(model string) int {
 		return CostSonnet
 	}
 }
+
+// MPPSPTMinimumCents is the Stripe SPT minimum charge per the docs:
+// "Stripe requires a minimum charge of 0.50 USD (or equivalent) for card
+// payments via SPT." Floor MPP prices at this for any model whose
+// credit-equivalent is below it — sub-50¢ charges would be rejected at
+// Stripe settlement, burning the agent's credential. When the Tempo
+// crypto path lands (no minimum, sub-cent micropayments supported), this
+// floor can be lifted for tempo-method challenges.
+const MPPSPTMinimumCents = 50
+
+// MPPPriceForModel returns the per-call MPP price in cents for a given model.
+// Kept in sync with CreditCost: same effective pricing across rails so an
+// agent paying via MPP doesn't get a structural discount or markup vs a
+// credit-funded user. At 1 credit = $0.005 (Starter pack 1000 credits for
+// $5), the credit-equivalent prices are:
+//   - Sonnet (60 credits)  = $0.30  → floored to 50¢ for Stripe SPT minimum
+//   - Opus   (300 credits) = $1.50  = 150 cents
+//   - Haiku  (20 credits)  = $0.10  → floored to 50¢ for Stripe SPT minimum
+//
+// Empty model defaults to Sonnet, matching CreditCost. The 50¢ floor
+// means Haiku and Sonnet MPP users overpay vs credit-equivalent (a known
+// asymmetry remaining until we wire the Tempo path). Opus matches exactly.
+// If credit pricing changes (CostSonnet/Opus/Haiku constants), update both
+// functions together.
+func MPPPriceForModel(model string) int64 {
+	credits := int64(CreditCost(model))
+	// 1 credit = 0.5 cents (Starter pack: 1000 credits for $5 = 500 cents).
+	// Multiply by half-cents then divide by 10 to keep integer arithmetic
+	// without losing precision on credit counts that divide evenly.
+	price := credits * 5 / 10
+	if price < MPPSPTMinimumCents {
+		return MPPSPTMinimumCents
+	}
+	return price
+}
