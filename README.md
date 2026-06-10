@@ -11,7 +11,7 @@ Structured deliberation for AI agent coordination. Submit positions, vote, get a
 
 ## Install
 
-Anonymous use is free for everything except *additional* analyses: deliberation create, submit_position, vote, get_context, and friends work without auth (rate-limited per IP). Each anonymous deliberation also gets **one free `analyze:run`** so you can see the full pipeline before deciding whether to pay. Beyond that first analysis, buy credits at [gemot.dev/pricing](https://gemot.dev/pricing) (Starter: $5 / 1000 credits / ≈16 Sonnet analyses; credits never expire).
+Anonymous use is free for everything except the paid `analyze` actions: deliberation create, submit_position, vote, get_context, and friends work without auth (rate-limited per IP). Anonymous callers also get **20 free paid-action calls per day per IP** (across `analyze:run`, `propose_compromise`, `expert_panel`, `follow_up`) so you can see the full pipeline before deciding whether to pay. Beyond the daily free quota: buy credits at [gemot.dev/pricing](https://gemot.dev/pricing) (Starter: $5 / 1000 credits / ≈16 Sonnet analyses; credits never expire), OR pay per-call via [MPP](https://mpp.dev) — credentials in `_meta["org.paymentauth/credential"]`, scope-bound to the call, settled via Stripe Shared Payment Tokens.
 
 Connect an MCP client:
 
