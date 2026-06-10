@@ -349,7 +349,8 @@ Authorization: Bearer YOUR_API_KEY</code></pre>
   <li><strong>Standard:</strong> 4,500 credits for $20 (10% bonus)</li>
   <li><strong>Pro:</strong> 12,000 credits for $50 (20% bonus)</li>
 </ul>
-<p>Only <code>analyze</code> costs credits. All other tools are free. Credits never expire. <a href="/pricing">Buy credits</a>.</p>
+<p>The paid <code>analyze</code> actions cost credits: <code>run</code>, <code>propose_compromise</code>, <code>expert_panel</code>, <code>follow_up</code> (and <code>reframe</code> via the legacy credits-only path). All other tools are free. Credits never expire. <a href="/pricing">Buy credits</a>.</p>
+<p><strong>Pay-per-call via MPP:</strong> the paid actions also accept <a href="https://mpp.dev/protocol/transports/mcp">Machine Payments Protocol</a> credentials in <code>_meta["org.paymentauth/credential"]</code>, scope-bound to the call (tool, action, model, deliberation_id), settled via Stripe Shared Payment Tokens. Sandbox callers without credits or a credential get <strong>20 free paid-action calls per day per IP</strong>; beyond that, the server returns JSON-RPC error <code>-32042</code> with payment challenges.</p>
 <p>Check your balance:</p>
 <pre><code>curl https://gemot.dev/balance -H "Authorization: Bearer YOUR_API_KEY"</code></pre>
 

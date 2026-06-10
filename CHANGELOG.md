@@ -17,6 +17,29 @@ Headlines:
 
 ## Unreleased
 
+### Service-layer validation: non-empty statement on decide:commit — 2026-06-09
+
+Prod e2e check surfaced a dual-transport drift: the MCP path rejected empty statement on `decide:commit`, the A2A path accepted them. Pushed validation into `internal/deliberation/service.go` so both transports inherit the check. Pattern to apply to other actions where MCP and A2A diverge. (Commit `44ed91c`.)
+
+### MPP (Machine Payments Protocol) support — 2026-06-09
+
+Pay-per-call agentic payments on the MCP transport per [mpp.dev/protocol/transports/mcp](https://mpp.dev/protocol/transports/mcp). Paid `analyze` actions (`run`, `propose_compromise`, `expert_panel`, `follow_up`) now accept MPP credentials in `_meta["org.paymentauth/credential"]`, settled via Stripe Shared Payment Tokens. Sandbox callers without credits or a credential get 20 free paid-action calls per IP per day; beyond that, the server returns JSON-RPC error `-32042` with payment challenges scope-bound to the call (tool, action, model, deliberation_id).
+
+Security and payment-fidelity properties:
+
+- **Scope-bound credentials**: every challenge HMAC-binds (tool, action, model, deliberation_id) into the payment request body. `VerifyMCPCredential` rejects cross-action / cross-model / cross-deliberation reuse. Closes the model-upgrade attack (pay Haiku, redeem Opus).
+- **Per-model pricing matching credits**: Sonnet/Haiku floored to 50¢ (Stripe SPT minimum); Opus 150¢ matches credit-equivalent. Resolved when Tempo crypto rail lands.
+- **Replay protection**: in-process challenge-ID cache reservation happens LAST, after all structural and scope checks pass. Client bugs and scope mismatches don't burn the agent's credential.
+- **Payment-before-service validation**: deliberation existence + quorum checked BEFORE credential consumption. Never consume a credential for a service we can't render.
+- **Stripe API version pinned**: targeted `stripeVersionTransport` overrides Stripe-Version header to `2026-03-04.preview` for MPP-only PaymentIntents (stripe-go v82's default basil doesn't recognize `shared_payment_granted_token`). The `/checkout` flow continues on basil; no regression to the legacy credits flow.
+- **Verified against real Stripe sandbox**: B-lite end-to-end test with a synthetic fake-SPT credential confirmed Stripe accepts the preview version, recognizes the SPT field, and reaches the SPT lookup step — only rejecting because the test SPT was synthetic. Production switch (STRIPE_PROFILE_ID set in fly secrets) flipped 2026-06-09.
+
+Known limits (deferred):
+- `reframe` extension not wired — CoreReframe shares the credits path with A2A and needs its own refactor.
+- Replay cache is per-process. Stripe SPT one-time-use covers it at the settlement layer for now; becomes a real gap when Tempo charge method lands.
+- Stripe refund not wired for the post-credential async-failure window. The structural pre-check (deliberation + quorum BEFORE credential) closes the common case; residual risk is a server panic between credential consumption and `RunAnalysisAsync` start.
+- ATXP Go SDK parked as a follow-up — Circuit & Chisel's `@atxp/express` SDK has no Go counterpart published; tracked as a feature request.
+
 ## 0.12.1 — 2026-06-08
 
 Landing-page copy tightening. Removed two overreaching slogans on gemot.dev: the "actionable compromise" guarantee in the hero tagline (the anti-sycophancy guard exists precisely to refuse fake convergence — don't promise convergence the mechanism is built to refuse) and the "deliberation primitive for the agentic era" close on the second pitch (totalizing category claim already covered by the page header). New hero reads "Find the cruxes. Generate proposals. Deliberate over what actually divides." Contrastive "actually divide people" callout kept — that "actually" is load-bearing, not insistence. HTML is `//go:embed`'d into the binary, so this ships as a rebuild + redeploy.
