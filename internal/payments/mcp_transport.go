@@ -32,21 +32,38 @@ const (
 // payment methods this server accepts. Stripe SPT is included whenever
 // StripeProfileID is set; the Tempo charge method is included unconditionally
 // once we wire on-chain settlement (TODO: add when Tempo path lands).
-func PaymentRequiredError(cfg Config, description string) *jsonrpc.Error {
+//
+// The scope pins the credential to (tool, action, model, deliberation_id).
+// An empty scope.Model is defensively resolved to the server-default Sonnet
+// so the emitted credential is always model-bound — leaving Model empty
+// would mean "valid for any model" per ChallengeScope.Matches semantics,
+// which would let an agent pay for Haiku and redeem against Opus.
+// Tool/Action/DeliberationID can be empty when the issuer legitimately
+// can't pin them at challenge-issue time (e.g. expert_panel has no
+// deliberation_id yet); callers responsible for those fields supply them.
+func PaymentRequiredError(cfg Config, scope ChallengeScope, description string) *jsonrpc.Error {
 	now := time.Now().UTC()
 	expires := now.Add(5 * time.Minute).Format(time.RFC3339)
+
+	// Defensive: never emit a model-unbound credential.
+	if scope.Model == "" {
+		scope.Model = "claude-sonnet-4-6"
+	}
 
 	var challenges []challenge
 
 	if cfg.StripeProfileID != "" {
-		c, err := buildChallenge(cfg, "stripe", description, expires, map[string]any{
-			"amount":             fmt.Sprintf("%d", cfg.PricePerAnalyze),
-			"currency":           cfg.Currency,
-			"decimals":           2,
-			"description":        description,
-			"paymentMethodTypes": []string{"card", "link"},
-			"networkId":          cfg.StripeProfileID,
-		})
+		amount := MPPPriceForModel(scope.Model)
+		req := paymentRequest{
+			Amount:             fmt.Sprintf("%d", amount),
+			Currency:           cfg.Currency,
+			Decimals:           2,
+			Description:        description,
+			PaymentMethodTypes: []string{"card", "link"},
+			NetworkID:          cfg.StripeProfileID,
+			Scope:              scope,
+		}
+		c, err := buildChallenge(cfg, "stripe", expires, req)
 		if err == nil {
 			challenges = append(challenges, c)
 		}
@@ -67,9 +84,11 @@ func PaymentRequiredError(cfg Config, description string) *jsonrpc.Error {
 
 // buildChallenge constructs an MPP challenge for one payment method.
 // The id is HMAC-bound to the canonical sequence per mpp.dev/protocol/challenges:
-// realm | method | intent | request | expires | digest | opaque
-func buildChallenge(cfg Config, method, description, expires string, request map[string]any) (challenge, error) {
-	reqJSON, err := json.Marshal(request)
+// realm | method | intent | request | expires | digest | opaque.
+// Because the request body includes the scope, HMAC bind covers scope too —
+// any tampered scope field invalidates the challenge ID.
+func buildChallenge(cfg Config, method, expires string, req paymentRequest) (challenge, error) {
+	reqJSON, err := json.Marshal(req)
 	if err != nil {
 		return challenge{}, err
 	}
@@ -86,11 +105,15 @@ func buildChallenge(cfg Config, method, description, expires string, request map
 }
 
 // VerifyMCPCredential extracts org.paymentauth/credential from tool call _meta,
-// verifies it (HMAC bind + Stripe SPT settlement), and returns the Receipt.
-// Returns (nil, nil) when no credential present — caller decides whether to
-// 402 or fall through. Returns (nil, error) when credential is malformed or
-// fails verification.
-func VerifyMCPCredential(ctx context.Context, cfg Config, meta map[string]any) (*Receipt, error) {
+// verifies it (HMAC bind + scope match + Stripe SPT settlement), and returns
+// the Receipt. The expectedScope is what the SERVER knows the credential
+// SHOULD be bound to — anything different means the agent is trying to
+// redeem a credential against a call it wasn't issued for.
+//
+// Returns (nil, nil) when no credential is present — caller decides whether
+// to 402 or fall through. Returns (nil, error) when credential is malformed,
+// scope-mismatched, or fails Stripe settlement.
+func VerifyMCPCredential(ctx context.Context, cfg Config, meta map[string]any, expectedScope ChallengeScope) (*Receipt, error) {
 	if meta == nil {
 		return nil, nil
 	}
@@ -116,7 +139,7 @@ func VerifyMCPCredential(ctx context.Context, cfg Config, meta map[string]any) (
 		return nil, fmt.Errorf("credential must be string or object, got %T", raw)
 	}
 
-	return verifyCredential(ctx, cfg, credB64)
+	return verifyCredential(ctx, cfg, credB64, expectedScope)
 }
 
 // ReceiptMeta returns a _meta map with the Receipt under the canonical key,

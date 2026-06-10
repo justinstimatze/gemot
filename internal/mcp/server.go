@@ -37,6 +37,11 @@ type server struct {
 	// to emit -32042 challenges and verify _meta credentials. Enabled
 	// when both STRIPE_SECRET_KEY and STRIPE_PROFILE_ID are set.
 	mppCfg payments.Config
+	// sandboxQuota throttles unauthenticated calls across all paid analyze
+	// actions (run, propose_compromise, expert_panel, follow_up). When a
+	// sandbox identity (IP) exceeds the daily limit, handlers respond with
+	// -32042 challenges so the agent can fund via credits or MPP.
+	sandboxQuota *payments.SandboxQuota
 }
 
 // RunAnalysisAsync starts an analysis in a background goroutine with proper
@@ -677,36 +682,30 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			return errResult(fmt.Errorf("%w — submit more positions before analyzing", err))
 		}
 
-		// MPP-over-MCP credential check. Per mpp.dev/protocol/transports/mcp,
-		// credentials arrive under _meta["org.paymentauth/credential"]. A
-		// valid credential bypasses the credits/sandbox path and attaches
-		// a receipt to the result. Reserved AFTER structural validation
-		// so we never reserve a credential we can't honor.
-		var mppReceipt *payments.Receipt
-		if s.mppCfg.Enabled && req != nil && req.Params != nil {
-			r, err := payments.VerifyMCPCredential(ctx, s.mppCfg, req.Params.GetMeta())
-			if err != nil {
-				return nil, nil, fmt.Errorf("MPP credential verification failed: %w", err)
-			}
-			mppReceipt = r
+		// MPP-over-MCP credential check. Scope binds the credential to this
+		// specific call (tool, action, model, deliberation_id). A valid
+		// credential bypasses the sandbox quota AND the credit deduction.
+		runScope := payments.ChallengeScope{
+			Tool:           "analyze",
+			Action:         "run",
+			Model:          resolveModel(args.Model),
+			DeliberationID: args.DeliberationID,
+		}
+		mppReceipt, err := s.checkMPPCredential(ctx, req, runScope)
+		if err != nil {
+			return nil, nil, fmt.Errorf("MPP credential verification failed: %w", err)
 		}
 
-		// Sandbox users get 1 free analysis per deliberation. After that,
-		// they must either provide an API key or pay via MPP (the MCP
-		// transport returns -32042 with payment challenges).
-		if sandbox, _ := ctx.Value(payments.ContextKeySandbox{}).(bool); sandbox {
-			apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
-			if apiKey == "" && mppReceipt == nil {
-				existing, _ := s.svc.GetLatestAnalysisResult(ctx, args.DeliberationID)
-				if existing != nil {
-					if s.mppCfg.Enabled {
-						return nil, nil, payments.PaymentRequiredError(s.mppCfg, fmt.Sprintf("analyze:run for deliberation %s", args.DeliberationID))
-					}
-					return errResult(fmt.Errorf("sandbox deliberations get 1 free analysis — get an API key at https://gemot.dev/pricing for more"))
-				}
+		// Unified sandbox quota: when no apiKey AND no MPP receipt, the
+		// caller has 20 free calls/day across all paid analyze actions.
+		// Replaces the prior "1 free analysis per deliberation" gate —
+		// more generous on volume across deliberations, bounded per IP.
+		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
+		if mppReceipt == nil && apiKey == "" {
+			if err := s.gateSandbox(ctx, runScope, fmt.Sprintf("analyze:run for deliberation %s (model %s)", args.DeliberationID, runScope.Model)); err != nil {
+				return nil, nil, err
 			}
 		}
-		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
 		var creditCost int
 		// MPP receipt substitutes for credit deduction — the agent already
 		// paid via Stripe SPT (or Tempo, when wired). No credits to deduct.
@@ -795,9 +794,30 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			}
 			ctx = context.WithValue(ctx, llm.ContextKeyModel{}, args.Model)
 		}
+		// Validate deliberation exists BEFORE MPP credential consumption —
+		// never consume a credential for a service we can't render.
+		// (Stripe SPT refund is not wired; mirrors analyze:run pattern.)
+		if _, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err != nil {
+			return errResult(fmt.Errorf("deliberation not found: %w", err))
+		}
+		proposeScope := payments.ChallengeScope{
+			Tool:           "analyze",
+			Action:         "propose_compromise",
+			Model:          resolveModel(args.Model),
+			DeliberationID: args.DeliberationID,
+		}
+		mppReceipt, err := s.checkMPPCredential(ctx, req, proposeScope)
+		if err != nil {
+			return nil, nil, fmt.Errorf("MPP credential verification failed: %w", err)
+		}
 		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
+		if mppReceipt == nil && apiKey == "" {
+			if err := s.gateSandbox(ctx, proposeScope, fmt.Sprintf("analyze:propose_compromise for deliberation %s (model %s)", args.DeliberationID, proposeScope.Model)); err != nil {
+				return nil, nil, err
+			}
+		}
 		var creditCost int
-		if apiKey != "" && s.credits != nil {
+		if mppReceipt == nil && apiKey != "" && s.credits != nil {
 			creditCost = payments.CreditCost(args.Model)
 			if _, err := s.credits.Deduct(apiKey, creditCost); err != nil {
 				balance, _ := s.credits.GetBalance(apiKey)
@@ -812,10 +832,17 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			return errResult(err)
 		}
 		s.audit(ctx, "analyze:propose_compromise", args.DeliberationID, "")
-		return jsonResult(map[string]string{
+		if mppReceipt != nil {
+			slog.Info("MPP-paid propose_compromise", "deliberation_id", args.DeliberationID, "payment_ref", mppReceipt.Reference)
+		}
+		result, _, _ := jsonResult(map[string]string{
 			"deliberation_id":     args.DeliberationID,
 			"compromise_proposal": proposal,
 		})
+		if mppReceipt != nil {
+			result.Meta = payments.ReceiptMeta(mppReceipt)
+		}
+		return result, nil, nil
 
 	case "reframe":
 		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
@@ -852,9 +879,26 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		if args.Model != "" && !llm.AllowedModels[args.Model] {
 			return errResult(fmt.Errorf("unsupported model %q — allowed: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5", args.Model))
 		}
+		// expert_panel doesn't have a deliberation_id at issue time — the
+		// panel CREATES the deliberation. Scope binds tool/action/model
+		// only; deliberation_id stays unbound (empty).
+		panelScope := payments.ChallengeScope{
+			Tool:   "analyze",
+			Action: "expert_panel",
+			Model:  resolveModel(args.Model),
+		}
+		mppReceipt, err := s.checkMPPCredential(ctx, req, panelScope)
+		if err != nil {
+			return nil, nil, fmt.Errorf("MPP credential verification failed: %w", err)
+		}
 		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
+		if mppReceipt == nil && apiKey == "" {
+			if err := s.gateSandbox(ctx, panelScope, fmt.Sprintf("analyze:expert_panel (model %s)", panelScope.Model)); err != nil {
+				return nil, nil, err
+			}
+		}
 		var creditCost int
-		if apiKey != "" && s.credits != nil {
+		if mppReceipt == nil && apiKey != "" && s.credits != nil {
 			creditCost = payments.CreditCost(args.Model)
 			if _, err := s.credits.Deduct(apiKey, creditCost); err != nil {
 				balance, _ := s.credits.GetBalance(apiKey)
@@ -872,13 +916,20 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		// Trigger analysis async — panel creation and position submission are already done
 		// Expert panels use interactive priority (reserved API slots)
 		s.audit(ctx, "analyze:expert_panel", result.DeliberationID, "")
+		if mppReceipt != nil {
+			slog.Info("MPP-paid expert_panel", "deliberation_id", result.DeliberationID, "payment_ref", mppReceipt.Reference)
+		}
 		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost,
 			func(c context.Context) context.Context {
 				return context.WithValue(c, llm.ContextKeyInteractive{}, true)
 			})
-		return jsonResultWithHints(result,
+		hintResult, _, _ := jsonResultWithHints(result,
 			fmt.Sprintf("Panel created with %d experts. Analysis started — poll deliberation action:get (deliberation_id: %s) for status, then analyze action:get_result for results.",
 				result.ExpertCount, result.DeliberationID))
+		if mppReceipt != nil {
+			hintResult.Meta = payments.ReceiptMeta(mppReceipt)
+		}
+		return hintResult, nil, nil
 
 	case "follow_up":
 		if args.DeliberationID == "" {
@@ -887,9 +938,29 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		if args.Model != "" && !llm.AllowedModels[args.Model] {
 			return errResult(fmt.Errorf("unsupported model %q", args.Model))
 		}
+		// Validate deliberation exists BEFORE MPP credential consumption —
+		// never consume a credential for a service we can't render.
+		if _, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err != nil {
+			return errResult(fmt.Errorf("deliberation not found: %w", err))
+		}
+		followUpScope := payments.ChallengeScope{
+			Tool:           "analyze",
+			Action:         "follow_up",
+			Model:          resolveModel(args.Model),
+			DeliberationID: args.DeliberationID,
+		}
+		mppReceipt, err := s.checkMPPCredential(ctx, req, followUpScope)
+		if err != nil {
+			return nil, nil, fmt.Errorf("MPP credential verification failed: %w", err)
+		}
 		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
+		if mppReceipt == nil && apiKey == "" {
+			if err := s.gateSandbox(ctx, followUpScope, fmt.Sprintf("analyze:follow_up for deliberation %s (model %s)", args.DeliberationID, followUpScope.Model)); err != nil {
+				return nil, nil, err
+			}
+		}
 		var creditCost int
-		if apiKey != "" && s.credits != nil {
+		if mppReceipt == nil && apiKey != "" && s.credits != nil {
 			creditCost = payments.CreditCost(args.Model)
 			if _, err := s.credits.Deduct(apiKey, creditCost); err != nil {
 				balance, _ := s.credits.GetBalance(apiKey)
@@ -904,13 +975,20 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			return errResult(err)
 		}
 		s.audit(ctx, "analyze:follow_up", result.DeliberationID, "")
+		if mppReceipt != nil {
+			slog.Info("MPP-paid follow_up", "deliberation_id", result.DeliberationID, "payment_ref", mppReceipt.Reference)
+		}
 		RunAnalysisAsync(s.svc, s.db, s.credits, result.DeliberationID, result.Model, apiKey, creditCost,
 			func(c context.Context) context.Context {
 				return context.WithValue(c, llm.ContextKeyInteractive{}, true)
 			})
-		return jsonResultWithHints(result,
+		hintResult, _, _ := jsonResultWithHints(result,
 			fmt.Sprintf("Follow-up round started with %d experts. Poll deliberation action:get for status, then analyze action:get_result.",
 				result.ExpertCount))
+		if mppReceipt != nil {
+			hintResult.Meta = payments.ReceiptMeta(mppReceipt)
+		}
+		return hintResult, nil, nil
 
 	default:
 		return errResult(fmt.Errorf("unknown action %q — use: run, get_result, cancel, propose_compromise, reframe, challenge, dispute_crux, expert_panel, follow_up", args.Action))
@@ -1152,6 +1230,48 @@ func scopeAgentID(ctx context.Context, agentID string) string {
 		return agentID // admin or dev mode — no scoping
 	}
 	return keyID + ":" + agentID
+}
+
+// checkMPPCredential verifies an MPP credential from the tool call _meta
+// against the given scope. Returns (nil, nil) when MPP is disabled or no
+// credential present — caller should fall through to credits/sandbox path.
+// Returns (receipt, nil) on success — caller skips credit deduction.
+// Returns (nil, err) on verification failure — caller surfaces the error.
+func (s *server) checkMPPCredential(ctx context.Context, req *sdkmcp.CallToolRequest, scope payments.ChallengeScope) (*payments.Receipt, error) {
+	if !s.mppCfg.Enabled || req == nil || req.Params == nil {
+		return nil, nil
+	}
+	return payments.VerifyMCPCredential(ctx, s.mppCfg, req.Params.GetMeta(), scope)
+}
+
+// gateSandbox is the unified daily quota gate for paid analyze actions.
+// Pre-condition: caller has determined this is a sandbox call (no apiKey,
+// no valid MPP credential). Returns nil if the call may proceed (quota
+// counter is incremented as a side effect). Returns *jsonrpc.Error with
+// -32042 + scope-bound challenges when MPP is enabled and quota is
+// exhausted; returns a plain error otherwise.
+func (s *server) gateSandbox(ctx context.Context, scope payments.ChallengeScope, description string) error {
+	ip, _ := ctx.Value(payments.ContextKeyClientIP{}).(string)
+	if allowed, _ := s.sandboxQuota.Allow(ip); allowed {
+		return nil
+	}
+	if s.mppCfg.Enabled {
+		return payments.PaymentRequiredError(s.mppCfg, scope, description)
+	}
+	return fmt.Errorf("sandbox daily quota exceeded (20 calls/day) — fund credits at https://gemot.dev/pricing or pay per-call via MPP")
+}
+
+// resolveModel returns the model name to use for scope binding and pricing.
+// Empty args.Model means "server default" — at the LLM call layer this
+// becomes Sonnet (or whatever GEMOT_MODEL is set to). For MPP scope binding
+// we resolve to "claude-sonnet-4-6" so the credential is bound to a
+// concrete model rather than the empty string. The actual downstream LLM
+// call honors args.Model verbatim; we don't propagate the resolution.
+func resolveModel(model string) string {
+	if model == "" {
+		return "claude-sonnet-4-6"
+	}
+	return model
 }
 
 func textResult(text string) *sdkmcp.CallToolResult {
