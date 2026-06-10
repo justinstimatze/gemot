@@ -467,7 +467,12 @@ func verifyCredential(ctx context.Context, cfg Config, credB64 string, expectedS
 		return nil, fmt.Errorf("malformed amount in credential request: %w", err)
 	}
 
-	// Create PaymentIntent with the SPT.
+	// Create PaymentIntent with the SPT. Uses an MPP-pinned Stripe backend
+	// (2026-03-04.preview API version) because stripe-go v82's default
+	// (basil) doesn't natively know about shared_payment_granted_token —
+	// we inject it via AddExtra, but Stripe rejects unknown fields on the
+	// basil API version. The pinned backend is isolated to MPP calls; the
+	// /checkout flow continues using the default basil backend.
 	params := &stripe.PaymentIntentParams{
 		Amount:   stripe.Int64(amountCents),
 		Currency: stripe.String(cfg.Currency),
@@ -476,7 +481,8 @@ func verifyCredential(ctx context.Context, cfg Config, credB64 string, expectedS
 	params.AddExtra("shared_payment_granted_token", spt)
 	params.AddExtra("confirm", "true")
 
-	pi, err := paymentintent.New(params)
+	mppClient := paymentintent.Client{B: getMPPBackend(), Key: stripe.Key}
+	pi, err := mppClient.New(params)
 	if err != nil {
 		return nil, fmt.Errorf("stripe payment failed: %w", err)
 	}
@@ -491,6 +497,53 @@ func verifyCredential(ctx context.Context, cfg Config, credB64 string, expectedS
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 		Reference: pi.ID,
 	}, nil
+}
+
+// mppStripeAPIVersion is the API version required for SPT PaymentIntents
+// per Stripe MPP docs. stripe-go v82.5.1 hard-codes "2025-08-27.basil" as
+// its default, which doesn't accept the shared_payment_granted_token
+// field. The MPP backend (below) overrides the Stripe-Version header on
+// outgoing requests to this preview version.
+const mppStripeAPIVersion = "2026-03-04.preview"
+
+// stripeVersionTransport wraps an http.RoundTripper to override the
+// Stripe-Version header on outgoing requests. Used to pin MPP
+// PaymentIntent calls to the preview API version without affecting other
+// Stripe traffic (checkout, webhooks).
+type stripeVersionTransport struct {
+	base    http.RoundTripper
+	version string
+}
+
+func (t *stripeVersionTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone so we don't mutate the caller's request when retries happen.
+	clone := req.Clone(req.Context())
+	clone.Header.Set("Stripe-Version", t.version)
+	return t.base.RoundTrip(clone)
+}
+
+var (
+	mppBackendOnce sync.Once
+	mppBackendImpl stripe.Backend
+)
+
+// getMPPBackend returns a lazily-initialized Stripe backend pinned to the
+// MPP API version. Safe for concurrent use; the sync.Once guards init.
+// Subsequent calls return the same backend instance.
+func getMPPBackend() stripe.Backend {
+	mppBackendOnce.Do(func() {
+		httpClient := &http.Client{
+			Transport: &stripeVersionTransport{
+				base:    http.DefaultTransport,
+				version: mppStripeAPIVersion,
+			},
+			Timeout: 60 * time.Second,
+		}
+		mppBackendImpl = stripe.GetBackendWithConfig(stripe.APIBackend, &stripe.BackendConfig{
+			HTTPClient: httpClient,
+		})
+	})
+	return mppBackendImpl
 }
 
 // ClientIP extracts the real client IP, preferring Fly-Client-IP (unforgeable).

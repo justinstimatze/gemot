@@ -30,4 +30,4 @@ Most exchanges resolve in 2-4 turns. If a weighed decision is needed, ` + "`anal
 
 Don't reach for it for solo-appropriate decisions, internal-only questions, or anything trivially answerable from code.
 
-Payment: gemot accepts MPP (Machine Payments Protocol) over MCP per mpp.dev/protocol/transports/mcp. Paid actions (analyze:run) return JSON-RPC error -32042 with payment challenges when no funded API key is present; pay via _meta["org.paymentauth/credential"] on the retry. Free sandbox tier: one analyze:run per deliberation. API keys at https://gemot.dev/pricing.`
+Payment: gemot accepts MPP (Machine Payments Protocol) over MCP per mpp.dev/protocol/transports/mcp. Paid actions (analyze:run, propose_compromise, expert_panel, follow_up) return JSON-RPC error -32042 with payment challenges, scope-bound to (tool, action, model, deliberation_id). Pay via _meta["org.paymentauth/credential"] on the retry. Free sandbox tier: 20 calls/day per IP across all paid actions. API keys at https://gemot.dev/pricing.`

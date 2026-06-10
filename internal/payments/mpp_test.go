@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -491,6 +492,36 @@ func TestGenerateChallengeID_Sensitivity(t *testing.T) {
 		})
 	}
 }
+
+// TestStripeVersionTransport_OverridesHeader verifies the version-pinning
+// transport replaces the Stripe-Version header on outgoing requests. The
+// MPP backend depends on this to override stripe-go v82's hardcoded basil
+// version with the 2026-03-04.preview required for SPT PaymentIntents.
+func TestStripeVersionTransport_OverridesHeader(t *testing.T) {
+	captured := ""
+	stub := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		captured = req.Header.Get("Stripe-Version")
+		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+	})
+	tr := &stripeVersionTransport{base: stub, version: mppStripeAPIVersion}
+
+	req, _ := http.NewRequest("POST", "https://example.com/v1/payment_intents", nil)
+	req.Header.Set("Stripe-Version", "2025-08-27.basil") // stripe-go's default
+	if _, err := tr.RoundTrip(req); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if captured != mppStripeAPIVersion {
+		t.Errorf("Stripe-Version on outgoing = %q, want %q (transport must override)", captured, mppStripeAPIVersion)
+	}
+	// Original request must NOT be mutated — confirm clone semantics.
+	if got := req.Header.Get("Stripe-Version"); got != "2025-08-27.basil" {
+		t.Errorf("transport mutated caller's request: Stripe-Version = %q, want unchanged %q", got, "2025-08-27.basil")
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestReserveChallengeID_FirstUseSucceeds(t *testing.T) {
 	resetReplayCache()
