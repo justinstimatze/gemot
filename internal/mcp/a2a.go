@@ -727,19 +727,38 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 						round = &r
 					}
 				}
+				deliberationID := str(s, "deliberation_id")
 				// round:-1 returns all rounds
 				if round != nil && *round == -1 {
-					results, err := CoreGetAllAnalysisResults(ctx, svc, str(s, "deliberation_id"), keyID)
+					results, err := CoreGetAllAnalysisResults(ctx, svc, deliberationID, keyID)
 					if err != nil {
 						writeA2AError(w, req.ID, -32000, sanitizeError(err))
+						return
+					}
+					if len(results) == 0 {
+						status, err := CoreGetAnalysisStatus(ctx, svc, deliberationID)
+						if err != nil {
+							writeA2AError(w, req.ID, -32000, sanitizeError(err))
+							return
+						}
+						writeA2AResult(w, req.ID, status)
 						return
 					}
 					writeA2AResult(w, req.ID, results)
 					return
 				}
-				result, err := CoreGetAnalysisResult(ctx, svc, str(s, "deliberation_id"), keyID, round)
+				result, err := CoreGetAnalysisResult(ctx, svc, deliberationID, keyID, round)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				if result == nil {
+					status, err := CoreGetAnalysisStatus(ctx, svc, deliberationID)
+					if err != nil {
+						writeA2AError(w, req.ID, -32000, sanitizeError(err))
+						return
+					}
+					writeA2AResult(w, req.ID, status)
 					return
 				}
 				writeA2AResult(w, req.ID, result)

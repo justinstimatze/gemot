@@ -160,7 +160,7 @@ func newServer(s *server) *sdkmcp.Server {
 		Name: "analyze",
 		Description: `Analyze disagreements and find common ground. Actions:
 - run: Trigger analysis — extracts cruxes, clusters, consensus (deliberation_id; optional: model)
-- get_result: Get analysis result (deliberation_id; optional: round)
+- get_result: Get analysis result (deliberation_id; optional: round). While the analysis is running, returns {status:"pending", analysis_status: <stage>} with the current pipeline stage (taxonomy / extracting / crux_detection / clustering) so a single poll loop on this tool replaces calling deliberation action:get for progress.
 - cancel: Cancel in-progress analysis (deliberation_id)
 - propose_compromise: Generate a compromise statement (deliberation_id; optional: model)
 - reframe: Restate a position emphasizing common ground (deliberation_id, position_id; optional: model)
@@ -724,7 +724,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		}
 		RunAnalysisAsync(s.svc, s.db, s.credits, args.DeliberationID, args.Model, apiKey, creditCost)
 		result := textResult(fmt.Sprintf(
-			"Analysis started for deliberation %s. Poll deliberation action:get to track progress (sub_status will show: taxonomy → extracting → crux_detection → clustering). Results available via analyze action:get_result once status returns to 'open'.",
+			"Analysis started for deliberation %s. Poll analyze action:get_result — while in-progress it returns {status:\"pending\", analysis_status: taxonomy|extracting|crux_detection|clustering}; when done it returns the full result object.",
 			args.DeliberationID,
 		))
 		// Attach MPP receipt to tool result per mpp.dev/protocol/transports/mcp.
@@ -741,7 +741,11 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 				return errResult(err)
 			}
 			if len(results) == 0 {
-				return textResult("no analysis results yet"), nil, nil
+				status, err := CoreGetAnalysisStatus(ctx, s.svc, args.DeliberationID)
+				if err != nil {
+					return errResult(err)
+				}
+				return jsonResult(status)
 			}
 			return jsonResult(results)
 		}
@@ -750,7 +754,11 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			return errResult(err)
 		}
 		if result == nil {
-			return textResult("no analysis results yet"), nil, nil
+			status, err := CoreGetAnalysisStatus(ctx, s.svc, args.DeliberationID)
+			if err != nil {
+				return errResult(err)
+			}
+			return jsonResult(status)
 		}
 		return jsonResult(result)
 

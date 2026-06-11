@@ -17,6 +17,10 @@ Headlines:
 
 ## Unreleased
 
+### analyze:get_result returns pending status with pipeline stage — 2026-06-11
+
+While an analysis is running, `analyze action:get_result` now returns a structured `{status: "pending", deliberation_status: "analyzing", analysis_status: <stage>}` object instead of a bare "no analysis results yet" text (MCP) or null result (A2A). The `analysis_status` field carries the pipeline's current sub-status — `taxonomy` / `extracting` / `crux_detection` / `clustering` — so callers can drive a single poll loop on `get_result` instead of alternating between `deliberation:get` for progress and `analyze:get_result` for the result. Never-analyzed deliberations get `{status: "not_started", deliberation_status: "open"}` with a hint to call `analyze:run`. Same response shape across both transports. Tool description updated; new test at `tests/analyze_get_result_status_test.go` locks in the wire shape. Closes task #30 (raised by sibling session).
+
 ### Integration tests skip cleanly when Postgres is unreachable — 2026-06-10
 
 `tests/store_test.go::tempDB(t)` previously called `t.Fatal` when Postgres wasn't reachable, so a fresh `go test ./...` on a machine without docker-compose up would surface as test failures across the whole `tests/` package. New `ensurePostgres(t)` probes the DSN once per process (2-second ping timeout, cached via `sync.Once`) and `t.Skip`s with a clear hint when unreachable. Local dev + CI runs unchanged — both provision Postgres — but `go install gemot && go test ./...` from a clean checkout now produces a green run with the integration tests skipped, not a red one. Unblocks task #23.
