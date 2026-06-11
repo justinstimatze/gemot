@@ -32,7 +32,7 @@ Security and payment-fidelity properties:
 - **Replay protection**: in-process challenge-ID cache reservation happens LAST, after all structural and scope checks pass. Client bugs and scope mismatches don't burn the agent's credential.
 - **Payment-before-service validation**: deliberation existence + quorum checked BEFORE credential consumption. Never consume a credential for a service we can't render.
 - **Stripe API version pinned**: targeted `stripeVersionTransport` overrides Stripe-Version header to `2026-03-04.preview` for MPP-only PaymentIntents (stripe-go v82's default basil doesn't recognize `shared_payment_granted_token`). The `/checkout` flow continues on basil; no regression to the legacy credits flow.
-- **Verified against real Stripe sandbox**: B-lite end-to-end test with a synthetic fake-SPT credential confirmed Stripe accepts the preview version, recognizes the SPT field, and reaches the SPT lookup step — only rejecting because the test SPT was synthetic. Production switch (STRIPE_PROFILE_ID set in fly secrets) flipped 2026-06-09.
+- **Verified against real Stripe sandbox**: B-lite (synthetic-SPT, 2026-06-09) confirmed the preview-version request shape reaches Stripe's SPT lookup; B-full (real-SPT, 2026-06-10) closes the loop — a `@stripe/link-cli`-minted test SPT settles through `payments.VerifyMCPCredential` to a real `pi_...` PaymentIntent with `status=succeeded`. Production switch (STRIPE_PROFILE_ID set in fly secrets) flipped 2026-06-09. Reusable round-trip harness lives at `scripts/mpp-b-full/`.
 
 Known limits (deferred):
 - `reframe` extension not wired — CoreReframe shares the credits path with A2A and needs its own refactor.
