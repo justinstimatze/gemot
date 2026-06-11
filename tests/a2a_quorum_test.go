@@ -98,3 +98,71 @@ func TestA2A_AnalyzeRunRequiresQuorumBeforeCharge(t *testing.T) {
 		t.Fatalf("balance must be unchanged on quorum failure: want %d, got %d", startBalance, balance)
 	}
 }
+
+// TestA2A_AnalyzeFollowUpPreconditionGate locks in the precondition gap
+// closure on A2A's analyze:follow_up. Before the refactor follow_up
+// jumped straight to deductCredits — a customer key could trigger a paid
+// follow_up against any (potentially nonexistent) deliberation_id.
+// Mirrors the analyze:run quorum test but on the existence check: a
+// follow_up against a bogus deliberation_id must error AND leave the
+// balance untouched.
+func TestA2A_AnalyzeFollowUpPreconditionGate(t *testing.T) {
+	svc, db := newTestService(t)
+	ctx := context.Background()
+
+	credits, err := payments.NewCreditStore(db.RawDB())
+	if err != nil {
+		t.Fatalf("credit store: %v", err)
+	}
+	const startBalance = 1000
+	token, err := credits.GenerateKey("fu@example.com", "cus_fu", "cs_fu", startBalance)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	rateLim := payments.NewRateLimiter(ctx, 100, time.Minute)
+	handler := mcp.A2AHandler(svc, credits, nil, db)
+	authMW := mcp.A2AAuthMiddleware("test-secret", credits, rateLim, nil, nil)
+	chain := authMW(handler)
+
+	body := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "gemot/analyze",
+		"params": map[string]any{
+			"action":          "follow_up",
+			"deliberation_id": "delib_does_not_exist",
+			"model":           "claude-sonnet-4-6",
+		},
+		"id": 1,
+	}
+	bodyJSON, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/a2a", bytes.NewReader(bodyJSON))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	chain.ServeHTTP(w, req)
+
+	var resp struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%q", err, w.Body.String())
+	}
+	if resp.Error == nil {
+		t.Fatalf("expected JSON-RPC error for missing deliberation, got body=%q", w.Body.String())
+	}
+	if !strings.Contains(resp.Error.Message, "not found") {
+		t.Fatalf("expected 'not found' error, got: %q", resp.Error.Message)
+	}
+
+	balance, err := credits.GetBalance(token)
+	if err != nil {
+		t.Fatalf("get balance: %v", err)
+	}
+	if balance != startBalance {
+		t.Fatalf("balance must be unchanged on missing-delib follow_up: want %d, got %d", startBalance, balance)
+	}
+}

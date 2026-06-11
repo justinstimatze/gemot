@@ -771,6 +771,38 @@ func (s *Service) SetTemplate(ctx context.Context, deliberationID, template, cal
 	return s.store.UpdateDeliberationRules(ctx, deliberationID, rules)
 }
 
+// CheckAnalysisPreconditions runs the canonical pre-charge validation
+// chain for paid analyze actions: existence, access, and (optionally)
+// quorum. Both /mcp and /a2a transports MUST call this before consuming
+// any payment credential (MPP receipt or credit deduction). Keeping the
+// chain in one place eliminates the drift class where one transport
+// gains a guard the other forgets — same play as the service-layer
+// non-empty-statement check on decide:commit (44ed91c).
+//
+// requireQuorum is true for analyze:run (no point starting a paid
+// analysis if the minimum-participant rule isn't met). It's false for
+// secondary analyze actions (propose_compromise, follow_up) which run
+// against a deliberation that already passed quorum in a prior round.
+//
+// Error wrapping is preserved to match the legacy transport-level
+// strings: "deliberation not found: <err>" for the existence path,
+// "<quorum err> — submit more positions before analyzing" for quorum,
+// and the CheckAccess error verbatim ("access denied: …") otherwise.
+func (s *Service) CheckAnalysisPreconditions(ctx context.Context, deliberationID, keyID string, requireQuorum bool) error {
+	if _, err := s.GetDeliberation(ctx, deliberationID); err != nil {
+		return fmt.Errorf("deliberation not found: %w", err)
+	}
+	if err := s.CheckAccess(ctx, deliberationID, keyID); err != nil {
+		return err
+	}
+	if requireQuorum {
+		if err := s.CheckQuorum(ctx, deliberationID); err != nil {
+			return fmt.Errorf("%w — submit more positions before analyzing", err)
+		}
+	}
+	return nil
+}
+
 // CheckQuorum returns an error if the deliberation has a min_participants rule
 // and not enough distinct agents have submitted positions.
 func (s *Service) CheckQuorum(ctx context.Context, deliberationID string) error {
