@@ -700,17 +700,11 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 			switch action {
 			case "run":
 				deliberationID := str(s, "deliberation_id")
-				if err := checkAccess(deliberationID); err != nil {
+				// Existence + access + quorum BEFORE deducting credits.
+				// Single service-layer precondition function shared with
+				// MCP — a guard added on one transport applies to both.
+				if err := svc.CheckAnalysisPreconditions(ctx, deliberationID, keyID, true); err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
-					return
-				}
-				// Enforce quorum BEFORE deducting credits. Mirrors the MCP
-				// path's "never consume a credential for a service we can't
-				// render" guard — otherwise a gmt_ caller pays for an
-				// analyze that the async pipeline will reject at
-				// service.go's quorum check.
-				if err := svc.CheckQuorum(ctx, deliberationID); err != nil {
-					writeA2AError(w, req.ID, -32000, fmt.Sprintf("%s — submit more positions before analyzing", err.Error()))
 					return
 				}
 				creditCost, err := deductCredits(str(s, "model"))
@@ -791,7 +785,9 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				writeA2AResult(w, req.ID, map[string]string{"status": "analysis cancelled"})
 
 			case "propose_compromise":
-				if err := checkAccess(str(s, "deliberation_id")); err != nil {
+				// Existence + access (no quorum on secondary action)
+				// BEFORE deducting credits. Shared precondition with MCP.
+				if err := svc.CheckAnalysisPreconditions(ctx, str(s, "deliberation_id"), keyID, false); err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
@@ -858,6 +854,15 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				writeA2AResult(w, req.ID, result)
 
 			case "follow_up":
+				// Existence + access BEFORE deducting credits. Previously
+				// follow_up on A2A skipped both — a customer key (or
+				// guessed UUID) could trigger a paid follow_up against a
+				// deliberation they had no access to. Shared precondition
+				// with MCP closes the drift.
+				if err := svc.CheckAnalysisPreconditions(ctx, str(s, "deliberation_id"), keyID, false); err != nil {
+					writeA2AError(w, req.ID, -32000, err.Error())
+					return
+				}
 				model := str(s, "model")
 				creditCost, err := deductCredits(model)
 				if err != nil {

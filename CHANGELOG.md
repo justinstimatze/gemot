@@ -17,6 +17,17 @@ Headlines:
 
 ## Unreleased
 
+### Service-layer analyze preconditions: close the drift class + two latent gaps — 2026-06-10
+
+Strategic follow-up to the A2A analyze:run quorum patch earlier today. Both /mcp and /a2a transports now call a single `Service.CheckAnalysisPreconditions(ctx, deliberationID, keyID, requireQuorum)` for paid analyze actions; the function owns the canonical chain (existence → access → optional quorum) with error wrapping preserved verbatim so client-facing strings don't change. A guard added on either transport now applies to both automatically.
+
+The consolidation surfaced and closed two latent gaps the per-transport ad-hoc checks hid:
+
+- **MCP analyze:run, propose_compromise, follow_up never called CheckAccess** — only `GetDeliberation`. A customer who knew (or guessed) a private deliberation's UUID could start a paid analysis on it (results are still hidden by `analyze:get_result`'s own access check, but quorum + position-fetch + LLM cost ran). MCP now enforces access for all three actions.
+- **A2A analyze:follow_up ran no preconditions at all** — straight to `deductCredits`, then `CoreFollowUpExpertPanel(ctx, ..., keyID)`. The handler relied entirely on the inner core function. A2A now runs existence + access first.
+
+Both gaps locked in by `tests/a2a_quorum_test.go` (renamed in spirit but kept its filename) with the new `TestA2A_AnalyzeFollowUpPreconditionGate` joining the existing quorum-before-charge test. Same pattern as the 44ed91c decide:commit fix.
+
 ### A2A analyze:run quorum gate before credit deduction — 2026-06-10
 
 Dual-transport audit found that `gemot/analyze` action `run` over A2A only ran `CheckAccess` before `deductCredits`. A `gmt_` customer calling analyze on a sub-quorum deliberation would be charged; the async pipeline rejects at `service.go`'s quorum gate, but credits are already gone. MCP's path (server.go) ran `CheckQuorum` before charging — `internal/mcp/a2a.go` now does the same, with regression test in `tests/a2a_quorum_test.go` asserting the credit balance stays put on a quorum-failure response. Same pattern as the 44ed91c decide:commit fix: push service-layer preconditions in front of credential consumption on both transports.

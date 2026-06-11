@@ -669,17 +669,16 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 				return errResult(fmt.Errorf("rate limit exceeded: max 10 analyses per minute per API key — slow down or batch requests"))
 			}
 		}
-		// Validate deliberation exists and has quorum BEFORE any charge.
-		// MPP-paid requests consume a one-time Stripe SPT; refunding it
-		// requires a Stripe Refund API call we don't yet wire. Doing the
-		// structural validation first means we never consume a credential
-		// for a service we can't render. Credits path benefits too —
-		// avoids a deduct + refund round-trip on bad requests.
-		if _, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err != nil {
-			return errResult(fmt.Errorf("deliberation not found: %w", err))
-		}
-		if err := s.svc.CheckQuorum(ctx, args.DeliberationID); err != nil {
-			return errResult(fmt.Errorf("%w — submit more positions before analyzing", err))
+		// Validate preconditions (existence, access, quorum) BEFORE any
+		// charge. MPP-paid requests consume a one-time Stripe SPT;
+		// refunding it requires a Stripe Refund API call we don't yet
+		// wire. Doing the structural validation first means we never
+		// consume a credential for a service we can't render. Both /mcp
+		// and /a2a go through the same service-layer precondition
+		// function so a guard added to one transport applies to the
+		// other automatically.
+		if err := s.svc.CheckAnalysisPreconditions(ctx, args.DeliberationID, keyID, true); err != nil {
+			return errResult(err)
 		}
 
 		// MPP-over-MCP credential check. Scope binds the credential to this
@@ -794,11 +793,12 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			}
 			ctx = context.WithValue(ctx, llm.ContextKeyModel{}, args.Model)
 		}
-		// Validate deliberation exists BEFORE MPP credential consumption —
-		// never consume a credential for a service we can't render.
+		// Validate preconditions (existence + access; no quorum for
+		// secondary actions) BEFORE MPP credential consumption — never
+		// consume a credential for a service we can't render.
 		// (Stripe SPT refund is not wired; mirrors analyze:run pattern.)
-		if _, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err != nil {
-			return errResult(fmt.Errorf("deliberation not found: %w", err))
+		if err := s.svc.CheckAnalysisPreconditions(ctx, args.DeliberationID, keyID, false); err != nil {
+			return errResult(err)
 		}
 		proposeScope := payments.ChallengeScope{
 			Tool:           "analyze",
@@ -938,10 +938,11 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		if args.Model != "" && !llm.AllowedModels[args.Model] {
 			return errResult(fmt.Errorf("unsupported model %q", args.Model))
 		}
-		// Validate deliberation exists BEFORE MPP credential consumption —
-		// never consume a credential for a service we can't render.
-		if _, err := s.svc.GetDeliberation(ctx, args.DeliberationID); err != nil {
-			return errResult(fmt.Errorf("deliberation not found: %w", err))
+		// Validate preconditions (existence + access; no quorum for
+		// secondary actions) BEFORE MPP credential consumption — never
+		// consume a credential for a service we can't render.
+		if err := s.svc.CheckAnalysisPreconditions(ctx, args.DeliberationID, keyID, false); err != nil {
+			return errResult(err)
 		}
 		followUpScope := payments.ChallengeScope{
 			Tool:           "analyze",
