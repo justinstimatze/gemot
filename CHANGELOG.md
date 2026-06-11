@@ -17,6 +17,10 @@ Headlines:
 
 ## Unreleased
 
+### Integration tests skip cleanly when Postgres is unreachable — 2026-06-10
+
+`tests/store_test.go::tempDB(t)` previously called `t.Fatal` when Postgres wasn't reachable, so a fresh `go test ./...` on a machine without docker-compose up would surface as test failures across the whole `tests/` package. New `ensurePostgres(t)` probes the DSN once per process (2-second ping timeout, cached via `sync.Once`) and `t.Skip`s with a clear hint when unreachable. Local dev + CI runs unchanged — both provision Postgres — but `go install gemot && go test ./...` from a clean checkout now produces a green run with the integration tests skipped, not a red one. Unblocks task #23.
+
 ### Service-layer analyze preconditions: close the drift class + two latent gaps — 2026-06-10
 
 Strategic follow-up to the A2A analyze:run quorum patch earlier today. Both /mcp and /a2a transports now call a single `Service.CheckAnalysisPreconditions(ctx, deliberationID, keyID, requireQuorum)` for paid analyze actions; the function owns the canonical chain (existence → access → optional quorum) with error wrapping preserved verbatim so client-facing strings don't change. A guard added on either transport now applies to both automatically.

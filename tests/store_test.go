@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/justinstimatze/gemot/internal/deliberation"
@@ -22,10 +24,43 @@ func testDSN() string {
 	return "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
 }
 
+// Cached one-shot probe so the integration-test package skips cleanly
+// when Postgres isn't reachable (e.g. `go test ./...` on a fresh
+// machine without docker-compose up). One short ping at first call;
+// subsequent calls reuse the cached verdict.
+var (
+	pgProbeOnce sync.Once
+	pgProbeErr  error
+)
+
+// ensurePostgres probes the configured DSN once per test process. If
+// Postgres is unreachable, every tempDB-backed test t.Skip()s with the
+// same hint instead of t.Fatal'ing the whole package. CI provisions
+// Postgres (or sets DATABASE_URL) to actually run the suite.
+func ensurePostgres(t *testing.T) {
+	t.Helper()
+	pgProbeOnce.Do(func() {
+		db, err := sql.Open("pgx", testDSN())
+		if err != nil {
+			pgProbeErr = err
+			return
+		}
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		pgProbeErr = db.PingContext(ctx)
+	})
+	if pgProbeErr != nil {
+		t.Skipf("Postgres not reachable (%v) — set DATABASE_URL or start a local Postgres to enable integration tests", pgProbeErr)
+	}
+}
+
 // tempDB creates an isolated Postgres schema for each test and returns a store.DB.
 // The schema is dropped on test cleanup, giving each test a clean slate.
+// Skips the calling test if Postgres isn't reachable (see ensurePostgres).
 func tempDB(t *testing.T) *store.DB {
 	t.Helper()
+	ensurePostgres(t)
 
 	// Create a unique schema name from the test name
 	schemaName := "test_" + strings.ReplaceAll(
