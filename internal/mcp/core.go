@@ -6,7 +6,9 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -123,11 +125,56 @@ func CoreGetAnalysisResult(ctx context.Context, svc *deliberation.Service, delib
 	} else {
 		result, err = svc.GetLatestAnalysisResult(ctx, deliberationID)
 	}
+	// Distinguish "no result yet" (sql.ErrNoRows) from a real error so
+	// transport handlers can fall through to CoreGetAnalysisStatus
+	// rather than surfacing a raw DB error to the caller.
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil || result == nil {
 		return result, err
 	}
 	attachCalibration(ctx, svc, deliberationID, result)
 	return result, nil
+}
+
+// AnalysisStatusResponse is returned by get_result when no analysis
+// result is available for the requested round. It distinguishes
+// "in-progress, poll again" from "never started, run analyze first"
+// without forcing callers to make a second deliberation:get call.
+// Shape is intentionally JSON-serializable — both transports emit it
+// directly in their native response envelope.
+type AnalysisStatusResponse struct {
+	Status             string `json:"status"` // "pending" | "not_started"
+	DeliberationID     string `json:"deliberation_id"`
+	DeliberationStatus string `json:"deliberation_status"`       // open / analyzing / closed / ...
+	AnalysisStatus     string `json:"analysis_status,omitempty"` // taxonomy / extracting / crux_detection / clustering
+	Message            string `json:"message,omitempty"`         // human-readable hint
+}
+
+// CoreGetAnalysisStatus describes the current analyze state for a
+// deliberation that has no result for the requested round. Both
+// transports call this from their get_result no-result branch so
+// callers can tell "still working, poll again" from "you forgot to
+// call analyze:run" in one round-trip.
+func CoreGetAnalysisStatus(ctx context.Context, svc *deliberation.Service, deliberationID string) (*AnalysisStatusResponse, error) {
+	d, err := svc.GetDeliberation(ctx, deliberationID)
+	if err != nil {
+		return nil, err
+	}
+	resp := &AnalysisStatusResponse{
+		DeliberationID:     deliberationID,
+		DeliberationStatus: d.Status,
+	}
+	if d.Status == "analyzing" {
+		resp.Status = "pending"
+		resp.AnalysisStatus = d.SubStatus
+		resp.Message = "analysis in progress — poll get_result again in a few seconds"
+	} else {
+		resp.Status = "not_started"
+		resp.Message = "no analysis has run yet — call analyze action:run to start"
+	}
+	return resp, nil
 }
 
 // CoreGetAllAnalysisResults returns all rounds of analysis for a deliberation.
