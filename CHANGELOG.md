@@ -15,7 +15,9 @@ Headlines:
 - HotStuff TLA+ spec tightened (leader rotation, proposedInView, leader-ready precondition, formal Liveness declaration under Fairness).
 - Citation audit: verified every arXiv ID against arXiv directly; fixed mis-attributed Habermas Machine link, corrected titles/venues/years, removed find-replace contamination that had leaked T3C "Speaker L" anonymization into real research attributions.
 
-## Unreleased
+## 0.12.2 — 2026-06-11
+
+Release theme: MPP verification closed end-to-end, dual-transport precondition drift consolidated at the service layer, and the `analyze:get_result` response now embeds pipeline progress so callers can drop the second `deliberation:get` poll. Local pre-commit caught up to CI so SA-class deprecations don't ship invisibly anymore.
 
 ### Migrate MPP off the deprecated paymentintent.Client + close local-CI gap — 2026-06-11
 
