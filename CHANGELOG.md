@@ -17,6 +17,10 @@ Headlines:
 
 ## Unreleased
 
+### Migrate MPP off the deprecated paymentintent.Client + close local-CI gap — 2026-06-11
+
+The MPP rail shipped on `paymentintent.Client.New` for five commits (`d72b8f2` → `a1d61b5`) because `staticcheck` SA1019 only fires on CI. Local `gofmt + go vet` passed every time; CI's `golangci-lint` ran staticcheck and failed every time; admin bypass on `main` masked the signal as a one-line "required status check expected" warning. Migrated `verifyCredential` to the supported `stripe.NewClient(key, stripe.WithBackends(...))` + `client.V1PaymentIntents.Create(ctx, params)` API. Wire shape and the version-pinned backend (2026-03-04.preview) are unchanged — the form-encoded request body is byte-identical. Pre-commit hook gained a `staticcheck` step (`scripts/githooks/pre-commit` step 6) hard-failing on SA-class issues so future deprecations surface before push, not after. House standard: any check CI enforces should run locally too.
+
 ### analyze:get_result returns pending status with pipeline stage — 2026-06-11
 
 While an analysis is running, `analyze action:get_result` now returns a structured `{status: "pending", deliberation_status: "analyzing", analysis_status: <stage>}` object instead of a bare "no analysis results yet" text (MCP) or null result (A2A). The `analysis_status` field carries the pipeline's current sub-status — `taxonomy` / `extracting` / `crux_detection` / `clustering` — so callers can drive a single poll loop on `get_result` instead of alternating between `deliberation:get` for progress and `analyze:get_result` for the result. Never-analyzed deliberations get `{status: "not_started", deliberation_status: "open"}` with a hint to call `analyze:run`. Same response shape across both transports. Tool description updated; new test at `tests/analyze_get_result_status_test.go` locks in the wire shape. Closes task #30 (raised by sibling session).
