@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/stripe/stripe-go/v82"
-	"github.com/stripe/stripe-go/v82/paymentintent"
 )
 
 // Config holds payment configuration.
@@ -473,16 +472,15 @@ func verifyCredential(ctx context.Context, cfg Config, credB64 string, expectedS
 	// we inject it via AddExtra, but Stripe rejects unknown fields on the
 	// basil API version. The pinned backend is isolated to MPP calls; the
 	// /checkout flow continues using the default basil backend.
-	params := &stripe.PaymentIntentParams{
+	params := &stripe.PaymentIntentCreateParams{
 		Amount:   stripe.Int64(amountCents),
 		Currency: stripe.String(cfg.Currency),
+		Confirm:  stripe.Bool(true),
 	}
-	params.Context = ctx
 	params.AddExtra("shared_payment_granted_token", spt)
-	params.AddExtra("confirm", "true")
 
-	mppClient := paymentintent.Client{B: getMPPBackend(), Key: stripe.Key}
-	pi, err := mppClient.New(params)
+	mppClient := stripe.NewClient(stripe.Key, stripe.WithBackends(&stripe.Backends{API: getMPPBackend()}))
+	pi, err := mppClient.V1PaymentIntents.Create(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("stripe payment failed: %w", err)
 	}

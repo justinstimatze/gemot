@@ -70,4 +70,24 @@ if command -v go &>/dev/null && [[ -n "$staged_go" ]]; then
   rm -f /tmp/gemot-vet.log
 fi
 
+# 6. staticcheck: covers SA-class checks (deprecations, dead code, ...)
+#    that golangci-lint runs on CI but `go vet` doesn't. The MPP rail
+#    shipped on a deprecated paymentintent.Client for 5 commits because
+#    nothing local ran staticcheck — CI failed each push while the
+#    bypass path masked the visible signal. House standard: any check
+#    CI enforces should run locally before commit. Skipped gracefully
+#    when staticcheck isn't installed (install with:
+#    `go install honnef.co/go/tools/cmd/staticcheck@latest`).
+#    Filters lines with leading `-:` or `/` to suppress stdlib version
+#    mismatches on the dev machine; repo issues stay visible.
+if command -v staticcheck &>/dev/null && [[ -n "$staged_go" ]]; then
+  sc_out=$(staticcheck ./... 2>&1 | grep -vE "^(-:|/)" || true)
+  if [[ -n "$sc_out" ]]; then
+    echo "❌ staticcheck issues:"
+    echo "$sc_out" | sed 's/^/    /'
+    echo "    Same checks CI enforces — fix before commit."
+    exit 1
+  fi
+fi
+
 exit 0
