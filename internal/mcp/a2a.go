@@ -704,6 +704,15 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 					writeA2AError(w, req.ID, -32000, err.Error())
 					return
 				}
+				// Enforce quorum BEFORE deducting credits. Mirrors the MCP
+				// path's "never consume a credential for a service we can't
+				// render" guard — otherwise a gmt_ caller pays for an
+				// analyze that the async pipeline will reject at
+				// service.go's quorum check.
+				if err := svc.CheckQuorum(ctx, deliberationID); err != nil {
+					writeA2AError(w, req.ID, -32000, fmt.Sprintf("%s — submit more positions before analyzing", err.Error()))
+					return
+				}
 				creditCost, err := deductCredits(str(s, "model"))
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, err.Error())
