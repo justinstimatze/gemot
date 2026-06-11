@@ -17,6 +17,10 @@ Headlines:
 
 ## Unreleased
 
+### A2A analyze:run quorum gate before credit deduction — 2026-06-10
+
+Dual-transport audit found that `gemot/analyze` action `run` over A2A only ran `CheckAccess` before `deductCredits`. A `gmt_` customer calling analyze on a sub-quorum deliberation would be charged; the async pipeline rejects at `service.go`'s quorum gate, but credits are already gone. MCP's path (server.go) ran `CheckQuorum` before charging — `internal/mcp/a2a.go` now does the same, with regression test in `tests/a2a_quorum_test.go` asserting the credit balance stays put on a quorum-failure response. Same pattern as the 44ed91c decide:commit fix: push service-layer preconditions in front of credential consumption on both transports.
+
 ### Service-layer validation: non-empty statement on decide:commit — 2026-06-09
 
 Prod e2e check surfaced a dual-transport drift: the MCP path rejected empty statement on `decide:commit`, the A2A path accepted them. Pushed validation into `internal/deliberation/service.go` so both transports inherit the check. Pattern to apply to other actions where MCP and A2A diverge. (Commit `44ed91c`.)
