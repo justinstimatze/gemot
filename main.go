@@ -18,13 +18,14 @@ import (
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/llm"
 	"github.com/justinstimatze/gemot/internal/mcp"
+	"github.com/justinstimatze/gemot/internal/payments"
 	"github.com/justinstimatze/gemot/internal/reputation"
 	"github.com/justinstimatze/gemot/internal/store"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: gemot <serve|http|calibration> [args...]\n")
+		fmt.Fprintf(os.Stderr, "Usage: gemot <serve|http|admin|calibration> [args...]\n")
 		os.Exit(1)
 	}
 
@@ -37,6 +38,8 @@ func main() {
 		httpFlags.StringVar(&addr, "addr", ":8080", "HTTP listen address")
 		httpFlags.Parse(os.Args[2:]) //nolint:errcheck
 		cmdServe(true, addr)
+	case "admin":
+		cmdAdmin(os.Args[2:])
 	case "calibration":
 		os.Exit(calibration.CLI(os.Args[2:]))
 	default:
@@ -261,4 +264,63 @@ type noopAnalyzer struct{}
 
 func (n *noopAnalyzer) Analyze(_ context.Context, positions []deliberation.Position, votes []deliberation.Vote, agents []string) (*deliberation.AnalysisResult, error) {
 	return nil, fmt.Errorf("analysis not available: ANTHROPIC_API_KEY not configured")
+}
+
+// cmdAdmin handles `gemot admin <action>`. Operator-facing tools for
+// private/self-hosted deployments — currently just key issuance, but
+// scoped so we can add audit/export/key-revoke siblings without
+// rewiring main.
+func cmdAdmin(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: gemot admin <create-api-key> [args...]")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "create-api-key":
+		fs := flag.NewFlagSet("create-api-key", flag.ExitOnError)
+		var email string
+		var credits int
+		fs.StringVar(&email, "email", "", "identity for the key (email or label; stored for traceability)")
+		fs.IntVar(&credits, "credits", 0, "credits to issue with the new key")
+		fs.Parse(args[1:]) //nolint:errcheck
+		if email == "" || credits <= 0 {
+			fmt.Fprintln(os.Stderr, "Usage: gemot admin create-api-key --email <id> --credits <n>")
+			os.Exit(1)
+		}
+		cmdAdminCreateAPIKey(email, credits)
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown admin action: %s\n", args[0])
+		fmt.Fprintln(os.Stderr, "Supported: create-api-key")
+		os.Exit(1)
+	}
+}
+
+// cmdAdminCreateAPIKey mints a fresh `gmt_...` customer key and writes
+// it to api_keys with the given email/identity and credit balance. The
+// key is the only thing printed to stdout so callers can capture it via
+// `KEY=$(gemot admin create-api-key --email agent-A --credits 100000)`.
+// Requires DATABASE_URL — admin actions are Postgres-only by design.
+func cmdAdminCreateAPIKey(email string, credits int) {
+	if os.Getenv("DATABASE_URL") == "" {
+		fmt.Fprintln(os.Stderr, "gemot admin requires DATABASE_URL (private-deployment Postgres)")
+		os.Exit(1)
+	}
+	cfg := config.Load()
+	pg, err := store.Open(cfg.DatabaseURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open db: %v\n", err)
+		os.Exit(1)
+	}
+	defer pg.Close()
+	credStore, err := payments.NewCreditStore(pg.RawDB())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init credit store: %v\n", err)
+		os.Exit(1)
+	}
+	key, err := credStore.GenerateKey(email, "", "", credits)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "generate key: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(key)
 }

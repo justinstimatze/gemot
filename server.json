@@ -3,7 +3,7 @@
   "name": "dev.gemot/gemot",
   "title": "Gemot Deliberation Server",
   "description": "Deliberation primitive for multi-agent coordination: cruxes, vote clustering, consensus.",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "websiteUrl": "https://gemot.dev",
   "repository": {
     "url": "https://github.com/justinstimatze/gemot",

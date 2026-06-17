@@ -74,15 +74,18 @@ Anything else gets a 401.
 
 ### Issuing per-agent API keys
 
-For a self-hosted instance, the simplest pattern is one `gmt_...` key per agent identity, issued from the admin tool:
+For a self-hosted instance, the simplest pattern is one `gmt_...` key per agent identity, issued from the admin tool. Requires `DATABASE_URL` to point at the same Postgres the running server uses:
 
 ```bash
-# inside the gemot host, with GEMOT_API_SECRET set
-./gemot admin create-api-key --label "agent-A" --credits 100000
-# returns gmt_...
+# from the gemot host, with DATABASE_URL set
+KEY=$(DATABASE_URL=$DATABASE_URL ./gemot admin create-api-key \
+    --email agent-A --credits 100000)
+echo "$KEY"   # gmt_...
 ```
 
-Give each agent its own key. This buys you per-agent rate-limiting (the customer key is the rate-limiter bucket) and a usable audit trail in `api_keys` + `credit_ledger`.
+The `--email` field is just a stable identity string for traceability (`api_keys.email`); it doesn't need to be a real address. The command prints only the `gmt_...` key on stdout so it's easy to capture into an env var or secret manager.
+
+Give each agent its own key. This buys you per-agent rate-limiting (the customer key is the rate-limiter bucket) and a usable audit trail via `api_keys.last_used_at`.
 
 Credits-as-quota is fine for a private fleet even if you never charge money — just top them up generously and treat the value as "calls remaining" rather than dollars.
 

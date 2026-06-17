@@ -2,6 +2,14 @@
 
 All notable changes to gemot are documented here.
 
+## 0.13.1 — 2026-06-17
+
+Close the loop on 0.13.0's private-deployment story: ship the `gemot admin create-api-key` CLI the deployment doc promised.
+
+### gemot admin create-api-key — 2026-06-17
+
+0.13.0's `docs/private-deployment.md` told operators to mint per-agent customer keys with `./gemot admin create-api-key --email <id> --credits <n>`, but no such subcommand existed — the only path into `api_keys` was the Stripe checkout success handler. Private-deployment operators were left with raw SQL inserts. New `cmdAdmin` / `cmdAdminCreateAPIKey` in `main.go` wires `payments.CreditStore.GenerateKey` into a Postgres-only CLI subcommand that prints the fresh `gmt_...` key on stdout. Requires `DATABASE_URL`; refuses to run in demo mode. Scoped as `admin <action>` so future siblings (revoke, list, top-up) drop in without rewiring `main()`. Doc updated to reflect the real invocation. Raised over dispatch when ettle asked the actual mint flow.
+
 ## 0.13.0 — 2026-06-17
 
 Release theme: private-deployment posture. The hosted gemot.dev defaults treat unauthenticated traffic as sandbox-tier visitors, which is wrong for any self-hosted instance running a private fleet. 0.13.0 ships the `GEMOT_REQUIRE_AUTH=1` knob to flip that posture, plus a deployment doc that names the rest of the moving parts (network isolation, TLS proxy, per-agent keys, at-rest encryption).
