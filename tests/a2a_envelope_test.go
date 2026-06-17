@@ -29,7 +29,7 @@ func buildA2AChain(t *testing.T, svc *deliberation.Service, mode mcp.EnvelopeMod
 	if cache == nil {
 		cache = auth.NewMemoryNonceCache(0, 0)
 	}
-	authMW := mcp.A2AAuthMiddleware("", nil, nil, nil, nil)
+	authMW := mcp.A2AAuthMiddleware("", nil, nil, nil, nil, false)
 	envMW := mcp.EnvelopeMiddleware(svc, cache, mode, 0)
 	return authMW(envMW(inner))
 }
@@ -206,7 +206,7 @@ func TestA2AEnvelope_AdvisoryInvalidRejects(t *testing.T) {
 func TestA2AEnvelope_AuthRejectsMissingBearer(t *testing.T) {
 	svc, _ := newTestService(t)
 	// apiSecret set → auth required (not dev mode).
-	authMW := mcp.A2AAuthMiddleware("secret", nil, nil, nil, nil)
+	authMW := mcp.A2AAuthMiddleware("secret", nil, nil, nil, nil, false)
 	envMW := mcp.EnvelopeMiddleware(svc, auth.NewMemoryNonceCache(0, 0), mcp.EnvelopeOff, 0)
 	h := authMW(envMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not run without auth")
@@ -252,7 +252,7 @@ func TestA2AEnvelope_AuthRateLimitRejects(t *testing.T) {
 
 	// Budget of 1 request per minute — second request must hit the limiter.
 	limiter := payments.NewRateLimiter(context.Background(), 1, time.Minute)
-	authMW := mcp.A2AAuthMiddleware("admin-secret", credits, limiter, nil, nil)
+	authMW := mcp.A2AAuthMiddleware("admin-secret", credits, limiter, nil, nil, false)
 	hits := 0
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -294,7 +294,7 @@ func TestA2AEnvelope_AuthRateLimitRejects(t *testing.T) {
 
 func TestA2AEnvelope_AuthRejectsBadToken(t *testing.T) {
 	svc, _ := newTestService(t)
-	authMW := mcp.A2AAuthMiddleware("secret", nil, nil, nil, nil)
+	authMW := mcp.A2AAuthMiddleware("secret", nil, nil, nil, nil, false)
 	envMW := mcp.EnvelopeMiddleware(svc, auth.NewMemoryNonceCache(0, 0), mcp.EnvelopeOff, 0)
 	h := authMW(envMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not run with bad token")
@@ -349,7 +349,7 @@ func TestA2AEnvelope_HostedModeScopedKey(t *testing.T) {
 		called = true
 		w.WriteHeader(200)
 	})
-	authMW := mcp.A2AAuthMiddleware("admin-secret", credits, payments.NewRateLimiter(ctx, 100, time.Minute), nil, nil)
+	authMW := mcp.A2AAuthMiddleware("admin-secret", credits, payments.NewRateLimiter(ctx, 100, time.Minute), nil, nil, false)
 	envMW := mcp.EnvelopeMiddleware(svc, auth.NewMemoryNonceCache(0, 0), mcp.EnvelopeRequired, 0)
 	h := authMW(envMW(inner))
 
@@ -387,7 +387,7 @@ func TestA2AEnvelope_SignatureParamRoundTrip(t *testing.T) {
 	sigB64 := base64.StdEncoding.EncodeToString(sig)
 
 	// Build the full A2A stack in dev mode so no bearer is required.
-	authMW := mcp.A2AAuthMiddleware("", nil, nil, nil, nil)
+	authMW := mcp.A2AAuthMiddleware("", nil, nil, nil, nil, false)
 	envMW := mcp.EnvelopeMiddleware(svc, auth.NewMemoryNonceCache(0, 0), mcp.EnvelopeOff, 0)
 	handler := mcp.A2AHandler(svc, nil, db, db)
 	chain := authMW(envMW(handler))

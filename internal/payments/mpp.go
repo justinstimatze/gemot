@@ -31,6 +31,12 @@ type Config struct {
 	PricePerAnalyze int64  // Price in cents (e.g., 50 = $0.50)
 	Currency        string // Currency code (default "usd")
 	Enabled         bool   // If false, all requests pass through (dev mode)
+	// RequireAuth, when true, rejects unauthenticated MCP requests
+	// instead of degrading them to the IP-rate-limited sandbox tier.
+	// Use for private/self-hosted deployments where anyone reaching
+	// the port is already inside the perimeter and the sandbox path
+	// is a footgun. Public gemot.dev runs with this false.
+	RequireAuth bool
 }
 
 // ContextKeyAPIKey is the context key for the customer API key set by middleware.
@@ -103,7 +109,12 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
-				// Allow unauthenticated MCP connections for sandbox mode.
+				// Allow unauthenticated MCP connections for sandbox mode,
+				// unless RequireAuth is set (private/self-hosted posture).
+				if cfg.RequireAuth {
+					http.Error(w, `{"error":"Authorization: Bearer gmt_<api_key> required"}`, http.StatusUnauthorized)
+					return
+				}
 				// Rate-limit by IP (30 req/min) AND plumb IP into ctx so
 				// downstream handlers can throttle via SandboxQuota.
 				ip := ClientIP(r)
@@ -164,7 +175,12 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				return
 			}
 
-			// No valid auth — allow sandbox mode for free tools.
+			// No valid auth — allow sandbox mode for free tools,
+			// unless RequireAuth is set (private/self-hosted posture).
+			if cfg.RequireAuth {
+				http.Error(w, `{"error":"Authorization: Bearer gmt_<api_key> or Payment credential required"}`, http.StatusUnauthorized)
+				return
+			}
 			// Rate-limit by IP (30 req/min for sandbox) AND plumb the IP
 			// into ctx so downstream handlers can run unified daily quota
 			// checks against it (SandboxQuota).

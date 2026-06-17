@@ -2,6 +2,16 @@
 
 All notable changes to gemot are documented here.
 
+## 0.13.0 — 2026-06-17
+
+Release theme: private-deployment posture. The hosted gemot.dev defaults treat unauthenticated traffic as sandbox-tier visitors, which is wrong for any self-hosted instance running a private fleet. 0.13.0 ships the `GEMOT_REQUIRE_AUTH=1` knob to flip that posture, plus a deployment doc that names the rest of the moving parts (network isolation, TLS proxy, per-agent keys, at-rest encryption).
+
+### GEMOT_REQUIRE_AUTH=1 closes the sandbox-degrade hole — 2026-06-17
+
+Public gemot.dev wants low-friction onboarding: a new agent without credentials gets dropped into a per-IP-rate-limited sandbox tier and can poke at free tools. A private deployment wants the opposite — anyone reaching `:8080` is already inside the perimeter, and the sandbox path is a footgun (a misconfigured firewall or a stale tailnet ACL silently becomes free sandbox access to whoever finds the port).
+
+Setting `GEMOT_REQUIRE_AUTH=1` (or `true`) flips `payments.Middleware` and `A2AAuthMiddleware`: unauthenticated requests get `401 Unauthorized` instead of degrading to sandbox, and the join-code sandbox path on `/a2a` is disabled too. Only Bearer `gmt_...` API keys, the admin secret, or a valid MPP payment credential pass. Default remains off so hosted gemot.dev keeps the open onboarding tier. New `docs/private-deployment.md` walks through the recommended stack (private network + TLS proxy + per-agent keys + Postgres at-rest encryption) and includes the eight-item checklist for operators. Raised by sibling ettle session over dispatch.
+
 ## 0.11.0 — 2026-04-23
 
 Release theme: DARPA Track 1 M8 BFT sequence agreement shipped as always-on hardening, with companion work on reputation defaults, marketing-copy alignment, and citation accuracy.

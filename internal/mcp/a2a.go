@@ -102,6 +102,7 @@ func A2AAuthMiddleware(
 	rateLimiter *payments.RateLimiter,
 	sandboxResolver SandboxResolver,
 	sandboxLimiter *payments.RateLimiter,
+	requireAuth bool,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +122,7 @@ func A2AAuthMiddleware(
 				// allow it through with ContextKeySandbox=true. Matches
 				// the MCP-with-join-code flow so the /try invite block
 				// is actually usable over /a2a.
-				if sandboxResolver != nil {
+				if !requireAuth && sandboxResolver != nil {
 					method, params := peekA2ARequest(r)
 					action, _ := params["action"].(string)
 					op := sandboxAllowedOp{method: method, action: action}

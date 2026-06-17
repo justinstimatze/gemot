@@ -98,6 +98,8 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 		Enabled: os.Getenv("STRIPE_SECRET_KEY") != "" &&
 			os.Getenv("STRIPE_PROFILE_ID") != "" &&
 			os.Getenv("GEMOT_API_SECRET") != "",
+		RequireAuth: os.Getenv("GEMOT_REQUIRE_AUTH") == "1" ||
+			strings.EqualFold(os.Getenv("GEMOT_REQUIRE_AUTH"), "true"),
 	}
 
 	// Sandbox unified daily quota across paid analyze actions. 20 calls per
@@ -385,7 +387,7 @@ No API key needed — the join code is your credential.
 	// 10/min per IP — enough for a human pacing through the invite
 	// block, tight enough that a shared join code can't flood prod.
 	a2aSandboxLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
-	a2aAuth := A2AAuthMiddleware(apiSecret, creditStore, a2aLimiter, svc, a2aSandboxLimiter)
+	a2aAuth := A2AAuthMiddleware(apiSecret, creditStore, a2aLimiter, svc, a2aSandboxLimiter, mppCfg.RequireAuth)
 	a2aHandler := A2AHandler(svc, creditStore, backend, backend)
 	mux.Handle("POST /a2a", a2aAuth(envelopeMiddleware(a2aHandler)))
 
