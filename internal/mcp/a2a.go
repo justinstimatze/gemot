@@ -17,6 +17,7 @@ import (
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
+	"github.com/justinstimatze/gemot/internal/principal"
 	"github.com/justinstimatze/gemot/internal/store"
 )
 
@@ -562,6 +563,17 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				}
 				if interests := str(s, "interests"); interests != "" {
 					popts = append(popts, deliberation.WithInterests(interests))
+				}
+				// A2A accepts on_behalf_of, so it must also accept the
+				// credential backing it — otherwise A2A callers could never
+				// satisfy a deliberation with principal_policy=required.
+				if pc, ok := s["principal_credential"]; ok {
+					raw, err := parseA2ACredential(pc)
+					if err != nil {
+						writeA2AError(w, req.ID, -32602, err.Error())
+						return
+					}
+					popts = append(popts, deliberation.WithPrincipalCredential(raw))
 				}
 				isDraft := false
 				if d, ok := s["draft"]; ok {
@@ -1134,5 +1146,31 @@ func writeA2AError(w http.ResponseWriter, id any, code int, message string) {
 			"code":    code,
 			"message": message,
 		},
+	})
+}
+
+// parseA2ACredential converts an A2A principal_credential object into the
+// stored credential encoding. Mirrors principalCredentialParam on the MCP side;
+// A2A params arrive as untyped maps, so the fields are pulled out by hand.
+func parseA2ACredential(v any) ([]byte, error) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("principal_credential must be an object")
+	}
+	expires, err := time.Parse(time.RFC3339, str(m, "expires_at"))
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.expires_at must be RFC3339: %w", err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(str(m, "signature"))
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.signature must be base64-encoded: %w", err)
+	}
+	return json.Marshal(principal.Credential{
+		Principal: str(m, "principal"),
+		Agent:     str(m, "agent"),
+		Scope:     str(m, "scope"),
+		Issuer:    str(m, "issuer"),
+		ExpiresAt: expires,
+		Signature: sig,
 	})
 }
