@@ -350,6 +350,9 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				if g := str(s, "group_id"); g != "" {
 					dopts = append(dopts, deliberation.WithGroupID(g))
 				}
+				if pp := str(s, "principal_policy"); pp != "" {
+					dopts = append(dopts, deliberation.WithPrincipalPolicy(pp))
+				}
 				if dm, ok := s["deadline_minutes"]; ok {
 					if f, ok := dm.(float64); ok && f > 0 {
 						deadline := time.Now().Add(time.Duration(f) * time.Minute)

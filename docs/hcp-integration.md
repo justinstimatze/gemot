@@ -96,6 +96,11 @@ credential is rejected under every policy including `none`.
 
 ### Using it
 
+Both transports carry the full surface — `principal_policy` on create and
+`principal_credential` on submit — and enforcement is transport-independent
+regardless, since MCP and A2A funnel through the same
+`SubmitPositionWithSigningID`.
+
 Create a deliberation that demands backed claims:
 
 ```json
@@ -186,9 +191,9 @@ relabelled as coming from a more trusted issuer than the principal used.
   the step that runs straight into the append-only constraint above.
 - **No preference-cooperative surface.** The clustering math exists; nothing
   yet exposes it as cooperative formation.
-- **`signature_policy` still has no MCP surface**, so the two policies are
-  inconsistent in reachability: `principal_policy` is settable from an MCP
-  client, `signature_policy` only from Go.
+- **`signature_policy` still has no MCP or A2A surface**, so the two policies
+  are inconsistent in reachability: `principal_policy` is settable from either
+  transport, `signature_policy` only from Go.
 
 ## Where it does not fit
 
