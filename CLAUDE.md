@@ -19,6 +19,7 @@ go test ./...           # Test
 - `internal/store/` — Postgres persistence (pgx)
 - `internal/payments/` — Stripe billing, credits, rate limiting, MPP
 - `internal/llm/` — Anthropic SDK wrapper with structured output
+- `internal/principal/` — Verifiable on_behalf_of delegation credentials
 - `internal/sanitize/` — PII stripping, prompt injection detection
 - `internal/cost/` — Per-deliberation token tracking
 - `internal/config/` — Runtime configuration
