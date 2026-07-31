@@ -23,4 +23,4 @@ go test ./...           # Test
 - `internal/sanitize/` — PII stripping, prompt injection detection
 - `internal/cost/` — Per-deliberation token tracking
 - `internal/config/` — Runtime configuration
-- `tests/` — 161 tests (integration, adversarial, billing, benchmarks)
+- `tests/` — 316 tests (integration, adversarial, billing, benchmarks)
