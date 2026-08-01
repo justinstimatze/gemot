@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -369,5 +370,121 @@ func TestPrincipalDelegation_VerificationPersists(t *testing.T) {
 	}
 	if stored.Principal != delegPrincipal || stored.Agent != delegAgent {
 		t.Errorf("stored credential = %+v, want principal %q agent %q", stored, delegPrincipal, delegAgent)
+	}
+}
+
+// stubVerifier records that it was consulted and returns a fixed outcome. It
+// deliberately ignores signatures, so if a submission it accepts succeeds, the
+// default LocalVerifier was genuinely replaced rather than consulted alongside.
+type stubVerifier struct {
+	calls int
+	err   error
+}
+
+func (s *stubVerifier) Verify(_ context.Context, cred *principal.Credential, agentID string, _ principal.Target) (*principal.Result, error) {
+	s.calls++
+	if s.err != nil {
+		return nil, s.err
+	}
+	return &principal.Result{Principal: cred.Principal, Agent: agentID, Issuer: "stub"}, nil
+}
+
+// SetPrincipalVerifier is advertised as the HCP integration point, so there has
+// to be evidence that an injected verifier actually reaches SubmitPosition. The
+// credential here is unsigned garbage from a principal with no registered key —
+// the local verifier would reject it several ways over — so acceptance can only
+// mean the stub was used.
+func TestPrincipalDelegation_CustomVerifierIsConsulted(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	stub := &stubVerifier{}
+	svc.SetPrincipalVerifier(stub)
+
+	garbage, err := json.Marshal(principal.Credential{
+		Principal: "hcp:did:example:123",
+		Agent:     delegAgent,
+		Issuer:    "hcp",
+		ExpiresAt: time.Now().Add(time.Hour),
+		Signature: []byte{0x00, 0x01, 0x02},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	d, err := svc.CreateDeliberation(ctx, "Custom verifier", "", deliberation.WithPrincipalPolicy("required"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	p, err := svc.SubmitPosition(ctx, d.ID, delegAgent, "delegated via an external authority",
+		deliberation.WithOnBehalfOf("hcp:did:example:123"),
+		deliberation.WithPrincipalCredential(garbage))
+	if err != nil {
+		t.Fatalf("submit with custom verifier: %v", err)
+	}
+	if stub.calls != 1 {
+		t.Errorf("verifier consulted %d times, want 1", stub.calls)
+	}
+	if !p.PrincipalVerified {
+		t.Error("PrincipalVerified = false after the custom verifier accepted")
+	}
+}
+
+// A rejection from the injected verifier must stop the submission, not be
+// swallowed or retried against the local verifier.
+func TestPrincipalDelegation_CustomVerifierRejectionPropagates(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	priv := registerPrincipal(t, svc, delegPrincipal)
+
+	stub := &stubVerifier{err: errors.New("external authority says no")}
+	svc.SetPrincipalVerifier(stub)
+
+	// A credential the *local* verifier would happily accept, so a pass here
+	// would mean the injected rejection had been bypassed.
+	cred := mintCredential(t, priv, principal.Credential{Principal: delegPrincipal, Agent: delegAgent})
+
+	d, err := svc.CreateDeliberation(ctx, "Custom verifier rejects", "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	_, err = svc.SubmitPosition(ctx, d.ID, delegAgent, "hello",
+		deliberation.WithOnBehalfOf(delegPrincipal),
+		deliberation.WithPrincipalCredential(cred))
+	if err == nil {
+		t.Fatal("submission succeeded despite the custom verifier rejecting")
+	}
+	if !strings.Contains(err.Error(), "external authority says no") {
+		t.Errorf("error = %q, want the verifier's own reason", err)
+	}
+	if stub.calls != 1 {
+		t.Errorf("verifier consulted %d times, want 1", stub.calls)
+	}
+}
+
+// Passing nil must restore the local verifier rather than leaving the service
+// with no verifier (which would fail every credentialed submission) or with the
+// previous custom one still installed.
+func TestPrincipalDelegation_NilVerifierRestoresLocal(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	priv := registerPrincipal(t, svc, delegPrincipal)
+
+	svc.SetPrincipalVerifier(&stubVerifier{err: errors.New("should not be consulted")})
+	svc.SetPrincipalVerifier(nil)
+
+	cred := mintCredential(t, priv, principal.Credential{Principal: delegPrincipal, Agent: delegAgent})
+	d, err := svc.CreateDeliberation(ctx, "Nil restores local", "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	p, err := svc.SubmitPosition(ctx, d.ID, delegAgent, "hello",
+		deliberation.WithOnBehalfOf(delegPrincipal),
+		deliberation.WithPrincipalCredential(cred))
+	if err != nil {
+		t.Fatalf("submit after restoring local verifier: %v", err)
+	}
+	if !p.PrincipalVerified {
+		t.Error("PrincipalVerified = false — local verifier was not restored")
 	}
 }

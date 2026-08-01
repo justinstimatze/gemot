@@ -94,6 +94,13 @@ var (
 	// principal ever signed stops verifying.
 	ErrNoKey = errors.New("principal: no active key registered for principal")
 
+	// ErrKeyLookup means the key registry could not be consulted at all — a
+	// backend outage rather than a missing key. Kept distinct from ErrNoKey
+	// because the two demand opposite responses from an operator: ErrNoKey
+	// points at the principal's registration, ErrKeyLookup points at the
+	// infrastructure. Both reject the submission; only one is the user's fault.
+	ErrKeyLookup = errors.New("principal: key lookup failed")
+
 	// ErrVerifyFailed means the signature did not verify against the
 	// principal's registered key.
 	ErrVerifyFailed = errors.New("principal: delegation signature verification failed")
@@ -228,10 +235,15 @@ type Verifier interface {
 //
 // It mirrors the signature of the existing agent-key lookup so LocalVerifier
 // can be wired to the same registry without this package importing the store.
-// Implementations should return an error wrapping (or matching) a
-// "not found" sentinel when the identity has no active key; LocalVerifier
-// treats every lookup failure as ErrNoKey, which is the correct reading for
-// both "never registered" and "revoked".
+//
+// Implementations MUST signal "this identity has no active key" by returning an
+// error satisfying errors.Is(err, ErrNoKey) — which is also what revocation
+// looks like, since revoking a key removes the only active one. Any other error
+// is treated as a registry outage and surfaces as ErrKeyLookup with the cause
+// attached. Both outcomes reject the submission, so misreporting one as the
+// other is not a security problem; it is a diagnosis problem, and a registry
+// outage that reports itself as "principal not registered" sends an operator to
+// the wrong place with nothing in the logs to correct them.
 type KeyLookup func(ctx context.Context, identity string) (pubkey []byte, algo string, err error)
 
 // LocalVerifier verifies credentials signed by principals whose keys live in
@@ -286,8 +298,13 @@ func (v *LocalVerifier) Verify(ctx context.Context, cred *Credential, agentID st
 	}
 
 	pubkey, algo, err := v.Lookup(ctx, cred.Principal)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrNoKey):
 		return nil, fmt.Errorf("%w: %q", ErrNoKey, cred.Principal)
+	case err != nil:
+		// Registry outage. Reject — same as a missing key — but keep the cause
+		// so the failure is diagnosable rather than blamed on the principal.
+		return nil, fmt.Errorf("%w for %q: %w", ErrKeyLookup, cred.Principal, err)
 	}
 	if err := auth.Verify(algo, pubkey, cred.SigningPayload(), cred.Signature); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrVerifyFailed, err)

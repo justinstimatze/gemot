@@ -328,7 +328,21 @@ func NewService(store Store, analyzer Analyzer) *Service {
 		// Principals register keys in the same identity->key registry agents
 		// use, so the default verifier needs no additional wiring and
 		// revocation is whatever RevokeAgentKey already means.
-		principalVerifier: principal.NewLocalVerifier(store.GetActiveAgentKey),
+		principalVerifier: principal.NewLocalVerifier(principalKeyLookup(store)),
+	}
+}
+
+// principalKeyLookup adapts the store's agent-key lookup to the contract
+// principal.KeyLookup expects: a missing key must be reported as
+// principal.ErrNoKey, and everything else must reach the verifier intact so a
+// registry outage is not misreported as an unregistered principal.
+func principalKeyLookup(store Store) principal.KeyLookup {
+	return func(ctx context.Context, identity string) ([]byte, string, error) {
+		pub, algo, err := store.GetActiveAgentKey(ctx, identity)
+		if errors.Is(err, ErrAgentKeyNotFound) {
+			return nil, "", principal.ErrNoKey
+		}
+		return pub, algo, err
 	}
 }
 
@@ -337,7 +351,7 @@ func NewService(store Store, analyzer Analyzer) *Service {
 // agent may speak for this principal". Passing nil restores the local verifier.
 func (s *Service) SetPrincipalVerifier(v principal.Verifier) {
 	if v == nil {
-		v = principal.NewLocalVerifier(s.store.GetActiveAgentKey)
+		v = principal.NewLocalVerifier(principalKeyLookup(s.store))
 	}
 	s.principalVerifier = v
 }

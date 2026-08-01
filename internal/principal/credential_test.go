@@ -33,7 +33,7 @@ func mint(t *testing.T, priv ed25519.PrivateKey, c Credential) *Credential {
 func lookupFor(identity string, pub ed25519.PublicKey) KeyLookup {
 	return func(_ context.Context, got string) ([]byte, string, error) {
 		if got != identity {
-			return nil, "", errors.New("no active key")
+			return nil, "", ErrNoKey
 		}
 		return pub, auth.AlgoEd25519, nil
 	}
@@ -190,8 +190,10 @@ func TestVerifyRejectsRevokedPrincipalKey(t *testing.T) {
 	_, priv := newVerifier(t)
 	cred := mint(t, priv, baseCred())
 
+	// Revocation removes the only active key, so a conforming lookup reports it
+	// the same way it reports "never registered": ErrNoKey.
 	revoked := NewLocalVerifier(func(context.Context, string) ([]byte, string, error) {
-		return nil, "", errors.New("key revoked")
+		return nil, "", ErrNoKey
 	})
 	if _, err := revoked.Verify(context.Background(), cred, testAgent, Target{DeliberationID: testDelib}); !errors.Is(err, ErrNoKey) {
 		t.Fatalf("Verify() = %v, want ErrNoKey", err)
@@ -292,5 +294,34 @@ func TestIssuerDefaultsToLocal(t *testing.T) {
 	}
 	if res.Issuer != IssuerLocal {
 		t.Errorf("Issuer = %q, want %q", res.Issuer, IssuerLocal)
+	}
+}
+
+// A registry outage must not be reported as an unregistered principal. Both
+// reject the submission, so this is not a security distinction — it is a
+// diagnosis one: an operator told "no active key registered" will go audit key
+// registration while the database is the thing that is actually down.
+func TestVerifyDistinguishesRegistryOutageFromMissingKey(t *testing.T) {
+	_, priv := newVerifier(t)
+	cred := mint(t, priv, baseCred())
+
+	dbDown := errors.New("dial tcp 10.0.0.5:5432: connect: connection refused")
+	v := NewLocalVerifier(func(context.Context, string) ([]byte, string, error) {
+		return nil, "", dbDown
+	})
+
+	_, err := v.Verify(context.Background(), cred, testAgent, Target{DeliberationID: testDelib})
+	if err == nil {
+		t.Fatal("Verify() succeeded during a registry outage, want rejection")
+	}
+	if errors.Is(err, ErrNoKey) {
+		t.Error("registry outage reported as ErrNoKey — blames the principal for an infrastructure failure")
+	}
+	if !errors.Is(err, ErrKeyLookup) {
+		t.Errorf("Verify() = %v, want ErrKeyLookup", err)
+	}
+	// The cause must survive so the failure is diagnosable from logs.
+	if !errors.Is(err, dbDown) {
+		t.Errorf("underlying cause was discarded: %v", err)
 	}
 }
