@@ -83,11 +83,29 @@ func credentialParams(t *testing.T, priv ed25519.PrivateKey, c principal.Credent
 	return map[string]any{
 		"principal":  c.Principal,
 		"agent":      c.Agent,
+		"agent_key":  base64.StdEncoding.EncodeToString(c.AgentKey),
 		"scope":      c.Scope,
 		"issuer":     c.Issuer,
 		"expires_at": c.ExpiresAt.Format(time.RFC3339),
 		"signature":  base64.StdEncoding.EncodeToString(c.Signature),
 	}
+}
+
+// a2aDelegation registers the principal's key plus an agent key under the
+// caller's *scoped* identity, which is where proof-of-possession looks. Returns
+// the credential params and the agent's private key for signing positions.
+func a2aDelegation(t *testing.T, svc *deliberation.Service, token, principalID, agentID string) (map[string]any, ed25519.PrivateKey) {
+	t.Helper()
+	ppriv := registerPrincipal(t, svc, principalID)
+	apub, apriv := newKeypair(t)
+	scoped := payments.KeyID(token) + ":" + agentID
+	if err := svc.RegisterAgentKey(context.Background(), scoped, apub, "ed25519"); err != nil {
+		t.Fatalf("register agent key: %v", err)
+	}
+	cred := credentialParams(t, ppriv, principal.Credential{
+		Principal: principalID, Agent: agentID, AgentKey: apub,
+	})
+	return cred, apriv
 }
 
 // An A2A caller must be able to create a deliberation that demands backed
@@ -135,21 +153,27 @@ func TestA2A_CreateHonorsPrincipalPolicy(t *testing.T) {
 func TestA2A_SubmitAcceptsVerifiedCredential(t *testing.T) {
 	svc, db := newTestService(t)
 	ctx := context.Background()
-	priv := registerPrincipal(t, svc, delegPrincipal)
 	chain, token := a2aChain(t, db, svc)
+	cred, agentPriv := a2aDelegation(t, svc, token, delegPrincipal, delegAgent)
 
 	d, err := svc.CreateDeliberation(ctx, "A2A credential", "")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
+	// The client signs with its unscoped view of its own identity.
+	const content = "backed claim"
+	sig := base64.StdEncoding.EncodeToString(
+		signPosition(t, agentPriv, delegAgent, d.ID, d.Round, content))
+
 	resp := a2aCall(t, chain, token, "gemot/participate", map[string]any{
 		"action":               "submit_position",
 		"deliberation_id":      d.ID,
 		"agent_id":             delegAgent,
-		"content":              "backed claim",
+		"content":              content,
 		"on_behalf_of":         delegPrincipal,
-		"principal_credential": credentialParams(t, priv, principal.Credential{Principal: delegPrincipal, Agent: delegAgent}),
+		"principal_credential": cred,
+		"signature":            sig,
 	})
 	if resp.Error != nil {
 		t.Fatalf("submit with valid credential: %v", resp.Error.Message)
@@ -175,9 +199,10 @@ func TestA2A_SubmitAcceptsVerifiedCredential(t *testing.T) {
 func TestA2A_SubmitRejectsForgedCredential(t *testing.T) {
 	svc, db := newTestService(t)
 	ctx := context.Background()
-	registerPrincipal(t, svc, delegPrincipal)
-	_, attackerPriv := newKeypair(t)
 	chain, token := a2aChain(t, db, svc)
+	_, agentPriv := a2aDelegation(t, svc, token, delegPrincipal, delegAgent)
+	_, attackerPriv := newKeypair(t)
+	agentPub := agentPriv.Public().(ed25519.PublicKey)
 
 	d, err := svc.CreateDeliberation(ctx, "A2A forged credential", "")
 	if err != nil {
@@ -190,7 +215,7 @@ func TestA2A_SubmitRejectsForgedCredential(t *testing.T) {
 		"agent_id":             delegAgent,
 		"content":              "forged",
 		"on_behalf_of":         delegPrincipal,
-		"principal_credential": credentialParams(t, attackerPriv, principal.Credential{Principal: delegPrincipal, Agent: delegAgent}),
+		"principal_credential": credentialParams(t, attackerPriv, principal.Credential{Principal: delegPrincipal, Agent: delegAgent, AgentKey: agentPub}),
 	})
 	if resp.Error == nil {
 		t.Fatal("forged credential accepted over A2A, want rejection")
@@ -232,5 +257,91 @@ func TestA2A_SubmitRejectsMalformedCredential(t *testing.T) {
 	}
 	if !strings.Contains(resp.Error.Message, "expires_at") {
 		t.Errorf("error = %q, want it to name the bad field", resp.Error.Message)
+	}
+}
+
+// The attack that the original name-only binding permitted, kept as a
+// regression test.
+//
+// A credential names an agent, but the presenter chooses what to call itself.
+// An attacker on a *different API key* who obtains a credential — from an
+// export, from get_positions, from any log — could submit under the same
+// agent_id and inherit the delegation. Hosted-mode namespacing did not help,
+// because the name the credential binds is the portable unscoped one, and
+// signature_policy did not help either: the attacker's scoped identity had no
+// registered key, so the "required" branch treated it as an agent that never
+// opted into signing and exempted it.
+//
+// Proof-of-possession closes it. The attacker cannot sign as the confirmation
+// key, and registering that public key under their own namespace does not help
+// because they lack the private half.
+func TestA2A_LeakedCredentialIsUselessToAnotherTenant(t *testing.T) {
+	svc, db := newTestService(t)
+	ctx := context.Background()
+
+	credits, err := payments.NewCreditStore(db.RawDB())
+	if err != nil {
+		t.Fatalf("credit store: %v", err)
+	}
+	victimTok, err := credits.GenerateKey("victim@example.com", "cus_v", "cs_v", 1000)
+	if err != nil {
+		t.Fatalf("victim key: %v", err)
+	}
+	attackerTok, err := credits.GenerateKey("attacker@example.com", "cus_a", "cs_a", 1000)
+	if err != nil {
+		t.Fatalf("attacker key: %v", err)
+	}
+	rateLim := payments.NewRateLimiter(ctx, 500, time.Minute)
+	chain := mcp.A2AAuthMiddleware("test-secret", credits, rateLim, nil, nil, false)(
+		mcp.A2AHandler(svc, credits, nil, db))
+
+	cred, agentPriv := a2aDelegation(t, svc, victimTok, delegPrincipal, delegAgent)
+
+	d, err := svc.CreateDeliberation(ctx, "cross-tenant replay", "")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// The legitimate holder submits, which is also how the credential becomes
+	// readable to every other participant.
+	const legit = "the real alice-agent"
+	ok := a2aCall(t, chain, victimTok, "gemot/participate", map[string]any{
+		"action":               "submit_position",
+		"deliberation_id":      d.ID,
+		"agent_id":             delegAgent,
+		"content":              legit,
+		"on_behalf_of":         delegPrincipal,
+		"principal_credential": cred,
+		"signature": base64.StdEncoding.EncodeToString(
+			signPosition(t, agentPriv, delegAgent, d.ID, d.Round, legit)),
+	})
+	if ok.Error != nil {
+		t.Fatalf("legitimate submit: %v", ok.Error.Message)
+	}
+
+	// A different tenant replays the same credential under the same claimed
+	// agent_id. They register their own key under that name in their own
+	// namespace and sign with it — the best they can do without alice's key.
+	evilPub, evilPriv := newKeypair(t)
+	evilScoped := payments.KeyID(attackerTok) + ":" + delegAgent
+	if err := svc.RegisterAgentKey(ctx, evilScoped, evilPub, "ed25519"); err != nil {
+		t.Fatalf("attacker key registration: %v", err)
+	}
+	const forged = "I speak for alice too"
+	evil := a2aCall(t, chain, attackerTok, "gemot/participate", map[string]any{
+		"action":               "submit_position",
+		"deliberation_id":      d.ID,
+		"agent_id":             delegAgent,
+		"content":              forged,
+		"on_behalf_of":         delegPrincipal,
+		"principal_credential": cred,
+		"signature": base64.StdEncoding.EncodeToString(
+			signPosition(t, evilPriv, delegAgent, d.ID, d.Round, forged)),
+	})
+	if evil.Error == nil {
+		t.Fatal("a leaked credential was replayed by another tenant — proof-of-possession is not being enforced")
+	}
+	if !strings.Contains(evil.Error.Message, "bound to a different key") {
+		t.Errorf("error = %q, want a confirmation-key mismatch", evil.Error.Message)
 	}
 }

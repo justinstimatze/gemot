@@ -1348,6 +1348,10 @@ func errResult(err error) (*sdkmcp.CallToolResult, any, error) {
 type principalCredentialParam struct {
 	Principal string `json:"principal"`
 	Agent     string `json:"agent"`
+	// AgentKey is the base64 ed25519 public key the credential is bound to.
+	// The submitting agent must have this key registered and must sign the
+	// position with it, or the credential is refused.
+	AgentKey  string `json:"agent_key"`
 	Scope     string `json:"scope,omitempty"`
 	Issuer    string `json:"issuer,omitempty"`
 	ExpiresAt string `json:"expires_at"`
@@ -1365,9 +1369,14 @@ func (p *principalCredentialParam) toCredential() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("principal_credential.signature must be base64-encoded: %w", err)
 	}
+	agentKey, err := base64.StdEncoding.DecodeString(p.AgentKey)
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.agent_key must be base64-encoded: %w", err)
+	}
 	return json.Marshal(principal.Credential{
 		Principal: p.Principal,
 		Agent:     p.Agent,
+		AgentKey:  agentKey,
 		Scope:     p.Scope,
 		Issuer:    p.Issuer,
 		ExpiresAt: expires,

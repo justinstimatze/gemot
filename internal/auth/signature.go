@@ -157,8 +157,13 @@ func ValidatePublicKey(algo string, pubkey []byte) error {
 // an audit is most likely to trust. The signed payload binds four things:
 //
 //   - principal: the identity delegating authority (the human or org)
-//   - agent:     the single agent authorized — binding this prevents a captured
-//     credential from being replayed by a different agent
+//   - agent:     the portable name of the authorized agent
+//   - agentKey:  the ed25519 public key that agent must prove control of. This
+//     is the confirmation key, in the sense of RFC 7800 `cnf` and
+//     RFC 9449 DPoP: binding the *name* alone is worthless, because
+//     a name is a string the presenter chooses. Binding the key means
+//     a captured credential is inert without the matching private
+//     half, which in turn makes the credential safe to disclose.
 //   - scope:     "" for all deliberations, or a deliberation ID, or "group:<id>";
 //     binding this prevents a credential minted for one deliberation
 //     from being presented in another
@@ -171,11 +176,12 @@ func ValidatePublicKey(algo string, pubkey []byte) error {
 //
 // The domain tag keeps these bytes disjoint from position, vote, and envelope
 // payloads: a delegation signature can never be replayed as any of the three.
-func PrincipalDelegationPayload(principal, agent, scope, issuer string, expiresAt int64) []byte {
-	buf := make([]byte, 0, 96+len(principal)+len(agent)+len(scope)+len(issuer))
+func PrincipalDelegationPayload(principal, agent string, agentKey []byte, scope, issuer string, expiresAt int64) []byte {
+	buf := make([]byte, 0, 128+len(principal)+len(agent)+len(scope)+len(issuer))
 	buf = writeLenPrefixed(buf, []byte(DomainPrincipal))
 	buf = writeLenPrefixed(buf, []byte(principal))
 	buf = writeLenPrefixed(buf, []byte(agent))
+	buf = writeLenPrefixed(buf, agentKey)
 	buf = writeLenPrefixed(buf, []byte(scope))
 	buf = writeLenPrefixed(buf, []byte(issuer))
 	buf = writeInt64(buf, expiresAt)

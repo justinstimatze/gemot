@@ -115,10 +115,18 @@ type Credential struct {
 	// DID. It must match the position's on_behalf_of.
 	Principal string `json:"principal"`
 
-	// Agent is the single agent authorized to speak for Principal. Binding the
-	// agent is what stops a captured credential from being replayed by another
-	// agent.
+	// Agent is the portable name of the authorized agent. It is a name, not a
+	// proof — the presenter chooses what to call itself — so Agent alone must
+	// never be treated as authentication. AgentKey carries the actual binding.
 	Agent string `json:"agent"`
+
+	// AgentKey is the ed25519 public key the authorized agent must prove
+	// control of, in the sense of RFC 7800 `cnf` / RFC 9449 DPoP. It is what
+	// makes a captured credential inert: the holder of the credential still
+	// cannot sign as the agent without the matching private key. Enforcement of
+	// the proof lives in the service layer, deliberately outside Verifier — see
+	// the note on Result.AgentKey.
+	AgentKey []byte `json:"agent_key"`
 
 	// Scope narrows where the delegation applies. Empty authorizes all
 	// deliberations; "delib:<id>" or "group:<id>" narrow it.
@@ -146,8 +154,21 @@ type Target struct {
 // Result is the outcome of a successful verification. It is what the service
 // layer records — note that it carries provenance, not context.
 type Result struct {
-	Principal string    `json:"principal"`
-	Agent     string    `json:"agent"`
+	Principal string `json:"principal"`
+	Agent     string `json:"agent"`
+
+	// AgentKey is the confirmation key the credential commits to. The caller
+	// MUST check that the submitting agent actually controls it — that the key
+	// registered for that agent matches, and that the action carries a valid
+	// signature from it.
+	//
+	// This proof is enforced by the service layer rather than by Verifier on
+	// purpose. Verifier answers "did the principal issue this, is it live, does
+	// it apply here", which an external authority can legitimately answer.
+	// Whether the presenter controls the key is a local fact about this
+	// request, and must not be waivable by swapping in a permissive verifier.
+	AgentKey []byte `json:"agent_key"`
+
 	Scope     string    `json:"scope,omitempty"`
 	Issuer    string    `json:"issuer"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -157,7 +178,7 @@ type Result struct {
 // credential minters (tests, CLIs, external issuers) produce byte-identical
 // input to what verification reconstructs.
 func (c *Credential) SigningPayload() []byte {
-	return auth.PrincipalDelegationPayload(c.Principal, c.Agent, c.Scope, c.issuerOrDefault(), c.ExpiresAt.Unix())
+	return auth.PrincipalDelegationPayload(c.Principal, c.Agent, c.AgentKey, c.Scope, c.issuerOrDefault(), c.ExpiresAt.Unix())
 }
 
 func (c *Credential) issuerOrDefault() string {
@@ -182,6 +203,8 @@ func (c *Credential) Validate() error {
 		return fmt.Errorf("%w: agent is required", ErrMalformed)
 	case len(c.Agent) > MaxIdentityLen:
 		return fmt.Errorf("%w: agent exceeds %d characters", ErrMalformed, MaxIdentityLen)
+	case len(c.AgentKey) == 0:
+		return fmt.Errorf("%w: agent_key is required — a credential bound only to an agent name is a bearer token", ErrMalformed)
 	case len(c.Scope) > MaxScopeLen:
 		return fmt.Errorf("%w: scope exceeds %d characters", ErrMalformed, MaxScopeLen)
 	case len(c.Issuer) > MaxIssuerLen:
@@ -190,6 +213,9 @@ func (c *Credential) Validate() error {
 		return fmt.Errorf("%w: expires_at is required", ErrMalformed)
 	case len(c.Signature) == 0:
 		return fmt.Errorf("%w: signature is required", ErrMalformed)
+	}
+	if err := auth.ValidatePublicKey(auth.AlgoEd25519, c.AgentKey); err != nil {
+		return fmt.Errorf("%w: agent_key: %v", ErrMalformed, err)
 	}
 	if s := c.Scope; s != "" &&
 		!strings.HasPrefix(s, ScopeDeliberationPrefix) &&
@@ -313,6 +339,7 @@ func (v *LocalVerifier) Verify(ctx context.Context, cred *Credential, agentID st
 	return &Result{
 		Principal: cred.Principal,
 		Agent:     cred.Agent,
+		AgentKey:  cred.AgentKey,
 		Scope:     cred.Scope,
 		Issuer:    cred.issuerOrDefault(),
 		ExpiresAt: cred.ExpiresAt,

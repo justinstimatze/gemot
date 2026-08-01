@@ -1171,9 +1171,14 @@ func parseA2ACredential(v any) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("principal_credential.signature must be base64-encoded: %w", err)
 	}
+	agentKey, err := base64.StdEncoding.DecodeString(str(m, "agent_key"))
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.agent_key must be base64-encoded: %w", err)
+	}
 	return json.Marshal(principal.Credential{
 		Principal: str(m, "principal"),
 		Agent:     str(m, "agent"),
+		AgentKey:  agentKey,
 		Scope:     str(m, "scope"),
 		Issuer:    str(m, "issuer"),
 		ExpiresAt: expires,

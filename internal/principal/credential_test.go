@@ -10,6 +10,10 @@ import (
 	"github.com/justinstimatze/gemot/internal/auth"
 )
 
+// The confirmation key every test credential binds to. Package-level so
+// baseCred and the Validate table share one well-formed key.
+var testAgentPub, _, _ = ed25519.GenerateKey(nil)
+
 const (
 	testPrincipal = "human:alice"
 	testAgent     = "agent-1"
@@ -49,7 +53,7 @@ func newVerifier(t *testing.T) (*LocalVerifier, ed25519.PrivateKey) {
 }
 
 func baseCred() Credential {
-	return Credential{Principal: testPrincipal, Agent: testAgent, Issuer: IssuerLocal}
+	return Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: testAgentPub, Issuer: IssuerLocal}
 }
 
 func TestVerifyAcceptsWellFormedCredential(t *testing.T) {
@@ -86,6 +90,7 @@ func TestVerifyRejectsExpiredCredential(t *testing.T) {
 	cred := mint(t, priv, Credential{
 		Principal: testPrincipal,
 		Agent:     testAgent,
+		AgentKey:  testAgentPub,
 		ExpiresAt: time.Now().Add(-time.Minute),
 	})
 
@@ -100,7 +105,7 @@ func TestVerifyRejectsExpiredCredential(t *testing.T) {
 func TestVerifyExpiryBoundaryIsExclusive(t *testing.T) {
 	v, priv := newVerifier(t)
 	deadline := time.Now().Add(time.Hour)
-	cred := mint(t, priv, Credential{Principal: testPrincipal, Agent: testAgent, ExpiresAt: deadline})
+	cred := mint(t, priv, Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: testAgentPub, ExpiresAt: deadline})
 
 	v.Now = func() time.Time { return deadline }
 	if _, err := v.Verify(context.Background(), cred, testAgent, Target{DeliberationID: testDelib}); !errors.Is(err, ErrExpired) {
@@ -159,6 +164,10 @@ func TestVerifyRejectsTamperedFields(t *testing.T) {
 		{"widened scope", func(c *Credential) { c.Scope = "" }},
 		{"extended expiry", func(c *Credential) { c.ExpiresAt = c.ExpiresAt.Add(24 * time.Hour) }},
 		{"relabelled issuer", func(c *Credential) { c.Issuer = "hcp" }},
+		{"swapped confirmation key", func(c *Credential) {
+			other, _, _ := ed25519.GenerateKey(nil)
+			c.AgentKey = other
+		}},
 		{"swapped principal", func(c *Credential) { c.Principal = testPrincipal }},
 	}
 	for _, tc := range tests {
@@ -227,7 +236,7 @@ func TestDelegationPayloadIsDomainSeparated(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 	expiry := time.Now().Add(time.Hour)
-	cred := Credential{Principal: testPrincipal, Agent: testAgent, Issuer: IssuerLocal, ExpiresAt: expiry}
+	cred := Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: testAgentPub, Issuer: IssuerLocal, ExpiresAt: expiry}
 
 	// A position signature over the same identifiers.
 	positionSig := ed25519.Sign(priv, auth.PositionPayload(testAgent, testDelib, 1, "content"))
@@ -247,13 +256,15 @@ func TestValidateRejectsMalformed(t *testing.T) {
 		name string
 		cred Credential
 	}{
-		{"missing principal", Credential{Agent: testAgent, ExpiresAt: future, Signature: sig}},
-		{"missing agent", Credential{Principal: testPrincipal, ExpiresAt: future, Signature: sig}},
-		{"missing expiry", Credential{Principal: testPrincipal, Agent: testAgent, Signature: sig}},
-		{"missing signature", Credential{Principal: testPrincipal, Agent: testAgent, ExpiresAt: future}},
-		{"unknown scope prefix", Credential{Principal: testPrincipal, Agent: testAgent, Scope: "wildcard:*", ExpiresAt: future, Signature: sig}},
-		{"oversized principal", Credential{Principal: string(make([]byte, MaxIdentityLen+1)), Agent: testAgent, ExpiresAt: future, Signature: sig}},
-		{"oversized scope", Credential{Principal: testPrincipal, Agent: testAgent, Scope: ScopeGroupPrefix + string(make([]byte, MaxScopeLen)), ExpiresAt: future, Signature: sig}},
+		{"missing principal", Credential{Agent: testAgent, AgentKey: testAgentPub, ExpiresAt: future, Signature: sig}},
+		{"missing agent_key", Credential{Principal: testPrincipal, Agent: testAgent, ExpiresAt: future, Signature: sig}},
+		{"malformed agent_key", Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: []byte("too-short"), ExpiresAt: future, Signature: sig}},
+		{"missing agent", Credential{Principal: testPrincipal, AgentKey: testAgentPub, ExpiresAt: future, Signature: sig}},
+		{"missing expiry", Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: testAgentPub, Signature: sig}},
+		{"missing signature", Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: testAgentPub, ExpiresAt: future}},
+		{"unknown scope prefix", Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: testAgentPub, Scope: "wildcard:*", ExpiresAt: future, Signature: sig}},
+		{"oversized principal", Credential{Principal: string(make([]byte, MaxIdentityLen+1)), Agent: testAgent, AgentKey: testAgentPub, ExpiresAt: future, Signature: sig}},
+		{"oversized scope", Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: testAgentPub, Scope: ScopeGroupPrefix + string(make([]byte, MaxScopeLen)), ExpiresAt: future, Signature: sig}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -286,7 +297,7 @@ func TestVerifyRejectsMalformedBeforeKeyLookup(t *testing.T) {
 // verifying side, so a credential minted without an explicit issuer verifies.
 func TestIssuerDefaultsToLocal(t *testing.T) {
 	v, priv := newVerifier(t)
-	cred := mint(t, priv, Credential{Principal: testPrincipal, Agent: testAgent})
+	cred := mint(t, priv, Credential{Principal: testPrincipal, Agent: testAgent, AgentKey: testAgentPub})
 
 	res, err := v.Verify(context.Background(), cred, testAgent, Target{DeliberationID: testDelib})
 	if err != nil {

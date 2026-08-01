@@ -1,6 +1,7 @@
 package deliberation
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -1055,7 +1056,7 @@ func (s *Service) SubmitPositionWithSigningID(ctx context.Context, deliberationI
 	if err := s.verifyPositionSignature(ctx, d, p, rawContent, signingAgentID); err != nil {
 		return nil, err
 	}
-	if err := s.verifyPrincipalDelegation(ctx, d, p, signingAgentID); err != nil {
+	if err := s.verifyPrincipalDelegation(ctx, d, p, rawContent, signingAgentID); err != nil {
 		return nil, err
 	}
 	// If sanitization mutated the content, the stored signature no longer verifies
@@ -2732,7 +2733,7 @@ func (s *Service) verifyPositionSignature(ctx context.Context, d *Deliberation, 
 // The two axes are independent: whether a credential is *supplied* is governed
 // by policy, whether a supplied credential is *good* is not. A bad credential
 // is rejected under every policy including "none".
-func (s *Service) verifyPrincipalDelegation(ctx context.Context, d *Deliberation, p *Position, signingAgentID string) error {
+func (s *Service) verifyPrincipalDelegation(ctx context.Context, d *Deliberation, p *Position, signingContent, signingAgentID string) error {
 	policy := d.PrincipalPolicy
 	if policy == "" {
 		policy = "none"
@@ -2773,13 +2774,73 @@ func (s *Service) verifyPrincipalDelegation(ctx context.Context, d *Deliberation
 	}
 
 	target := principal.Target{DeliberationID: p.DeliberationID, GroupID: d.GroupID}
-	if _, err := s.principalVerifier.Verify(ctx, &cred, signingAgentID, target); err != nil {
+	res, err := s.principalVerifier.Verify(ctx, &cred, signingAgentID, target)
+	if err != nil {
+		s.audit("participate:principal_verify_fail", d.ID, p.AgentID)
+		return fmt.Errorf("PRINCIPAL_VERIFY_FAIL: %w", err)
+	}
+
+	if err := s.provePossession(ctx, res, p, signingContent, signingAgentID); err != nil {
 		s.audit("participate:principal_verify_fail", d.ID, p.AgentID)
 		return fmt.Errorf("PRINCIPAL_VERIFY_FAIL: %w", err)
 	}
 
 	p.PrincipalVerified = true
 	s.audit("participate:principal_verified", d.ID, p.AgentID)
+	return nil
+}
+
+// provePossession checks that the agent presenting a credential actually
+// controls the confirmation key the credential commits to.
+//
+// Without this, a credential is a bearer token. The credential names an agent,
+// but the presenter chooses what to call itself: an attacker who obtains a
+// credential — from an export, from get_positions, from any log — can submit
+// under the same agent_id and inherit the delegation. Hosted-mode namespacing
+// does not help, because the name the credential binds is the portable
+// unscoped one. Neither does signature_policy: the attacker's scoped identity
+// has no registered key, so the "required" branch treats it as an agent that
+// never opted into signing and exempts it.
+//
+// The fix is proof-of-possession, the same move RFC 7800 `cnf`, RFC 9449 DPoP,
+// and W3C VC holder binding all make. Two checks:
+//
+//  1. the key registered for this agent's *stored* identity — the namespaced
+//     one, so a different tenant's registration cannot satisfy it — must be
+//     exactly the credential's confirmation key; and
+//  2. the position must carry a signature that verifies under that key.
+//
+// The signature is re-verified here rather than inherited from
+// verifyPositionSignature. That function runs first and would have rejected a
+// bad signature already, but relying on call ordering for a security property
+// is how the gap above appeared in the first place. Re-verifying costs one
+// ed25519 operation and makes this function true on its own.
+//
+// This lives outside Verifier on purpose: whether the presenter holds the key
+// is a local fact about this request, and must not become waivable by
+// installing a permissive external verifier.
+func (s *Service) provePossession(ctx context.Context, res *principal.Result, p *Position, signingContent, signingAgentID string) error {
+	if res == nil || len(res.AgentKey) == 0 {
+		return fmt.Errorf("%w: verifier returned no confirmation key", principal.ErrMalformed)
+	}
+	if len(p.Signature) == 0 {
+		return errors.New("presenting a principal credential requires a signed position: no signature supplied")
+	}
+
+	pubkey, algo, err := s.store.GetActiveAgentKey(ctx, p.AgentID)
+	if errors.Is(err, ErrAgentKeyNotFound) {
+		return fmt.Errorf("presenting a principal credential requires a registered key for agent %q", p.AgentID)
+	}
+	if err != nil {
+		return fmt.Errorf("agent key lookup: %w", err)
+	}
+	if !bytes.Equal(pubkey, res.AgentKey) {
+		return fmt.Errorf("credential is bound to a different key than the one registered for agent %q", p.AgentID)
+	}
+	msg := auth.PositionPayload(signingAgentID, p.DeliberationID, p.Round, signingContent)
+	if err := auth.Verify(algo, pubkey, msg, p.Signature); err != nil {
+		return fmt.Errorf("position signature does not prove control of the credential's key: %w", err)
+	}
 	return nil
 }
 

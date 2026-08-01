@@ -223,7 +223,7 @@ Analysis results include `integrity_warnings` flagging:
 
 **Sybil-aware trust weights.** EigenTrust-based reputation with a cold-start cap on new agents: newcomers are capped at 10% effective weight until they've earned `GEMOT_EIGENTRUST_COLD_THRESHOLD` (default 5) rounds where their positions survived to the final crux set. Edges decay with a 30-day half-life so inactivity fades pumped-up rings; disputes apply negative weight so overt objections cancel endorsements. Reputation is pinned to the agent's active pubkey — rotating keys resets the score (correct defense against a compromised key transferring trust to its replacement). Opt out via `GEMOT_EIGENTRUST_ENABLED=false`.
 
-**Verifiable principal delegation.** `on_behalf_of` used to be a free-text claim any agent could assert about any principal. A principal can now sign a delegation credential — *"agent A may speak for me, within scope S, until T"* — bound to the agent (so a captured credential is useless to anyone else), to a scope (so it cannot travel to another deliberation), and to a mandatory expiry. Set `principal_policy` to `advisory` or `required` on a deliberation to log or reject unbacked claims; a bad credential is rejected under every policy, including `none`. Principals register keys in the same registry agents use, so revoking a principal's key invalidates every credential it ever signed. Credentials carry a capability and never personal context — see [docs/hcp-integration.md](docs/hcp-integration.md) for why that boundary is load-bearing.
+**Verifiable principal delegation.** `on_behalf_of` used to be a free-text claim any agent could assert about any principal. A principal can now sign a delegation credential — *"the agent holding key K may speak for me, within scope S, until T"* — bound to a **confirmation key** (RFC 7800 `cnf` / DPoP style, so a captured credential is inert without the private half), to a scope (so it cannot travel to another deliberation), and to a mandatory expiry. Presenting a credential requires signing the position with that key, which is why credentials are safe to export and re-verify offline. Set `principal_policy` to `advisory` or `required` on a deliberation to log or reject unbacked claims; a bad credential is rejected under every policy, including `none`. Principals register keys in the same registry agents use, so revoking a principal's key invalidates every credential it ever signed. Credentials carry a capability and never personal context — see [docs/hcp-integration.md](docs/hcp-integration.md) for why that boundary is load-bearing.
 
 **Per-action signature policy.** Set `signature_policy` on a deliberation to `advisory` (log unsigned submissions from agents that have registered a key) or `required` (reject them). Agents with no registered key are unaffected in every mode, so the policy tightens the guarantee for agents that opted into signing rather than locking anyone out. A submission that *does* carry a signature is verified under every policy, including the `none` default.
 
@@ -279,7 +279,7 @@ gemot/
 │   ├── principal/                   # Verifiable on_behalf_of delegation credentials
 │   ├── sanitize/                    # PII stripping, prompt injection detection
 │   └── cost/tracker.go             # Per-deliberation model-aware cost tracking
-├── tests/                           # 323 tests
+├── tests/                           # 342 tests
 ├── THREAT_MODEL.md
 ```
 

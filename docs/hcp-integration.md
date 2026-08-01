@@ -63,17 +63,64 @@ recorded a claim it never checked.
 `internal/principal` closes that. A **credential** is a delegation attestation:
 
 ```
-principal signs → "agent A may speak for me, within scope S, until T"
+principal signs → "the agent holding key K may speak for me,
+                   within scope S, until T"
 ```
 
-Verification binds four things:
+Verification binds five things:
 
 | Bound | Attack it stops |
 |---|---|
-| `agent` | A captured credential replayed by a different agent |
+| `agent_key` | **The load-bearing one.** A captured credential replayed by anyone who does not hold the private key |
+| `agent` | Casual misuse under a different name (a name is not authentication — see below) |
 | `scope` | A credential minted for one deliberation presented in another |
 | `expires_at` | A delegation outliving a revocation the verifier cannot observe |
-| signature over all fields | Widening scope, extending expiry, or relabelling the issuer after minting |
+| signature over all fields | Widening scope, extending expiry, swapping the confirmation key, or relabelling the issuer after minting |
+
+### Why the key binding, not just the name
+
+An earlier revision bound only `agent`, and that was a real vulnerability. The
+credential names an agent, but *the presenter chooses what to call itself*.
+Anyone who obtained a credential — from an export, from `get_positions`, from a
+log — could submit under the same `agent_id` and inherit the delegation.
+Hosted-mode namespacing did not help, because the name a credential binds is
+the portable unscoped one. `signature_policy` did not help either: the
+attacker's scoped identity had no registered key, so the `required` branch
+treated it as an agent that never opted into signing and exempted it. The two
+mechanisms had a gap exactly between them, and the result was Sybil position
+stuffing carrying `principal_verified: true`.
+
+The fix is proof-of-possession, the move that
+[RFC 7800](https://www.rfc-editor.org/rfc/rfc7800) (`cnf`),
+[RFC 9449](https://www.rfc-editor.org/rfc/rfc9449) (DPoP),
+[RFC 8705](https://www.rfc-editor.org/rfc/rfc8705) (mTLS-bound tokens), and
+W3C Verifiable Credentials holder binding all make. The credential commits to a
+confirmation key, and presenting it requires signing the position with that
+key:
+
+- the key registered for the submitter's **stored** (namespaced) identity must
+  equal the credential's `agent_key`, so another tenant's registration cannot
+  satisfy it; and
+- the position must carry a signature that verifies under that key.
+
+Presenting a credential is therefore the opt-in to signing, regardless of
+`signature_policy`. The cost is real — delegation now requires the agent to
+have a registered key — but `principal_verified` previously meant "someone
+typed the right name" and now means "the delegated key signed this position".
+
+Enforcement deliberately lives in the service layer, **outside** `Verifier`.
+Whether the principal issued a credential is a question an external authority
+can answer; whether the presenter controls the key is a local fact about this
+request, and must not become waivable by installing a permissive verifier.
+There is a test for exactly that.
+
+### Credentials are safe to disclose
+
+Because the binding is to a key rather than a secret, a credential is inert to
+anyone who captures it. That is what makes it safe for `export` and
+`get_positions` to carry it, and it is the same property that lets DPoP-bound
+tokens and verifiable credentials be logged and audited freely. Independent
+offline re-verification becomes a feature rather than a leak.
 
 Principals register keys in the **same identity→key registry agents already
 use**, so there is no new table and revocation is inherited rather than
@@ -116,9 +163,11 @@ Submit a position with a credential:
   "agent_id": "alice-agent",
   "content": "...",
   "on_behalf_of": "human:alice",
+  "signature": "<base64 — required whenever a credential is presented>",
   "principal_credential": {
     "principal": "human:alice",
     "agent": "alice-agent",
+    "agent_key": "<base64 ed25519 public key>",
     "scope": "delib:...",
     "issuer": "local",
     "expires_at": "2026-08-01T00:00:00Z",
@@ -133,6 +182,7 @@ Minting one (the principal's side):
 cred := principal.Credential{
     Principal: "human:alice",
     Agent:     "alice-agent",
+    AgentKey:  agentPublicKey, // the key the agent will sign positions with
     Scope:     principal.ScopeDeliberationPrefix + delibID, // or "" for all
     Issuer:    principal.IssuerLocal,
     ExpiresAt: time.Now().Add(24 * time.Hour),
@@ -140,9 +190,12 @@ cred := principal.Credential{
 cred.Signature = ed25519.Sign(principalPrivKey, cred.SigningPayload())
 ```
 
-The principal's public key is registered under its identity via
-`RegisterAgentKey`. Signing covers a fixed-shape length-prefixed record, never
-the JSON, so field order and whitespace in transit cannot change what verifies.
+Both the principal's key and the agent's key are registered via
+`RegisterAgentKey` — the agent's under its **stored** identity, which in hosted
+mode is `<keyID>:<agent_id>`. Registering an agent key under the unscoped name
+leaves the verifier unable to find it. Signing covers a fixed-shape
+length-prefixed record, never the JSON, so field order and whitespace in
+transit cannot change what verifies.
 
 ## The constraint that shapes everything
 
