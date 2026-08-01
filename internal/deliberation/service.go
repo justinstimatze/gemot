@@ -2230,13 +2230,17 @@ func (s *Service) CheckParticipant(ctx context.Context, deliberationID, keyID st
 		}
 	}
 	// An agent that has committed but not yet submitted a position still
-	// belongs to the deliberation.
+	// belongs to the deliberation. Only outstanding commitments count:
+	// withdrawal hides an agent's positions and breaks every commitment
+	// they had open, so requiring an unresolved one is what stops a
+	// withdrawn agent from retaining standing over everyone else's
+	// commitments. There is no persisted "withdrawn" flag to test instead.
 	commitments, err := s.store.GetCommitments(ctx, deliberationID)
 	if err != nil {
 		return err
 	}
 	for _, c := range commitments {
-		if strings.HasPrefix(c.AgentID, prefix) {
+		if strings.HasPrefix(c.AgentID, prefix) && c.FulfilledAt == nil && c.BrokenAt == nil {
 			return nil
 		}
 	}

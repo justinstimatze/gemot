@@ -194,6 +194,45 @@ func TestResolveMissingCommitmentIsNotFound(t *testing.T) {
 	}
 }
 
+// Withdrawal hides an agent's positions but leaves their commitment rows
+// in place, so a fallback that accepted any commitment let a withdrawn
+// agent keep resolving everyone else's commitments in a deliberation they
+// had left. Standing now requires an outstanding one.
+func TestWithdrawnAgentLosesStanding(t *testing.T) {
+	ctx := context.Background()
+	svc, _, delibID := commitFixture(t)
+
+	// Bob commits too, so he holds standing by commitment as well as by
+	// position — then withdraws, which resolves both.
+	if _, err := svc.Commit(ctx, delibID, "keyB:bob", "I will review the patch", ""); err != nil {
+		t.Fatalf("Commit bob: %v", err)
+	}
+	if err := svc.CheckParticipant(ctx, delibID, "keyB"); err != nil {
+		t.Fatalf("bob should have standing before withdrawing: %v", err)
+	}
+
+	if err := svc.WithdrawAgent(ctx, delibID, "keyB:bob"); err != nil {
+		t.Fatalf("WithdrawAgent: %v", err)
+	}
+	if err := svc.CheckParticipant(ctx, delibID, "keyB"); err == nil {
+		t.Fatal("a withdrawn agent kept standing to resolve commitments")
+	}
+}
+
+// The fallback still has to admit an agent who committed without ever
+// submitting a position — that is the case it exists for.
+func TestCommitterWithoutPositionHasStanding(t *testing.T) {
+	ctx := context.Background()
+	svc, _, delibID := commitFixture(t)
+
+	if _, err := svc.Commit(ctx, delibID, "keyC:carol", "I will run the benchmark", ""); err != nil {
+		t.Fatalf("Commit carol: %v", err)
+	}
+	if err := svc.CheckParticipant(ctx, delibID, "keyC"); err != nil {
+		t.Fatalf("an agent with an outstanding commitment should have standing: %v", err)
+	}
+}
+
 // Withdrawal invalidates the withdrawn agent's outstanding commitments by
 // marking them broken, which counts against reputation the same way a
 // caller-initiated break does — so it has to reach the ordered log too.
