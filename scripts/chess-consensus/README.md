@@ -1,169 +1,182 @@
 # chess-consensus
 
-Three agents per side must agree on one chess move. Each has its own Stockfish
-view of the position and its own temperament — aggression, defence, or
-calculation. They propose, argue, vote, run a gemot analysis, reconsider, and
-one move comes out. Then the other side does the same.
+Three agents must agree on one chess move. The best move is dealt to exactly
+one of them; the other two cannot see it at all. Whether the group finds it
+measures something a Diplomacy run cannot: not whether agents coordinate, but
+whether information actually moves between them.
 
-This is the diplomacy experiment with a scoreboard. In Diplomacy we can measure
-supply-centre spread and argue about whether a balanced board is a good outcome.
-In chess a reference engine tells us, for every single decision, exactly how much
-the group gave up. That turns "does structured deliberation improve collective
-judgement?" from a question of interpretation into a number.
+## Why it works this way
 
-## The measurement
+The first version of this harness gave each agent the same full view of the
+position and a different temperament — aggression, defence, calculation — and
+asked whether deliberation cancelled those biases. The run data killed it:
 
-Every ply, the harness scores four things against a deep reference search of the
-*same* position:
+- Deliberation and the plurality control **picked the same move on 95% of
+  plies**. The entire treatment effect rested on 2 moves out of 40.
+- **65% of positions showed zero discrimination** — every candidate scored the
+  same loss against the reference engine.
+- Nothing an agent knew was unavailable to the others, so deliberation had no
+  information to transmit. "Does discussion help?" reduced to "does adding a
+  monotone function of aggregate utility move the argmax?" — a question about
+  hand-picked weights, answerable in closed form.
 
-| decision maker | what it is |
-|----------------|------------|
-| `played` | the move the side actually made under its decision rule |
-| `plurality` | the most-proposed move, had the agents never discussed |
-| `solo:aggressor` etc. | what each agent would have played alone |
+Hidden profiles fix all three. The paradigm comes from group decision research:
+everyone shares a pool of decent-but-not-best options, and the genuinely best
+option sits with one member. No individual can reach the right answer alone, and
+a group that only aggregates first preferences fails *systematically* rather
+than randomly. Human groups reliably flunk it — they re-discuss what everyone
+already knows and discount what only one member brought.
 
-All of them are scored from the same node at the same depth, so the centipawn
-losses are directly comparable. A single 60-ply game therefore yields ~30 paired
-observations per side — enough signal to see an effect without running a
-tournament.
+The same suite, run with full information instead, reproduces the old problem
+exactly:
 
-The headline number is ACPL (average centipawn loss). If deliberation is doing
-real work, `played` should beat every `solo:` column and should beat `plurality`
-— beating the solo agents only shows that averaging three opinions helps, which
-is just the wisdom of crowds. Beating `plurality` is the claim that *persuasion*
-adds something over *aggregation*.
+| | played | plurality | gap |
+|---|---|---|---|
+| full information | 9.1 ACPL | 11.0 ACPL | 1.9 |
+| hidden profile | 7.8 ACPL | 67.1 ACPL | **59.3** |
 
-## Why the agents disagree
+Same positions, same agents, same rules. Full information cannot detect an
+effect; the hidden profile separates the arms by an order of magnitude.
 
-Every agent sees the same engine. What differs is what it wants on top of the
-evaluation. Each temperament is a vector of weights over concrete features of a
-move, denominated in centipawns:
+## The deal
 
-```
-aggressor:  check +45, forcing PV +28/ply, king proximity +11, sacrifice +25
-defender:   king shield +28, en prise -75, material loss -60, castle +35
-tactician:  forcing PV +16, check +10, en prise -30, promotion +20
-```
+At each position the reference engine ranks the candidate moves. Then:
 
-A `check` weight of 45 means literally "I will advocate a move up to 0.45 pawns
-worse if it gives check". That is the experimental lever: each agent carries a
-known, quantified bias, and the question is whether three-way deliberation
-cancels those biases or compounds them.
+- **rank 1** — the gem — goes to exactly one agent, chosen by hashing the
+  position so every arm gets an identical deal
+- **ranks 2-3** go to nobody, which guarantees the shared pool is meaningfully
+  worse than the gem
+- **ranks 4-7** are the shared pool, visible to everyone
+- **ranks 8+** are dealt round-robin as private distractors, so no agent's
+  information set is conspicuously larger than another's
 
-Features are computed from the move and the position it produces — no engine
-involvement — so an agent's taste is independent of its search. By default all
-three search to the same depth, which keeps the bias question clean. `--asymmetric`
-gives them different search budgets instead, modelling agents of genuinely
-unequal strength.
+Each agent surveys only its own set. Two of three therefore choose from the
+shared pool, so plurality voting degenerates to chance.
 
-Each agent also carries a **reservation** — a hard constraint that overrides
-preference. The defender will not endorse a move that hangs a piece no matter how
-attractive it scores. Reservations are enforced in the vote, not merely declared
-in the prose.
+**The review penalty** is the parameter the experiment turns on. When a peer
+tables a move outside your information set, you search it at reduced depth —
+you have not done the work on that line. At penalty 0 information transfers for
+free; raise it and the group has to work for it.
 
-## The deliberation
+## Metrics
 
-One gemot deliberation per side per move, at round 1 (which sidesteps the
-cooling-period rule that governs repeat analyses):
+The hidden-profile scoreboard separates two very different failures:
 
-1. **Survey.** Each agent runs MultiPV on its own engine and re-ranks the
-   candidates by its own taste.
-2. **Propose.** Each submits a position: its move, its argument, its interests,
-   its reservation, and a conviction score derived from how far its pick leads
-   its own runner-up. The move, engine eval, and bias go in `metadata`.
-3. **Cross-evaluate.** Every agent evaluates every move on the table, including
-   ones it never shortlisted — via `searchmoves`, so it forms a real opinion
-   rather than dismissing what it did not think of.
-4. **Vote.** Each agent votes -2..+2 on each peer's proposal, derived from how
-   much utility it gives up by playing that move instead of its own.
-5. **Analyse.** `analyze action:run`, then poll for cruxes, consensus,
-   bridging statements, and a compromise proposal.
-6. **Reconsider.** Each agent re-ranks with peer support priced in and may
-   switch. Switching is the persuasion event the experiment exists to measure.
-7. **Tally.** Approval voting over the final positions: highest total wins, ties
-   broken by first-choice count, then by summed *engine* evaluation — the
-   unbiased tiebreak, so the procedure does not smuggle in a taste.
-8. **Commit.** The chosen move is recorded as a gemot commitment.
+| stage | what a low number means |
+|---|---|
+| **surfaced** | the holder never proposed the gem — its own taste buried the best move before discussion began. No decision rule can recover these. |
+| **adopted** | the gem was tabled and the group still passed on it. This is a persuasion failure, and it is what the deliberation is supposed to fix. |
 
-Plies where all three agents propose the same move are skipped by default —
-there is nothing to deliberate. `--always-deliberate` forces them, which matters
-if you want a complete deliberation record rather than a cheap run.
+Plus, on identical positions, ACPL for: the rule that ran, plurality, random
+dictator (the strategyproof baseline), each agent alone, and
+`oracle:best-proposal` — the best move anyone actually proposed, which is the
+ceiling for any procedure that only chooses among proposals. The gap between the
+oracle and what was played is aggregation loss, cleanly separated from what the
+agents failed to propose in the first place.
+
+## Results
+
+40 positions, agents at depth 10, reference at depth 14, `--llm off`,
+`--gemot=false` (vote aggregation only — no analysis, since that needs an API
+key). Identical deal in every row:
+
+| review penalty | gem surfaced | gem adopted | persuasion | ACPL played | ACPL plurality |
+|---|---|---|---|---|---|
+| 0 | 38/40 (95%) | 36/40 (90%) | 95% | 7.1 | 69.8 |
+| 2 | 38/40 (95%) | 34/40 (85%) | 89% | 5.2 | 67.3 |
+| 4 | 38/40 (95%) | 35/40 (88%) | 92% | 7.8 | 67.1 |
+| 6 | 38/40 (95%) | 30/40 (75%) | 79% | 16.7 | 71.1 |
+| 8 | 38/40 (95%) | 30/40 (75%) | 79% | 13.9 | 68.1 |
+
+Surfacing is flat by construction — the holder's own survey does not depend on
+the review penalty — which is a useful invariant: if it moves, something is
+leaking between positions. Persuasion holds near 90% up to penalty 4, then drops
+to 79%. Controls at penalty 4: plurality 9/40, random dictator 15/40, both near
+the 33% you get by chance from a three-way split.
+
+**This is not yet a result about deliberation.** It is a result about a
+closed-form persuasion rule, with gemot's analysis switched off. The numbers
+that matter need `--llm full` and a live gemot server.
 
 ## Running it
 
-Stockfish is required. On Debian it installs to `/usr/games`, which is not on
+Stockfish is required. On Debian it lands in `/usr/games`, which is not on
 `PATH`; the harness looks there anyway.
 
 ```bash
-go run ./scripts/chess-consensus --gemot=false                  # offline, no API keys, ~40s
-go run ./scripts/chess-consensus --url http://localhost:8080/mcp  # full deliberation
-go run ./scripts/chess-consensus --white gemot --black plurality  # paired arms
-go run ./scripts/chess-consensus --llm full --always-deliberate   # agents actually argue
+# 1. Build a position suite (reusable across every arm and seed)
+go run ./scripts/chess-consensus --generate-suite 40 --seed 2026 \
+    --ref-depth 12 --min-gap 40 --max-gap 250 --suite-out suite40.json
+
+# 2. Run the experiment
+go run ./scripts/chess-consensus --mode suite --suite suite40.json --gemot=false
+go run ./scripts/chess-consensus --mode suite --suite suite40.json \
+    --url http://localhost:8080/mcp --llm full
+
+# 3. Sweep the parameter that matters
+for rp in 0 2 4 6 8; do
+  go run ./scripts/chess-consensus --mode suite --suite suite40.json \
+      --review-penalty $rp --out rp$rp
+done
 ```
 
-Results land in `chess-consensus-<timestamp>/`: `run.json` (every proposal,
-vote, analysis, and counterfactual), `REPORT.md`, and `game.pgn`.
+`--information full` disables the deal and gives every agent the whole board —
+the null condition, and the sanity check that the hidden profile is doing the
+work.
 
-### Modes
+`--mode game` is the original self-play demo: two councils alternating moves
+over a real game, always full information (game mode has no precomputed
+reference ranking to deal from). It makes a better demo than experiment, for all
+the reasons above.
 
-`--llm off` (default) is free and deterministic. Arguments are templated from
-real engine data — every number in an agent's case came from a search it
-actually ran — and votes come from the utility functions. This tests the
-*aggregation* question honestly without an API bill.
+## Experimental hygiene
 
-`--llm args` has the model write the arguments. `--llm full` has it vote and
-reconsider too, which is the only mode where an argument can genuinely change a
-mind. Budget roughly 12 model calls per deliberated ply per side.
+Engines are reset with `ucinewgame` before every position. Without that, hash
+state carries between positions, and since different arms issue different
+sequences of searches, the same agent returns slightly different evaluations
+depending on what ran before it — silently unpairing the comparison. The bug was
+visible as a surfacing rate that drifted with the review penalty, a quantity it
+cannot legitimately depend on.
 
-`--gemot=false` runs the same propose/vote/reconsider loop without the gemot
-analysis. Comparing it against `--gemot=true` isolates what the analysis
-contributes over plain vote aggregation.
+Plurality ties are broken by a hash of the position, never by evaluation. An
+earlier version broke them by summed engine evaluation, which handed the control
+the answer: under a hidden profile every agent proposes a different move, every
+move has exactly one proposer, and the gem holder's evaluation is always the
+highest — so the control would have "found" information it never received.
+There is a regression test for this.
 
-In offline mode, `--persuasion` (0-1, default 0.6) scales how much peer support
-is worth: a unanimous endorsement is worth `persuasion × 150` centipawns of
-personal preference. `--persuasion 0` means no agent is ever moved, which is a
-useful null control.
+## Known limits
 
-### Sides
+- **The persuasion rule is still a model.** With `--llm off`, being persuaded is
+  a centipawn-denominated pull toward peer-backed moves. Findings about
+  persuasion rates are findings about that rule until `--llm full` reproduces
+  them.
+- **Compute is not matched.** Three agents at depth 10 spend more than one agent
+  at depth 10. The `solo:` columns are counterfactuals over the same searches,
+  not a fair fight against a single agent given the group's whole budget.
+- **The reference is the same engine family**, only a few plies deeper, so its
+  errors correlate with the agents'. The noise floor is not characterised.
+- **Losses are capped at 1000cp**, the standard ACPL convention, so a single
+  catastrophe cannot swamp an average. `--max-gap` bounds the deal's difficulty
+  for the same reason.
+- **n=40 on one seed.** The suite makes larger n cheap; nothing here has been
+  replicated.
 
-`--white` and `--black` each take `gemot`, `plurality`, or `engine`. Note that
-the counterfactual columns are computed for every side regardless of its arm, so
-even a `gemot`-vs-`gemot` game gives you the full comparison — you do not need to
-run separate control games to learn what plurality would have done.
+## Next: faction chess
 
-## What a run looks like
+The Diplomacy work's most interesting finding was majority tyranny — Austria and
+Russia reaching genuine agreement that eliminated Turkey. Chess as set up here
+has no third party to harm, so that result has no analogue.
 
-From a 40-ply offline run at depth 10, reference depth 16:
+Faction chess would restore it: each agent owns a subset of the pieces and is
+scored on its own faction's outcome, while the team shares one result. Interests
+genuinely conflict, team-level ground truth still exists, and the measurable
+question becomes whether deliberation produces team-optimal or faction-optimal
+play — the v10 finding with a number attached.
 
-```
-| decision maker | ACPL | best-move rate | inacc. | mistakes | blunders |
-|----------------|------|----------------|--------|----------|----------|
-| solo:aggressor | 2.5  | 85%            | 1      | 0        | 0        |
-| solo:tactician | 4.0  | 75%            | 2      | 0        | 0        |
-| plurality      | 4.5  | 75%            | 2      | 0        | 0        |
-| gemot (played) | 6.6  | 70%            | 3      | 0        | 0        |
-| solo:defender  | 7.4  | 60%            | 3      | 0        | 0        |
-```
-
-Deliberation lost to plurality here. That is a finding, not a bug — and it is the
-kind of finding this harness exists to produce. The Diplomacy work already showed
-gemot amplifies coordination quality without determining its direction; chess
-lets us ask the sharper version of that question and get a number back.
-
-## Caveats
-
-- **N=1.** One game is one game. The per-ply counterfactuals give far more
-  statistical power than a single Diplomacy run, but a real result needs many
-  games across varied openings and seeds.
-- **The persuasion model is a model.** In `--llm off`, "being persuaded" is a
-  centipawn-denominated pull toward peer-backed moves. It is a stand-in for
-  argument, not argument itself. Findings about persuasion rates are findings
-  about that model until `--llm full` reproduces them.
-- **`en_prise` is one ply deep.** It catches outright hangs, not tactics. A
-  legal king recapture counts as free, since the square would be defended
-  otherwise.
-- **Losses are capped at 1000cp** so a single missed mate does not swamp the
-  average — the standard ACPL convention.
-- **The agents are strong.** Stockfish at depth 10 rarely blunders, so ACPL
-  differences are small in absolute terms. Lower `--depth` to widen the spread
-  and make personality effects easier to see.
+The seams are in place: `Personality` already carries interests and a
+reservation, `Agent` already scores candidates through a pluggable feature
+vector, and the counterfactual machinery already reports per-decision-maker
+outcomes. What faction chess adds is a per-agent objective and a scorer that
+tracks each faction's material and activity separately from the team's
+evaluation.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"testing"
@@ -409,7 +410,7 @@ func TestTallyApproval(t *testing.T) {
 		{AgentID: "b", MoveUCI: "d2d4", Value: 2},
 	}
 	finalPick := map[string]string{"a": "e2e4", "b": "d2d4"}
-	if got := tally(ballots, finalPick, views, options); got != "e2e4" {
+	if got := tally(ballots, finalPick, views, options, "test"); got != "e2e4" {
 		t.Errorf("tally = %s, want e2e4 (approval 3 vs 1)", got)
 	}
 }
@@ -425,7 +426,7 @@ func TestTallyTieBreaksOnEngineEval(t *testing.T) {
 		{AgentID: "a", MoveUCI: "e2e4", Value: 1},
 		{AgentID: "a", MoveUCI: "d2d4", Value: 1},
 	}
-	if got := tally(ballots, map[string]string{}, views, options); got != "e2e4" {
+	if got := tally(ballots, map[string]string{}, views, options, "test"); got != "e2e4" {
 		t.Errorf("tally = %s, want e2e4 on the evaluation tie-break", got)
 	}
 }
@@ -437,17 +438,279 @@ func TestPlurality(t *testing.T) {
 		{AgentID: "b", Move: Candidate{UCI: "d2d4", Eval: Eval{CP: 40}}},
 		{AgentID: "c", Move: Candidate{UCI: "e2e4", Eval: Eval{CP: 10}}},
 	}
-	if got := plurality(proposals, options); got != "e2e4" {
+	if got := plurality(proposals, options, "test"); got != "e2e4" {
 		t.Errorf("plurality = %s, want e2e4 (2 proposers vs 1)", got)
 	}
 
-	// A three-way split falls back to the summed engine evaluation.
+	// An even split falls to the coin, never to the evaluation — see
+	// TestPluralityCannotLeakTheGem for why that matters. All the coin owes us
+	// is a legal, reproducible answer.
 	split := []Proposal{
 		{AgentID: "a", Move: Candidate{UCI: "e2e4", Eval: Eval{CP: 10}}},
 		{AgentID: "b", Move: Candidate{UCI: "d2d4", Eval: Eval{CP: 40}}},
 	}
-	if got := plurality(split, options); got != "d2d4" {
-		t.Errorf("split plurality = %s, want d2d4 on the evaluation tie-break", got)
+	got := plurality(split, options, "test")
+	if _, ok := options[got]; !ok {
+		t.Errorf("split plurality = %q, which is not on the table", got)
+	}
+	if again := plurality(split, options, "test"); again != got {
+		t.Errorf("split plurality is not reproducible: %s then %s", got, again)
+	}
+}
+
+// candidateLines builds a fake reference ranking, best first.
+func candidateLines(evals ...int) []Line {
+	lines := make([]Line, len(evals))
+	for i, cp := range evals {
+		lines[i] = Line{Rank: i + 1, UCI: fmt.Sprintf("m%02d", i+1), Eval: Eval{CP: cp}}
+	}
+	return lines
+}
+
+func TestPartitionDealsTheGemToExactlyOneAgent(t *testing.T) {
+	lines := candidateLines(120, 90, 80, 40, 35, 30, 25, 20, 15, 10)
+	agents := []string{"aggressor", "defender", "tactician"}
+	sets, err := Partition("fen-1", lines, map[string]string{}, agents, DefaultHiddenConfig())
+	if err != nil {
+		t.Fatalf("Partition: %v", err)
+	}
+
+	if sets.GemUCI != "m01" {
+		t.Errorf("gem = %s, want the top-ranked move m01", sets.GemUCI)
+	}
+	holders := 0
+	for _, a := range agents {
+		if sets.Sees(a, sets.GemUCI) {
+			holders++
+			if a != sets.GemHolder {
+				t.Errorf("%s can see the gem but %s is the recorded holder", a, sets.GemHolder)
+			}
+		}
+	}
+	if holders != 1 {
+		t.Fatalf("%d agents can see the gem, want exactly 1", holders)
+	}
+
+	// Every agent sees the whole shared pool.
+	for _, a := range agents {
+		for _, shared := range sets.Shared {
+			if !sets.Sees(a, shared) {
+				t.Errorf("%s cannot see shared move %s", a, shared)
+			}
+		}
+	}
+
+	// Ranks between the gem and the shared pool reach nobody, which is what
+	// guarantees the shared pool is genuinely worse than the gem.
+	if len(sets.Discarded) != 2 {
+		t.Errorf("discarded %v, want ranks 2 and 3", sets.Discarded)
+	}
+	for _, a := range agents {
+		for _, d := range sets.Discarded {
+			if sets.Sees(a, d) {
+				t.Errorf("%s can see discarded move %s", a, d)
+			}
+		}
+	}
+}
+
+func TestPartitionIsStablePerPosition(t *testing.T) {
+	// The same position must deal identically every time, or arms would not be
+	// comparable — one arm could get an easier deal than another.
+	lines := candidateLines(120, 90, 80, 40, 35, 30, 25, 20, 15, 10)
+	agents := []string{"aggressor", "defender", "tactician"}
+	first, err := Partition("fen-A", lines, map[string]string{}, agents, DefaultHiddenConfig())
+	if err != nil {
+		t.Fatalf("Partition: %v", err)
+	}
+	for i := 0; i < 5; i++ {
+		again, err := Partition("fen-A", lines, map[string]string{}, agents, DefaultHiddenConfig())
+		if err != nil {
+			t.Fatalf("Partition: %v", err)
+		}
+		if again.GemHolder != first.GemHolder {
+			t.Fatalf("holder changed between deals: %s then %s", first.GemHolder, again.GemHolder)
+		}
+	}
+
+	// Different positions must not all land on the same holder.
+	seen := map[string]bool{}
+	for i := 0; i < 40; i++ {
+		d, err := Partition(fmt.Sprintf("fen-%d", i), lines, map[string]string{}, agents, DefaultHiddenConfig())
+		if err != nil {
+			t.Fatalf("Partition: %v", err)
+		}
+		seen[d.GemHolder] = true
+	}
+	if len(seen) != len(agents) {
+		t.Errorf("gem holder only ever %v across 40 positions, want all of %v", sortedKeys(seen), agents)
+	}
+}
+
+func TestPartitionRejectsThinCandidateLists(t *testing.T) {
+	if _, err := Partition("f", candidateLines(50, 40, 30), map[string]string{}, []string{"a", "b"}, DefaultHiddenConfig()); err == nil {
+		t.Error("expected an error when there are too few candidates to deal")
+	}
+	if _, err := Partition("f", candidateLines(50, 40, 30, 20, 10, 5, 1), map[string]string{}, []string{"a"}, DefaultHiddenConfig()); err == nil {
+		t.Error("expected an error with a single agent — a hidden profile needs someone to hide from")
+	}
+}
+
+// TestPluralityCannotLeakTheGem is a regression test for the subtlest bug in
+// this design. Breaking plurality ties by engine evaluation handed the control
+// the answer: under a hidden profile every agent proposes a different move, so
+// every move has one proposer, and the gem holder's evaluation is always the
+// highest. The control would have "found" information it never received.
+func TestPluralityCannotLeakTheGem(t *testing.T) {
+	gem := Candidate{UCI: "gem", Eval: Eval{CP: 200}}
+	shared1 := Candidate{UCI: "sh1", Eval: Eval{CP: 40}}
+	shared2 := Candidate{UCI: "sh2", Eval: Eval{CP: 35}}
+	options := map[string]Candidate{"gem": gem, "sh1": shared1, "sh2": shared2}
+	proposals := []Proposal{
+		{AgentID: "holder", Move: gem},
+		{AgentID: "b", Move: shared1},
+		{AgentID: "c", Move: shared2},
+	}
+
+	// Across many distinct positions with the same three-way split, plurality
+	// must land on the gem no more often than chance (1 in 3).
+	gemWins := 0
+	const trials = 300
+	for i := 0; i < trials; i++ {
+		if plurality(proposals, options, fmt.Sprintf("position-%d", i)) == "gem" {
+			gemWins++
+		}
+	}
+	rate := float64(gemWins) / trials
+	if rate > 0.45 {
+		t.Errorf("plurality picked the gem %.0f%% of the time — the tie-break is leaking move quality", rate*100)
+	}
+	if rate < 0.20 {
+		t.Errorf("plurality picked the gem only %.0f%% of the time — the tie-break is not uniform", rate*100)
+	}
+}
+
+func TestPluralityStillRespectsCounts(t *testing.T) {
+	// A move two agents proposed must win outright, however the coin falls.
+	options := map[string]Candidate{"gem": {UCI: "gem"}, "sh1": {UCI: "sh1"}}
+	proposals := []Proposal{
+		{AgentID: "holder", Move: Candidate{UCI: "gem", Eval: Eval{CP: 200}}},
+		{AgentID: "b", Move: Candidate{UCI: "sh1"}},
+		{AgentID: "c", Move: Candidate{UCI: "sh1"}},
+	}
+	for i := 0; i < 50; i++ {
+		if got := plurality(proposals, options, fmt.Sprintf("p%d", i)); got != "sh1" {
+			t.Fatalf("plurality = %s, want sh1 (2 proposers vs 1)", got)
+		}
+	}
+}
+
+func TestRandomDictatorIsUniformAndStable(t *testing.T) {
+	proposals := []Proposal{
+		{AgentID: "a", Move: Candidate{UCI: "m1"}},
+		{AgentID: "b", Move: Candidate{UCI: "m2"}},
+		{AgentID: "c", Move: Candidate{UCI: "m3"}},
+	}
+	counts := map[string]int{}
+	for i := 0; i < 300; i++ {
+		counts[randomDictator(proposals, fmt.Sprintf("p%d", i))]++
+	}
+	if len(counts) != 3 {
+		t.Errorf("dictator only ever chose %v, want all three proposals", sortedKeys(counts))
+	}
+	for uciMove, n := range counts {
+		if n < 60 || n > 160 {
+			t.Errorf("%s chosen %d/300 times — not uniform", uciMove, n)
+		}
+	}
+	// Stable for a given position.
+	first := randomDictator(proposals, "fixed")
+	for i := 0; i < 10; i++ {
+		if randomDictator(proposals, "fixed") != first {
+			t.Fatal("random dictator is not reproducible for a fixed position")
+		}
+	}
+}
+
+func TestReviewDepthPenalty(t *testing.T) {
+	a := &Agent{Personality: Personality{ID: "x"}, baseDepth: 12, reviewPenalty: 4}
+	if a.depth() != 12 {
+		t.Errorf("depth = %d, want 12", a.depth())
+	}
+	if a.reviewDepth() != 8 {
+		t.Errorf("reviewDepth = %d, want 8", a.reviewDepth())
+	}
+	// The floor holds even with an absurd penalty, so an agent always forms
+	// some opinion rather than none.
+	deep := &Agent{Personality: Personality{ID: "x"}, baseDepth: 6, reviewPenalty: 99}
+	if deep.reviewDepth() != 4 {
+		t.Errorf("reviewDepth = %d, want the floor of 4", deep.reviewDepth())
+	}
+	// Zero penalty means information transfers for free — the null condition.
+	free := &Agent{Personality: Personality{ID: "x"}, baseDepth: 12, reviewPenalty: 0}
+	if free.reviewDepth() != free.depth() {
+		t.Errorf("with no penalty reviewDepth (%d) should equal depth (%d)", free.reviewDepth(), free.depth())
+	}
+}
+
+func TestSummarizeGem(t *testing.T) {
+	sets := func(holder, gem string) *InfoSets {
+		return &InfoSets{GemUCI: gem, GemHolder: holder}
+	}
+	r := &Run{Plies: []*PlyRecord{
+		// Surfaced and adopted.
+		{Side: "suite", InfoSets: sets("aggressor", "gem"), GemProposed: true, GemAdopted: true,
+			Counterfactual: map[string]string{"plurality": "sh1", "random-dictator": "gem"}},
+		// Surfaced but talked down.
+		{Side: "suite", InfoSets: sets("defender", "gem"), GemProposed: true, GemAdopted: false,
+			Counterfactual: map[string]string{"plurality": "sh1", "random-dictator": "sh2"}},
+		// Never surfaced — the holder's own taste buried it.
+		{Side: "suite", InfoSets: sets("defender", "gem"), GemProposed: false, GemAdopted: false,
+			Counterfactual: map[string]string{"plurality": "sh1", "random-dictator": "sh1"}},
+	}}
+	g := r.summarizeGem()
+
+	if g.Positions != 3 || g.Proposed != 2 || g.Adopted != 1 {
+		t.Fatalf("positions/proposed/adopted = %d/%d/%d, want 3/2/1", g.Positions, g.Proposed, g.Adopted)
+	}
+	if math.Abs(g.AdoptedGivenProposed-0.5) > 0.001 {
+		t.Errorf("persuasion rate = %.2f, want 0.50 (adopted 1 of the 2 surfaced)", g.AdoptedGivenProposed)
+	}
+	if g.PluralityAdopted != 0 {
+		t.Errorf("plurality found the gem %d times, want 0", g.PluralityAdopted)
+	}
+	if g.DictatorAdopted != 1 {
+		t.Errorf("dictator found the gem %d times, want 1", g.DictatorAdopted)
+	}
+	if g.HolderCounts["defender"] != 2 || g.ProposedByHolder["defender"] != 1 {
+		t.Errorf("defender held %d and surfaced %d, want 2 and 1",
+			g.HolderCounts["defender"], g.ProposedByHolder["defender"])
+	}
+}
+
+func TestQualifyFiltersPositions(t *testing.T) {
+	pos := mustPosition(t, chess.StartingPosition().String())
+	opts := SuiteOpts{MinEdge: 15, MinGap: 40, SharedStart: 4, MinCandidates: 6}
+
+	if _, ok := qualify(pos, candidateLines(120, 90, 80, 40, 35, 30), opts); !ok {
+		t.Error("a position with a 30cp edge and an 80cp gap should qualify")
+	}
+	if _, ok := qualify(pos, candidateLines(120, 118, 80, 40, 35, 30), opts); ok {
+		t.Error("a 2cp edge means the gem is not uniquely best — should be rejected")
+	}
+	if _, ok := qualify(pos, candidateLines(120, 90, 88, 100, 85, 80), opts); ok {
+		t.Error("a 20cp gap to the shared pool is too small — should be rejected")
+	}
+	if _, ok := qualify(pos, candidateLines(120, 90, 80), opts); ok {
+		t.Error("too few candidates — should be rejected")
+	}
+
+	// Forced mates are excluded: they are not on the centipawn scale, and a
+	// suite dominated by them would measure tactics rather than pooling.
+	mated := candidateLines(120, 90, 80, 40, 35, 30)
+	mated[0].Eval = Eval{Mate: 3}
+	if _, ok := qualify(pos, mated, opts); ok {
+		t.Error("positions containing a forced mate should be rejected")
 	}
 }
 
@@ -608,8 +871,8 @@ func TestAgentSurveyIntegration(t *testing.T) {
 	pos := mustPosition(t, "r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4")
 	picks := map[string]string{}
 	for _, p := range defaultPersonalities() {
-		a := &Agent{Personality: p, Side: chess.White, engine: eng, baseDepth: 8}
-		list, err := a.Survey(pos)
+		a := &Agent{Personality: p, Side: chess.White, engine: eng, baseDepth: 8, reviewPenalty: 4}
+		list, err := a.Survey(pos, nil)
 		if err != nil {
 			t.Fatalf("%s survey: %v", p.ID, err)
 		}

@@ -20,6 +20,9 @@ type Candidate struct {
 	PV       []string           `json:"pv"` // principal variation, SAN
 	Features map[string]float64 `json:"features"`
 	Why      []string           `json:"why"` // bias breakdown, largest first
+	// Firsthand is false when the agent evaluated this move only after a peer
+	// proposed it, at reduced depth — its opinion is correspondingly weaker.
+	Firsthand bool `json:"firsthand"`
 }
 
 // Agent is one deliberating chess player: a personality plus its own engine view.
@@ -27,17 +30,27 @@ type Agent struct {
 	Personality Personality
 	Side        chess.Color
 
-	engine    *Engine
-	baseDepth int
-	llm       *LLM // nil when --llm=off
+	engine        *Engine
+	baseDepth     int
+	reviewPenalty int  // plies subtracted when judging a move outside its information set
+	llm           *LLM // nil when --llm=off
 }
 
 // Survey returns the agent's ranked candidate moves for a position. The engine
 // supplies the evaluations; the personality reorders them.
-func (a *Agent) Survey(pos *chess.Position) ([]Candidate, error) {
+//
+// infoSet restricts the search to the moves this agent is allowed to see. Pass
+// nil for full information — the agent then searches every legal move, which is
+// the ordinary (non-hidden-profile) setup.
+func (a *Agent) Survey(pos *chess.Position, infoSet []string) ([]Candidate, error) {
+	multiPV := a.Personality.MultiPV
+	if n := len(infoSet); n > 0 && n < multiPV {
+		multiPV = n
+	}
 	lines, err := a.engine.Analyze(pos.String(), SearchOpts{
-		Depth:   a.depth(),
-		MultiPV: a.Personality.MultiPV,
+		Depth:       a.depth(),
+		MultiPV:     multiPV,
+		SearchMoves: infoSet,
 	})
 	if err != nil {
 		return nil, err
@@ -48,9 +61,21 @@ func (a *Agent) Survey(pos *chess.Position) ([]Candidate, error) {
 // Assess evaluates one specific move, even if it never appeared in the agent's
 // own shortlist. This is how an agent forms an opinion about a peer's proposal
 // instead of dismissing anything it did not think of.
-func (a *Agent) Assess(pos *chess.Position, uciMove string) (Candidate, error) {
+//
+// firsthand distinguishes a move the agent had already searched from one a peer
+// has just put on the table. Under a hidden profile the second case gets a
+// shallower search, because the agent has not done the work on a line outside
+// its information set — it can form an opinion, but a less reliable one. That
+// review penalty is the cost of transferring information between agents, and it
+// is the parameter the whole experiment turns on: at zero, information flows
+// freely and pooling is trivial; raise it and the group has to work.
+func (a *Agent) Assess(pos *chess.Position, uciMove string, firsthand bool) (Candidate, error) {
+	depth := a.depth()
+	if !firsthand {
+		depth = a.reviewDepth()
+	}
 	lines, err := a.engine.Analyze(pos.String(), SearchOpts{
-		Depth:       a.depth(),
+		Depth:       depth,
 		MultiPV:     1,
 		SearchMoves: []string{uciMove},
 	})
@@ -61,13 +86,22 @@ func (a *Agent) Assess(pos *chess.Position, uciMove string) (Candidate, error) {
 	if len(ranked) == 0 {
 		return Candidate{}, fmt.Errorf("no evaluation for %s", uciMove)
 	}
+	ranked[0].Firsthand = firsthand
 	return ranked[0], nil
 }
 
 func (a *Agent) depth() int {
-	d := a.baseDepth + a.Personality.DepthDelta
+	return clampDepth(a.baseDepth + a.Personality.DepthDelta)
+}
+
+// reviewDepth is the budget an agent spends on a move it did not search itself.
+func (a *Agent) reviewDepth() int {
+	return clampDepth(a.depth() - a.reviewPenalty)
+}
+
+func clampDepth(d int) int {
 	if d < 4 {
-		d = 4
+		return 4
 	}
 	return d
 }

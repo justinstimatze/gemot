@@ -31,16 +31,23 @@ type Run struct {
 	Asymmetric  bool          `json:"asymmetric_depth"`
 	Template    string        `json:"template"`
 	AlwaysDelib bool          `json:"always_deliberate"`
-	StartedAt   time.Time     `json:"started_at"`
-	FinishedAt  time.Time     `json:"finished_at"`
-	Plies       []*PlyRecord  `json:"plies"`
-	Outcome     string        `json:"outcome"`
-	Method      string        `json:"method"`
-	PGN         string        `json:"pgn"`
-	FinalFEN    string        `json:"final_fen"`
-	GemotCalls  int           `json:"gemot_calls"`
-	LLMCalls    int           `json:"llm_calls"`
-	Summary     Summary       `json:"summary"`
+
+	Mode          string       `json:"mode"`           // "suite" or "game"
+	Information   string       `json:"information"`    // "hidden" or "full"
+	ReviewPenalty int          `json:"review_penalty"` // plies lost judging a move outside the information set
+	Hidden        HiddenConfig `json:"hidden_config"`
+	SuitePath     string       `json:"suite_path,omitempty"`
+	Suite         *Suite       `json:"-"` // referenced by path; not duplicated into run.json
+	StartedAt     time.Time    `json:"started_at"`
+	FinishedAt    time.Time    `json:"finished_at"`
+	Plies         []*PlyRecord `json:"plies"`
+	Outcome       string       `json:"outcome"`
+	Method        string       `json:"method"`
+	PGN           string       `json:"pgn"`
+	FinalFEN      string       `json:"final_fen"`
+	GemotCalls    int          `json:"gemot_calls"`
+	LLMCalls      int          `json:"llm_calls"`
+	Summary       Summary      `json:"summary"`
 
 	reference *Engine
 	gemot     *Gemot
@@ -77,6 +84,31 @@ type SideSummary struct {
 type Summary struct {
 	White SideSummary `json:"white"`
 	Black SideSummary `json:"black"`
+	Suite SideSummary `json:"suite"`
+	Gem   GemSummary  `json:"gem"`
+}
+
+// GemSummary is the hidden-profile scoreboard. Under a hidden profile the best
+// move sits with exactly one agent, so these three numbers say precisely where
+// a group loses information: never surfaced, or surfaced and then talked down.
+type GemSummary struct {
+	Positions int `json:"positions"`
+	// Proposed: the holder actually put the gem on the table. When this is low
+	// the group never even had the chance — the holder's own taste buried it.
+	Proposed int `json:"proposed"`
+	// Adopted: the group played it.
+	Adopted int `json:"adopted"`
+	// AdoptedGivenProposed is the persuasion rate — of the times the gem was
+	// tabled, how often did the other agents come across. This is the number
+	// the experiment exists to move.
+	AdoptedGivenProposed float64 `json:"adopted_given_proposed"`
+	// PluralityAdopted is the control. Under a clean deal it should sit near
+	// zero: two of three agents cannot see the gem, so aggregation alone
+	// cannot find it.
+	PluralityAdopted int            `json:"plurality_adopted"`
+	DictatorAdopted  int            `json:"random_dictator_adopted"`
+	HolderCounts     map[string]int `json:"gem_holder_counts"`
+	ProposedByHolder map[string]int `json:"proposed_by_holder"`
 }
 
 // score evaluates every move that was, or would have been, played at this ply
@@ -134,7 +166,57 @@ func (r *Run) score(pos *chess.Position, rec *PlyRecord) error {
 		}
 		rec.Loss[name] = lossByMove[uciMove]
 	}
+
+	// The oracle picks the best move anyone actually proposed. It is the
+	// ceiling for any procedure that only chooses among the proposals, so the
+	// gap between it and what was played is exactly the aggregation loss —
+	// separate from whatever the agents failed to propose in the first place.
+	oracleUCI, oracleLoss := "", maxLoss+1
+	for _, p := range rec.Proposals {
+		if l, ok := lossByMove[p.Move.UCI]; ok && l < oracleLoss {
+			oracleUCI, oracleLoss = p.Move.UCI, l
+		}
+	}
+	if oracleUCI != "" {
+		rec.Counterfactual["oracle:best-proposal"] = oracleUCI
+		rec.Loss["oracle:best-proposal"] = oracleLoss
+	}
 	return nil
+}
+
+// summarizeSuite aggregates a suite run into a single bucket plus the
+// hidden-profile scoreboard.
+func (r *Run) summarizeSuite() {
+	r.Summary.Suite = r.summarizeSide("suite", r.WhiteArm)
+	r.Summary.Gem = r.summarizeGem()
+}
+
+func (r *Run) summarizeGem() GemSummary {
+	g := GemSummary{HolderCounts: map[string]int{}, ProposedByHolder: map[string]int{}}
+	for _, rec := range r.Plies {
+		if rec.InfoSets == nil {
+			continue
+		}
+		g.Positions++
+		g.HolderCounts[rec.InfoSets.GemHolder]++
+		if rec.GemProposed {
+			g.Proposed++
+			g.ProposedByHolder[rec.InfoSets.GemHolder]++
+		}
+		if rec.GemAdopted {
+			g.Adopted++
+		}
+		if rec.Counterfactual["plurality"] == rec.InfoSets.GemUCI {
+			g.PluralityAdopted++
+		}
+		if rec.Counterfactual["random-dictator"] == rec.InfoSets.GemUCI {
+			g.DictatorAdopted++
+		}
+	}
+	if g.Proposed > 0 {
+		g.AdoptedGivenProposed = float64(g.Adopted) / float64(g.Proposed)
+	}
+	return g
 }
 
 func (r *Run) summarize() {
@@ -227,8 +309,10 @@ func (r *Run) write(dir string) error {
 	if err := writeJSON(filepath.Join(dir, "run.json"), r); err != nil {
 		return err
 	}
-	if err := writeFile(filepath.Join(dir, "game.pgn"), r.PGN+"\n"); err != nil {
-		return err
+	if r.PGN != "" {
+		if err := writeFile(filepath.Join(dir, "game.pgn"), r.PGN+"\n"); err != nil {
+			return err
+		}
 	}
 	return writeFile(filepath.Join(dir, "REPORT.md"), r.report())
 }
@@ -236,13 +320,21 @@ func (r *Run) write(dir string) error {
 func (r *Run) report() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# chess-consensus %s\n\n", r.ID)
-	fmt.Fprintf(&b, "White: **%s** | Black: **%s** | result: **%s** (%s)\n\n", r.WhiteArm, r.BlackArm, r.Outcome, r.Method)
+	if r.Mode == "suite" {
+		fmt.Fprintf(&b, "%d positions | rule: **%s** | information: **%s**\n\n", len(r.Plies), r.WhiteArm, r.Information)
+	} else {
+		fmt.Fprintf(&b, "White: **%s** | Black: **%s** | result: **%s** (%s)\n\n", r.WhiteArm, r.BlackArm, r.Outcome, r.Method)
+	}
 	fmt.Fprintf(&b, "Agents: %s. Search depth %d, reference depth %d. LLM mode `%s`.",
 		personaIDs(r.Personas), r.BaseDepth, r.RefDepth, r.LLMMode)
+	if r.Information == "hidden" {
+		fmt.Fprintf(&b, " Shared pool starts at rank %d (%d moves); review penalty %d plies.",
+			r.Hidden.SharedStart, r.Hidden.SharedCount, r.ReviewPenalty)
+	}
 	if r.Asymmetric {
 		b.WriteString(" Asymmetric search budgets.")
 	}
-	fmt.Fprintf(&b, " %d plies in %s.\n", len(r.Plies), r.FinishedAt.Sub(r.StartedAt).Round(time.Second))
+	fmt.Fprintf(&b, " %d decisions in %s.\n", len(r.Plies), r.FinishedAt.Sub(r.StartedAt).Round(time.Second))
 	if r.GroupID != "" && r.GemotCalls > 0 {
 		fmt.Fprintf(&b, "\ngemot group `%s` — %d tool calls.", r.GroupID, r.GemotCalls)
 	}
@@ -251,7 +343,11 @@ func (r *Run) report() string {
 	}
 	b.WriteString("\n")
 
-	for _, s := range []SideSummary{r.Summary.White, r.Summary.Black} {
+	if g := r.Summary.Gem; g.Positions > 0 {
+		b.WriteString(gemReport(g))
+	}
+
+	for _, s := range []SideSummary{r.Summary.Suite, r.Summary.White, r.Summary.Black} {
 		if s.Decisions == 0 {
 			continue
 		}
@@ -290,7 +386,41 @@ func (r *Run) report() string {
 		}
 	}
 
-	fmt.Fprintf(&b, "\n## Game\n\n```\n%s\n```\n", r.PGN)
+	if r.PGN != "" {
+		fmt.Fprintf(&b, "\n## Game\n\n```\n%s\n```\n", r.PGN)
+	}
+	return b.String()
+}
+
+// gemReport renders the hidden-profile scoreboard: whether the one agent who
+// could see the best move said so, and whether anyone listened.
+func gemReport(g GemSummary) string {
+	var b strings.Builder
+	b.WriteString("\n## Hidden profile\n\n")
+	b.WriteString("The best move was dealt to exactly one agent. Two of three could not see it at all.\n\n")
+	b.WriteString("| stage | count | rate |\n|-------|-------|------|\n")
+	pct := func(n int) string { return fmt.Sprintf("%.0f%%", 100*float64(n)/float64(g.Positions)) }
+	fmt.Fprintf(&b, "| positions dealt | %d | — |\n", g.Positions)
+	fmt.Fprintf(&b, "| gem surfaced by its holder | %d | %s |\n", g.Proposed, pct(g.Proposed))
+	fmt.Fprintf(&b, "| **gem adopted by the group** | **%d** | **%s** |\n", g.Adopted, pct(g.Adopted))
+	fmt.Fprintf(&b, "| plurality found it (control) | %d | %s |\n", g.PluralityAdopted, pct(g.PluralityAdopted))
+	fmt.Fprintf(&b, "| random dictator found it (control) | %d | %s |\n", g.DictatorAdopted, pct(g.DictatorAdopted))
+
+	fmt.Fprintf(&b, "\n**Persuasion rate: %.0f%%** — of the %d positions where the gem was tabled, the group adopted it %d times.\n",
+		g.AdoptedGivenProposed*100, g.Proposed, g.Adopted)
+
+	if g.Proposed < g.Positions {
+		fmt.Fprintf(&b, "\nOn %d positions the holder never proposed the gem — its own taste buried the best move before discussion began. No decision rule can recover those.\n",
+			g.Positions-g.Proposed)
+	}
+	if len(g.ProposedByHolder) > 0 {
+		b.WriteString("\nSurfacing rate by holder: ")
+		var parts []string
+		for _, id := range sortedKeys(g.HolderCounts) {
+			parts = append(parts, fmt.Sprintf("%s %d/%d", id, g.ProposedByHolder[id], g.HolderCounts[id]))
+		}
+		b.WriteString(strings.Join(parts, ", ") + ".\n")
+	}
 	return b.String()
 }
 

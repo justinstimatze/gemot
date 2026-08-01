@@ -1,22 +1,22 @@
-// chess-consensus runs a chess game in which each side is a three-agent gemot.
+// chess-consensus tests whether a three-agent gemot can pool information that
+// no single agent holds.
 //
-// Each agent has its own Stockfish view of the position and its own temperament
-// — aggression, defence, or calculation — expressed as a centipawn adjustment on
-// top of the engine's evaluation. The three agents propose moves, argue for
-// them, vote on each other's proposals, run a gemot analysis, and then
-// reconsider. One move comes out.
+// The default setup is a hidden profile: at each position the best move is
+// dealt to exactly one agent, while the other two choose from a shared pool of
+// worse options. No individual can reach the right answer alone, and a group
+// that merely aggregates first preferences fails systematically. Only a group
+// that actually surfaces and acts on private information wins.
 //
-// Chess makes this measurable in a way Diplomacy is not: a reference engine
-// gives ground truth for every decision, so the harness can score the consensus
-// move against what each agent would have played alone, against a no-discussion
-// plurality vote, and against the engine's own best move — all on the identical
-// stream of positions, within a single game.
+// A reference engine scores every decision, so each position yields a paired
+// comparison between the rule that ran, a no-discussion plurality vote, a
+// random dictator, each agent alone, and the best move anyone proposed.
 //
 // Usage:
 //
-//	go run ./scripts/chess-consensus --llm off --gemot off          # offline, no API keys
-//	go run ./scripts/chess-consensus --url https://gemot.dev/mcp    # full deliberation
-//	go run ./scripts/chess-consensus --white gemot --black plurality --asymmetric
+//	go run ./scripts/chess-consensus --generate-suite 40 --suite-out suite.json
+//	go run ./scripts/chess-consensus --mode suite --suite suite.json --gemot=false
+//	go run ./scripts/chess-consensus --mode suite --suite suite.json --llm full
+//	go run ./scripts/chess-consensus --mode game --information full   # self-play demo
 package main
 
 import (
@@ -69,6 +69,19 @@ func main() {
 		alwaysDelib = flag.Bool("always-deliberate", false, "deliberate even when all three agents propose the same move")
 		outDir      = flag.String("out", "", "directory for results (default: ./chess-consensus-<timestamp>)")
 		runID       = flag.String("run-id", "", "identifier for this run (default: derived from the clock)")
+
+		mode          = flag.String("mode", "suite", "suite (fixed position set, the experiment) or game (self-play, the demo)")
+		information   = flag.String("information", "hidden", "hidden (each agent sees a different slice of the candidates) or full")
+		reviewPenalty = flag.Int("review-penalty", 4, "plies subtracted when an agent judges a move outside its information set — the cost of receiving information secondhand")
+		suitePath     = flag.String("suite", "", "path to a position suite JSON file")
+		genSuite      = flag.Int("generate-suite", 0, "generate a suite of this many positions, save it, and exit")
+		suiteOut      = flag.String("suite-out", "suite.json", "where to write a generated suite")
+		seed          = flag.Uint64("seed", 2026, "seed for suite generation")
+		sharedStart   = flag.Int("shared-start", 4, "reference rank at which the shared pool begins; ranks between it and the gem are dealt to nobody")
+		sharedCount   = flag.Int("shared-count", 4, "how many candidate moves every agent can see")
+		minGap        = flag.Int("min-gap", 40, "suite filter: centipawns by which the gem must beat the shared pool")
+		minEdge       = flag.Int("min-edge", 15, "suite filter: centipawns by which the gem must be uniquely best")
+		maxGap        = flag.Int("max-gap", 300, "suite filter: upper bound on the gem's advantage, so a few extreme positions cannot dominate the averages")
 	)
 	flag.Parse()
 
@@ -100,7 +113,7 @@ func main() {
 	}
 
 	var gemot *Gemot
-	if *useGemot {
+	if *useGemot && *genSuite == 0 {
 		url := *gemotURL
 		if url == "" {
 			url = os.Getenv("GEMOT_LIVE_URL")
@@ -150,76 +163,73 @@ func main() {
 		llm:         llm,
 	}
 
-	councils := map[chess.Color]*Council{}
-	for color, armName := range map[chess.Color]string{chess.White: *whiteArm, chess.Black: *blackArm} {
-		council, err := newCouncil(color, Arm(armName), ps, binary, engineOpts, *baseDepth, llm, *llmMode)
+	// --generate-suite builds the position set and exits. Suites are reusable
+	// across arms and seeds, which is the point: every condition decides on
+	// exactly the same positions.
+	if *genSuite > 0 {
+		fmt.Printf("generating a %d-position suite (seed %d, reference depth %d)...\n", *genSuite, *seed, *refDepth)
+		suite, err := GenerateSuite(reference, SuiteOpts{
+			Count: *genSuite, Seed: *seed, RefDepth: *refDepth,
+			MultiPV: *sharedStart + *sharedCount + 4,
+			MinEdge: *minEdge, MinGap: *minGap, MaxGap: *maxGap, SharedStart: *sharedStart,
+			OpeningPlies: 6, MaxPlies: 60,
+		})
 		if err != nil {
-			fatal("building %s council: %v", color, err)
+			fatal("%v", err)
+		}
+		if err := suite.Save(*suiteOut); err != nil {
+			fatal("writing suite: %v", err)
+		}
+		fmt.Printf("wrote %d positions to %s\n", len(suite.Positions), *suiteOut)
+		return
+	}
+
+	run.Mode = *mode
+	run.Information = *information
+	run.ReviewPenalty = *reviewPenalty
+	run.Hidden = HiddenConfig{SharedStart: *sharedStart, SharedCount: *sharedCount}
+
+	fmt.Printf("chess-consensus %s (%s mode, %s information)\n", *runID, *mode, *information)
+	fmt.Printf("  agents: %s\n", personaIDs(ps))
+	fmt.Printf("  depth %d, reference depth %d, review penalty %d, llm=%s, gemot=%v\n\n",
+		*baseDepth, *refDepth, *reviewPenalty, *llmMode, *useGemot)
+
+	switch *mode {
+	case "suite":
+		if *suitePath == "" {
+			fatal("--mode suite needs --suite <file>; build one with --generate-suite N")
+		}
+		suite, err := LoadSuite(*suitePath)
+		if err != nil {
+			fatal("%v", err)
+		}
+		run.SuitePath = *suitePath
+		council, err := newCouncil(chess.White, Arm(*whiteArm), ps, binary, engineOpts, *baseDepth, *reviewPenalty, llm, *llmMode)
+		if err != nil {
+			fatal("building council: %v", err)
 		}
 		defer council.Close()
-		councils[color] = council
-	}
-	run.WhiteArm, run.BlackArm = Arm(*whiteArm), Arm(*blackArm)
+		run.WhiteArm, run.BlackArm = Arm(*whiteArm), Arm(*whiteArm)
+		run.runSuite(ctx, council, suite)
 
-	game := chess.NewGame(chess.UseNotation(chess.AlgebraicNotation{}))
-	if *startFEN != "" {
-		fen, err := chess.FEN(*startFEN)
-		if err != nil {
-			fatal("bad --start-fen: %v", err)
+	case "game":
+		councils := map[chess.Color]*Council{}
+		for color, armName := range map[chess.Color]string{chess.White: *whiteArm, chess.Black: *blackArm} {
+			council, err := newCouncil(color, Arm(armName), ps, binary, engineOpts, *baseDepth, *reviewPenalty, llm, *llmMode)
+			if err != nil {
+				fatal("building %s council: %v", color, err)
+			}
+			defer council.Close()
+			councils[color] = council
 		}
-		game = chess.NewGame(fen, chess.UseNotation(chess.AlgebraicNotation{}))
-	}
+		run.WhiteArm, run.BlackArm = Arm(*whiteArm), Arm(*blackArm)
+		run.runGame(ctx, councils, *startFEN, *maxPlies)
 
-	fmt.Printf("chess-consensus %s\n", *runID)
-	fmt.Printf("  White: %s   Black: %s\n", *whiteArm, *blackArm)
-	fmt.Printf("  agents: %s\n", personaIDs(ps))
-	fmt.Printf("  depth %d, reference depth %d, llm=%s, gemot=%v\n\n", *baseDepth, *refDepth, *llmMode, *useGemot)
-
-	for ply := 0; ply < *maxPlies; ply++ {
-		if game.Outcome() != chess.NoOutcome {
-			break
-		}
-		if err := ctx.Err(); err != nil {
-			fmt.Println("\ninterrupted — writing partial results")
-			break
-		}
-		// EligibleDraws always offers DrawOffer; only the automatic claims end
-		// the game here.
-		if claim := claimableDraw(game); claim != chess.NoMethod {
-			_ = game.Draw(claim) //nolint:errcheck
-			break
-		}
-
-		pos := game.Position()
-		council := councils[pos.Turn()]
-		label := moveLabel(pos)
-
-		record, err := council.Decide(ctx, run, pos, label)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", label, err)
-			break
-		}
-		record.Ply = ply + 1
-		if err := run.score(pos, record); err != nil {
-			fmt.Fprintf(os.Stderr, "scoring %s: %v\n", label, err)
-		}
-		run.Plies = append(run.Plies, record)
-		printPly(record)
-
-		move, err := decodeMove(pos, record.Chosen)
-		if err != nil {
-			fatal("%s: decoding chosen move %q: %v", label, record.Chosen, err)
-		}
-		if err := game.Move(move); err != nil {
-			fatal("%s: illegal move %s: %v", label, record.ChosenSAN, err)
-		}
+	default:
+		fatal("unknown --mode %q (want suite or game)", *mode)
 	}
 
 	run.FinishedAt = time.Now().UTC()
-	run.Outcome = game.Outcome().String()
-	run.Method = game.Method().String()
-	run.PGN = strings.TrimSpace(game.String())
-	run.FinalFEN = game.FEN()
 	if gemot != nil {
 		run.GemotCalls = gemot.Calls
 	}
@@ -235,6 +245,129 @@ func main() {
 	fmt.Printf("\nResults written to %s/\n", *outDir)
 }
 
+// runSuite decides every position in the suite once. Because the counterfactual
+// columns are computed for every decision, a single pass yields every arm —
+// gemot, plurality, random dictator, each agent alone, and the oracle ceiling —
+// on identical positions. No separate control runs, and no confound from arms
+// facing different boards.
+func (r *Run) runSuite(ctx context.Context, council *Council, suite *Suite) {
+	r.Suite = suite
+	for i, sp := range suite.Positions {
+		if ctx.Err() != nil {
+			fmt.Println("\ninterrupted — writing partial results")
+			break
+		}
+		pos, err := positionFromFEN(sp.FEN)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", sp.ID, err)
+			continue
+		}
+
+		var sets *InfoSets
+		if r.Information == "hidden" {
+			sans := map[string]string{}
+			for _, c := range sp.Candidates {
+				if m, err := decodeMove(pos, c.UCI); err == nil {
+					sans[c.UCI] = chess.AlgebraicNotation{}.Encode(pos, m)
+				}
+			}
+			dealt, err := Partition(sp.FEN, sp.Candidates, sans, council.agentIDs(), r.Hidden)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s: %v\n", sp.ID, err)
+				continue
+			}
+			sets = &dealt
+		}
+
+		// Every position starts from a clean engine state so runs are paired.
+		council.Reset()
+		r.reference.NewGame() //nolint:errcheck
+
+		label := fmt.Sprintf("%s %s", sp.ID, sideName(pos.Turn()))
+		rec, err := council.Decide(ctx, r, pos, label, sets)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", label, err)
+			continue
+		}
+		rec.Ply = i + 1
+		rec.Side = "suite"
+		if err := r.score(pos, rec); err != nil {
+			fmt.Fprintf(os.Stderr, "scoring %s: %v\n", label, err)
+		}
+		r.Plies = append(r.Plies, rec)
+		printPly(rec)
+	}
+	r.summarizeSuite()
+}
+
+// runGame is the original self-play demo: two councils alternating moves.
+func (r *Run) runGame(ctx context.Context, councils map[chess.Color]*Council, startFEN string, maxPlies int) {
+	game := chess.NewGame(chess.UseNotation(chess.AlgebraicNotation{}))
+	if startFEN != "" {
+		fen, err := chess.FEN(startFEN)
+		if err != nil {
+			fatal("bad --start-fen: %v", err)
+		}
+		game = chess.NewGame(fen, chess.UseNotation(chess.AlgebraicNotation{}))
+	}
+
+	for ply := 0; ply < maxPlies; ply++ {
+		if game.Outcome() != chess.NoOutcome {
+			break
+		}
+		if ctx.Err() != nil {
+			fmt.Println("\ninterrupted — writing partial results")
+			break
+		}
+		// EligibleDraws always offers DrawOffer; only the automatic claims end
+		// the game here.
+		if claim := claimableDraw(game); claim != chess.NoMethod {
+			_ = game.Draw(claim) //nolint:errcheck
+			break
+		}
+
+		pos := game.Position()
+		council := councils[pos.Turn()]
+		label := moveLabel(pos)
+
+		// Hidden profiles need a reference ranking to deal from, which game
+		// mode does not precompute — so game mode is always full information.
+		rec, err := council.Decide(ctx, r, pos, label, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", label, err)
+			break
+		}
+		rec.Ply = ply + 1
+		if err := r.score(pos, rec); err != nil {
+			fmt.Fprintf(os.Stderr, "scoring %s: %v\n", label, err)
+		}
+		r.Plies = append(r.Plies, rec)
+		printPly(rec)
+
+		move, err := decodeMove(pos, rec.Chosen)
+		if err != nil {
+			fatal("%s: decoding chosen move %q: %v", label, rec.Chosen, err)
+		}
+		if err := game.Move(move); err != nil {
+			fatal("%s: illegal move %s: %v", label, rec.ChosenSAN, err)
+		}
+	}
+
+	r.Outcome = game.Outcome().String()
+	r.Method = game.Method().String()
+	r.PGN = strings.TrimSpace(game.String())
+	r.FinalFEN = game.FEN()
+	r.summarize()
+}
+
+func positionFromFEN(fen string) (*chess.Position, error) {
+	pos := &chess.Position{}
+	if err := pos.UnmarshalText([]byte(fen)); err != nil {
+		return nil, fmt.Errorf("bad FEN %q: %w", fen, err)
+	}
+	return pos, nil
+}
+
 // Council is one side: its agents, its decision rule, and its engines.
 type Council struct {
 	Side    chess.Color
@@ -245,7 +378,7 @@ type Council struct {
 	llmMode string
 }
 
-func newCouncil(side chess.Color, arm Arm, ps []Personality, enginePath string, opts map[string]string, baseDepth int, llm *LLM, llmMode string) (*Council, error) {
+func newCouncil(side chess.Color, arm Arm, ps []Personality, enginePath string, opts map[string]string, baseDepth, reviewPenalty int, llm *LLM, llmMode string) (*Council, error) {
 	c := &Council{Side: side, Arm: arm, byID: map[string]*Agent{}, llmMode: llmMode}
 	if arm == ArmEngine {
 		e, err := NewEngine(enginePath, opts)
@@ -263,7 +396,7 @@ func newCouncil(side chess.Color, arm Arm, ps []Personality, enginePath string, 
 			return nil, err
 		}
 		c.engines = append(c.engines, e)
-		agent := &Agent{Personality: p, Side: side, engine: e, baseDepth: baseDepth}
+		agent := &Agent{Personality: p, Side: side, engine: e, baseDepth: baseDepth, reviewPenalty: reviewPenalty}
 		if llmMode != "off" {
 			agent.llm = llm
 		}
@@ -271,6 +404,28 @@ func newCouncil(side chess.Color, arm Arm, ps []Personality, enginePath string, 
 		c.byID[p.ID] = agent
 	}
 	return c, nil
+}
+
+// Reset clears every agent's transposition table. Without this the engines
+// carry hash state from one position into the next, and because different arms
+// issue different sequences of searches, the same agent would return slightly
+// different evaluations for the same position depending on what ran before it.
+// That would silently unpair the comparison the whole design rests on.
+func (c *Council) Reset() {
+	for _, e := range c.engines {
+		if err := e.NewGame(); err != nil {
+			fmt.Fprintf(os.Stderr, "  [soft] engine reset failed: %v\n", err)
+		}
+	}
+}
+
+// agentIDs returns the council's agent identifiers.
+func (c *Council) agentIDs() []string {
+	ids := make([]string, 0, len(c.Agents))
+	for _, a := range c.Agents {
+		ids = append(ids, a.Personality.ID)
+	}
+	return ids
 }
 
 func (c *Council) Close() {
@@ -301,11 +456,23 @@ type PlyRecord struct {
 	RefBest        string               `json:"reference_best_san"`
 	RefEval        Eval                 `json:"reference_eval"`
 	Seconds        float64              `json:"seconds"`
+	InfoSets       *InfoSets            `json:"info_sets,omitempty"`
+	GemProposed    bool                 `json:"gem_proposed,omitempty"` // its holder put the hidden gem on the table
+	GemAdopted     bool                 `json:"gem_adopted,omitempty"`  // the group actually played it
 	views          map[string]Candidate // uci -> reference-independent view, used only during scoring
 }
 
-// Decide runs one side's decision procedure for one position.
-func (c *Council) Decide(ctx context.Context, run *Run, pos *chess.Position, label string) (*PlyRecord, error) {
+// decisionID is a stable key for this decision, used for every pseudo-random
+// choice so that the same position deals and tie-breaks identically no matter
+// which arm is running or in what order.
+func (rec *PlyRecord) decisionID() string {
+	return rec.FEN
+}
+
+// Decide runs one side's decision procedure for one position. infoSets is nil
+// under full information; under a hidden profile it restricts what each agent
+// may search.
+func (c *Council) Decide(ctx context.Context, run *Run, pos *chess.Position, label string, infoSets *InfoSets) (*PlyRecord, error) {
 	start := time.Now()
 	rec := &PlyRecord{
 		Label:          label,
@@ -314,6 +481,7 @@ func (c *Council) Decide(ctx context.Context, run *Run, pos *chess.Position, lab
 		FEN:            pos.String(),
 		Counterfactual: map[string]string{},
 		Loss:           map[string]int{},
+		InfoSets:       infoSets,
 	}
 
 	if c.Arm == ArmEngine {
@@ -330,10 +498,15 @@ func (c *Council) Decide(ctx context.Context, run *Run, pos *chess.Position, lab
 		return rec, nil
 	}
 
-	// 1. Every agent surveys the position through its own engine and taste.
+	// 1. Every agent surveys the position — through its own engine, its own
+	//    taste, and under a hidden profile only the moves it can see.
 	shortlists := map[string][]Candidate{}
 	for _, a := range c.Agents {
-		list, err := a.Survey(pos)
+		var set []string
+		if infoSets != nil {
+			set = infoSets.Sets[a.Personality.ID]
+		}
+		list, err := a.Survey(pos, set)
 		if err != nil {
 			return nil, fmt.Errorf("%s survey: %w", a.Personality.ID, err)
 		}
@@ -359,20 +532,31 @@ func (c *Council) Decide(ctx context.Context, run *Run, pos *chess.Position, lab
 		options[p.Move.UCI] = p.Move
 	}
 	rec.Unanimous = len(options) == 1
-	rec.Counterfactual["plurality"] = plurality(rec.Proposals, options)
+	rec.Counterfactual["plurality"] = plurality(rec.Proposals, options, rec.decisionID())
+	rec.Counterfactual["random-dictator"] = randomDictator(rec.Proposals, rec.decisionID())
+	if infoSets != nil {
+		_, rec.GemProposed = options[infoSets.GemUCI]
+	}
 
 	// 3. Each agent forms a view of every move on the table, including the ones
 	//    it did not think of. Without this an agent can only ever vote against
 	//    a proposal it has not evaluated.
+	//
+	//    A move already in the agent's own shortlist costs nothing to revisit.
+	//    One a peer has just introduced gets a fresh search at review depth —
+	//    under a hidden profile that is the cost of receiving information
+	//    secondhand.
 	views := map[string]map[string]Candidate{} // agentID -> uci -> its view
 	for _, a := range c.Agents {
 		views[a.Personality.ID] = map[string]Candidate{}
 		for uciMove := range options {
 			if own := findCandidate(shortlists[a.Personality.ID], uciMove); own != nil {
-				views[a.Personality.ID][uciMove] = *own
+				firsthand := *own
+				firsthand.Firsthand = true
+				views[a.Personality.ID][uciMove] = firsthand
 				continue
 			}
-			assessed, err := a.Assess(pos, uciMove)
+			assessed, err := a.Assess(pos, uciMove, false)
 			if err != nil {
 				return nil, fmt.Errorf("%s assessing %s: %w", a.Personality.ID, uciMove, err)
 			}
@@ -381,21 +565,13 @@ func (c *Council) Decide(ctx context.Context, run *Run, pos *chess.Position, lab
 	}
 
 	if c.Arm == ArmPlurality {
-		rec.Chosen, rec.ChosenBy = rec.Counterfactual["plurality"], "plurality"
-		rec.ChosenSAN = options[rec.Chosen].SAN
-		rec.Seconds = time.Since(start).Seconds()
-		rec.views = flatten(options)
-		return rec, nil
+		return rec.finish(rec.Counterfactual["plurality"], "plurality", options, start), nil
 	}
 
 	// A unanimous table has nothing to deliberate about. Skipping it is the
 	// difference between a runnable experiment and an unaffordable one.
 	if rec.Unanimous && !run.AlwaysDelib {
-		rec.Chosen, rec.ChosenBy = rec.Counterfactual["plurality"], "unanimous"
-		rec.ChosenSAN = options[rec.Chosen].SAN
-		rec.Seconds = time.Since(start).Seconds()
-		rec.views = flatten(options)
-		return rec, nil
+		return rec.finish(rec.Counterfactual["plurality"], "unanimous", options, start), nil
 	}
 
 	// 4. Everyone votes on everyone else's proposal.
@@ -440,11 +616,7 @@ func (c *Council) Decide(ctx context.Context, run *Run, pos *chess.Position, lab
 	// 7. Approval tally over the final positions. Each agent scores every move
 	//    on the table relative to its own final pick; the highest total wins.
 	rec.FinalVotes = c.finalBallots(finalPick, views, options)
-	rec.Chosen = tally(rec.FinalVotes, finalPick, views, options)
-	rec.ChosenBy = "approval"
-	rec.ChosenSAN = options[rec.Chosen].SAN
-	rec.views = flatten(options)
-	rec.Seconds = time.Since(start).Seconds()
+	rec.finish(tally(rec.FinalVotes, finalPick, views, options, rec.decisionID()), "approval", options, start)
 
 	if run.gemot != nil && rec.DeliberationID != "" {
 		run.gemot.Commit(ctx, rec.DeliberationID, c.Agents[0].Personality.ID,
@@ -502,10 +674,26 @@ func (c *Council) finalBallots(finalPick map[string]string, views map[string]map
 	return ballots
 }
 
+// finish records the decision and the shared bookkeeping every exit path needs.
+func (rec *PlyRecord) finish(chosen, by string, options map[string]Candidate, start time.Time) *PlyRecord {
+	rec.Chosen, rec.ChosenBy = chosen, by
+	rec.ChosenSAN = options[chosen].SAN
+	rec.views = flatten(options)
+	rec.Seconds = time.Since(start).Seconds()
+	if rec.InfoSets != nil {
+		rec.GemAdopted = chosen == rec.InfoSets.GemUCI
+	}
+	return rec
+}
+
 // tally picks the winning move: highest approval total, then most first-choice
-// ballots, then highest summed engine evaluation (bias excluded, so the
-// tiebreak is not itself biased), then lexicographic for determinism.
-func tally(ballots []Vote, finalPick map[string]string, views map[string]map[string]Candidate, options map[string]Candidate) string {
+// ballots, then the cross-agent mean engine evaluation, then a deterministic
+// coin.
+//
+// The evaluation tiebreak is legitimate here and only here: by this point every
+// agent has assessed every move on the table, so the comparison uses genuinely
+// pooled information. The plurality control cannot use it — see plurality.
+func tally(ballots []Vote, finalPick map[string]string, views map[string]map[string]Candidate, options map[string]Candidate, decisionID string) string {
 	approval := map[string]int{}
 	firsts := map[string]int{}
 	engineSum := map[string]int{}
@@ -520,24 +708,15 @@ func tally(ballots []Vote, finalPick map[string]string, views map[string]map[str
 			engineSum[uciMove] += c.Eval.Centipawns()
 		}
 	}
-	moves := make([]string, 0, len(options))
-	for uciMove := range options {
-		moves = append(moves, uciMove)
-	}
-	sort.Slice(moves, func(i, j int) bool {
-		a, b := moves[i], moves[j]
+	return pickBest(options, decisionID+"|tally", func(a, b string) int {
 		if approval[a] != approval[b] {
-			return approval[a] > approval[b]
+			return approval[a] - approval[b]
 		}
 		if firsts[a] != firsts[b] {
-			return firsts[a] > firsts[b]
+			return firsts[a] - firsts[b]
 		}
-		if engineSum[a] != engineSum[b] {
-			return engineSum[a] > engineSum[b]
-		}
-		return a < b
+		return engineSum[a] - engineSum[b]
 	})
-	return moves[0]
 }
 
 // backingFrom converts peer votes — and, when gemot ran, the analysis itself —
@@ -588,30 +767,64 @@ func maxFloat(a, b float64) float64 {
 	return b
 }
 
-// plurality is the no-discussion control: the most-proposed move, tie broken by
-// summed engine evaluation across the agents that proposed it.
-func plurality(proposals []Proposal, options map[string]Candidate) string {
+// plurality is the no-discussion control: the most-proposed move, ties broken
+// by a deterministic coin.
+//
+// The coin is not laziness. An earlier version broke ties by summed engine
+// evaluation, which quietly handed the control the answer: under a hidden
+// profile each agent proposes a different move, every move has exactly one
+// proposer, and the gem holder's own evaluation is the highest — so a
+// three-way split would resolve to the gem every time and "plurality" would
+// look like it had pooled information it never received. Without discussion
+// there is no shared basis for ranking singleton proposals, so there must not
+// be one here either.
+func plurality(proposals []Proposal, options map[string]Candidate, decisionID string) string {
 	counts := map[string]int{}
-	evalSum := map[string]int{}
 	for _, p := range proposals {
 		counts[p.Move.UCI]++
-		evalSum[p.Move.UCI] += p.Move.Eval.Centipawns()
 	}
+	return pickBest(options, decisionID+"|plurality", func(a, b string) int {
+		return counts[a] - counts[b]
+	})
+}
+
+// randomDictator picks one agent's proposal at random — the classic
+// strategyproof baseline, and the floor any aggregation rule should clear.
+func randomDictator(proposals []Proposal, decisionID string) string {
+	if len(proposals) == 0 {
+		return ""
+	}
+	picks := make([]string, 0, len(proposals))
+	for _, p := range proposals {
+		picks = append(picks, p.Move.UCI)
+	}
+	sort.Strings(picks)
+	return picks[hashIndex(decisionID+"|dictator", len(picks))]
+}
+
+// pickBest returns the highest-ranked move under cmp, breaking ties with a
+// hash of the decision ID so the choice is arbitrary but reproducible — and
+// carries no information about move quality.
+func pickBest(options map[string]Candidate, salt string, cmp func(a, b string) int) string {
 	moves := make([]string, 0, len(options))
 	for uciMove := range options {
 		moves = append(moves, uciMove)
 	}
-	sort.Slice(moves, func(i, j int) bool {
-		a, b := moves[i], moves[j]
-		if counts[a] != counts[b] {
-			return counts[a] > counts[b]
+	sort.Strings(moves)
+	if len(moves) == 0 {
+		return ""
+	}
+	// Rotate by a hash so the tiebreak is not systematically lexicographic,
+	// which would correlate with board geometry.
+	offset := hashIndex(salt, len(moves))
+	best := moves[offset]
+	for i := 1; i < len(moves); i++ {
+		candidate := moves[(offset+i)%len(moves)]
+		if cmp(candidate, best) > 0 {
+			best = candidate
 		}
-		if evalSum[a] != evalSum[b] {
-			return evalSum[a] > evalSum[b]
-		}
-		return a < b
-	})
-	return moves[0]
+	}
+	return best
 }
 
 func ownMove(proposals []Proposal, agentID string) string {
