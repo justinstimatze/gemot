@@ -8,6 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/notnil/chess v1.10.0
 	github.com/stripe/stripe-go/v82 v82.5.1
 	gonum.org/v1/gonum v0.17.0
 )
