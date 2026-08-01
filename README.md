@@ -225,6 +225,8 @@ Analysis results include `integrity_warnings` flagging:
 
 **Verifiable principal delegation.** `on_behalf_of` used to be a free-text claim any agent could assert about any principal. A principal can now sign a delegation credential — *"agent A may speak for me, within scope S, until T"* — bound to the agent (so a captured credential is useless to anyone else), to a scope (so it cannot travel to another deliberation), and to a mandatory expiry. Set `principal_policy` to `advisory` or `required` on a deliberation to log or reject unbacked claims; a bad credential is rejected under every policy, including `none`. Principals register keys in the same registry agents use, so revoking a principal's key invalidates every credential it ever signed. Credentials carry a capability and never personal context — see [docs/hcp-integration.md](docs/hcp-integration.md) for why that boundary is load-bearing.
 
+**Per-action signature policy.** Set `signature_policy` on a deliberation to `advisory` (log unsigned submissions from agents that have registered a key) or `required` (reject them). Agents with no registered key are unaffected in every mode, so the policy tightens the guarantee for agents that opted into signing rather than locking anyone out. A submission that *does* carry a signature is verified under every policy, including the `none` default.
+
 **Envelope signing + replay protection.** Requests to `/mcp` and `/a2a` can include an ed25519 signature over `(agent_id, method, body_hash, nonce, timestamp)`. Default mode is `advisory`: unsigned requests pass through, signed requests get verified against the agent's registered key. Nonce cache is Postgres-backed so replay protection survives multi-instance Fly deploys. Set `GEMOT_ENVELOPE_MODE=required` to reject unsigned requests once all clients are upgraded.
 
 ### Platform
@@ -277,7 +279,7 @@ gemot/
 │   ├── principal/                   # Verifiable on_behalf_of delegation credentials
 │   ├── sanitize/                    # PII stripping, prompt injection detection
 │   └── cost/tracker.go             # Per-deliberation model-aware cost tracking
-├── tests/                           # 316 tests
+├── tests/                           # 323 tests
 ├── THREAT_MODEL.md
 ```
 

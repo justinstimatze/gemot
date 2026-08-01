@@ -181,9 +181,14 @@ relabelled as coming from a more trusted issuer than the principal used.
 
 ## Deliberately not done
 
-- **No HCP client.** HCP has two overlapping papers, a reference
-  implementation, and no adopted spec. The interface is here; a concrete
-  backend should wait for a stable target.
+- **No HCP client.** The name currently covers two overlapping papers, a
+  research demo from one of the authors ([tobinsouth/hcp-demo](https://github.com/tobinsouth/hcp-demo),
+  tied to a NeurIPS submission), a [Loyal Agents GitHub org](https://github.com/loyalagents),
+  and at least four sites claiming it — plus a separate near-identical effort
+  in [context-schema](https://github.com/vidursharma202-del/context-schema).
+  What is missing is a normative wire spec, which is the expected state for a
+  protocol at this stage rather than an oversight. The `Verifier` interface is
+  here; a concrete backend should wait for a stable target.
 - **`interests` is still self-reported.** `Position.Interests` is spliced into
   the analysis prompt (`internal/analysis/text.go`), so an agent's unverified
   claim about its own objectives is weighted by crux detection. Sourcing it
@@ -191,9 +196,11 @@ relabelled as coming from a more trusted issuer than the principal used.
   the step that runs straight into the append-only constraint above.
 - **No preference-cooperative surface.** The clustering math exists; nothing
   yet exposes it as cooperative formation.
-- **`signature_policy` still has no MCP or A2A surface**, so the two policies
-  are inconsistent in reachability: `principal_policy` is settable from either
-  transport, `signature_policy` only from Go.
+- **The MCP create surface has no in-process test.** `internal/mcp` exposes
+  only `Run` (stdio) and `RunHTTP` (binds a port), so `principal_policy` and
+  `signature_policy` are covered at the A2A surface and the service layer but
+  verified on the MCP path by hand. That gap predates these policies — every
+  MCP create param is in the same position.
 
 ## Where it does not fit
 

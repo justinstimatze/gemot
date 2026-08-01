@@ -134,7 +134,7 @@ func newServer(s *server) *sdkmcp.Server {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "deliberation",
 		Description: `Manage deliberations. Actions:
-- create: Create a new deliberation (topic, description, template, group_id, deadline_minutes, rules, visibility, max_participants, type, principal_policy)
+- create: Create a new deliberation (topic, description, template, group_id, deadline_minutes, rules, visibility, max_participants, type, principal_policy, signature_policy)
 - get: Get status/stats of a deliberation (deliberation_id)
 - list: List all deliberations (limit, offset)
 - list_by_group: List deliberations in a group (group_id, limit, offset)
@@ -225,6 +225,9 @@ type deliberationParams struct {
 	// PrincipalPolicy governs whether on_behalf_of claims must be backed by a
 	// verified delegation credential: none | advisory | required.
 	PrincipalPolicy string `json:"principal_policy,omitempty"`
+	// SignaturePolicy governs whether agents with a registered key must sign
+	// their positions and votes: none | advisory | required.
+	SignaturePolicy string `json:"signature_policy,omitempty"`
 	DeadlineMinutes int    `json:"deadline_minutes,omitempty"`
 	DeliberationID  string `json:"deliberation_id,omitempty"`
 	AgentID         string `json:"agent_id,omitempty"`
@@ -358,6 +361,9 @@ func (s *server) handleDeliberation(ctx context.Context, _ *sdkmcp.CallToolReque
 		}
 		if args.PrincipalPolicy != "" {
 			dopts = append(dopts, deliberation.WithPrincipalPolicy(args.PrincipalPolicy))
+		}
+		if args.SignaturePolicy != "" {
+			dopts = append(dopts, deliberation.WithSignaturePolicy(args.SignaturePolicy))
 		}
 		if args.DeadlineMinutes > 0 {
 			deadline := time.Now().Add(time.Duration(args.DeadlineMinutes) * time.Minute)
