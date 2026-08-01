@@ -98,6 +98,28 @@ the 33% you get by chance from a three-way split.
 closed-form persuasion rule, with gemot's analysis switched off. The numbers
 that matter need `--llm full` and a live gemot server.
 
+## Picking this up with a key
+
+Everything below runs today except the two things that matter most, because the
+environment this was built in had no `ANTHROPIC_API_KEY`:
+
+- **`llm.go` has never executed.** `NewLLM`, `complete`, `Argue`, `Vote`, and
+  `LLM.Reconsider` compile and are wired in, but no call has ever been made.
+  Expect plumbing bugs — prompt assembly, fenced-JSON parsing, the
+  out-of-range vote clamp, the "model picked a move that isn't on the table"
+  rejection — on the first keyed run.
+- **gemot's analysis has never run on this data.** The MCP round trip is
+  verified end to end (deliberations created, positions submitted with
+  metadata, votes recorded); only `analyze action:run` fails, and it fails
+  loudly rather than silently reporting an empty result.
+
+The first question worth answering: **does the crux name the information
+asymmetry?** If the analysis says the disagreement is about whether the agents
+have evaluated the same lines, the mechanism is working and that is the result.
+If the cruxes come back as generic style disagreements, the hidden profile is
+not reaching the analysis layer and the deal needs rethinking before anything
+else gets built on it.
+
 ## Running it
 
 Stockfish is required. On Debian it lands in `/usr/games`, which is not on
