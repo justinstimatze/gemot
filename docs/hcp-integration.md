@@ -190,12 +190,38 @@ cred := principal.Credential{
 cred.Signature = ed25519.Sign(principalPrivKey, cred.SigningPayload())
 ```
 
-Both the principal's key and the agent's key are registered via
-`RegisterAgentKey` — the agent's under its **stored** identity, which in hosted
-mode is `<keyID>:<agent_id>`. Registering an agent key under the unscoped name
-leaves the verifier unable to find it. Signing covers a fixed-shape
-length-prefixed record, never the JSON, so field order and whitespace in
-transit cannot change what verifies.
+Signing covers a fixed-shape length-prefixed record, never the JSON, so field
+order and whitespace in transit cannot change what verifies.
+
+### The full setup
+
+Four steps, and both transports carry all of them:
+
+1. The **principal** registers its key — `participate:register_key` for
+   `human:alice`.
+2. The **agent** generates a keypair and registers it —
+   `participate:register_key` for `alice-agent`. Both transports namespace the
+   stored identity per API key, so a client passes its own plain `agent_id` and
+   the server scopes it; there is nothing for the caller to compute.
+3. The principal signs a credential naming the agent's public key. This is the
+   only offline step, and deliberately so — the principal is a human or org,
+   not an API caller.
+4. The agent submits with `principal_credential` **and** a `signature` over
+   `auth.PositionPayload(agent_id, deliberation_id, round, content)`, signed
+   with the confirmation key.
+
+Steps 2 and 4 are what proof-of-possession costs. Step 4 is the one that
+actually constrains clients: the signature is ed25519 over gemot's canonical
+payload, which a model driving MCP tool calls cannot compute on its own. A
+credentialed agent needs a client-side helper that holds a private key.
+
+That is the security property rather than incidental friction — a credential
+usable without holding a key is a password anyone who reads the deliberation
+can copy. Casual use is not taxed: leave `principal_policy` at `none` and
+`on_behalf_of` remains the one-call unverified hint it always was.
+
+Note that the signature binds `round`, so a client that fetches state and then
+submits across a round boundary must re-sign.
 
 ## The constraint that shapes everything
 

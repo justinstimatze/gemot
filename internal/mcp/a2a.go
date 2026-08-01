@@ -287,7 +287,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 		if auditLog != nil {
 			writeOps := map[string]map[string]bool{
 				"gemot/deliberation": {"create": true, "delete": true, "set_template": true},
-				"gemot/participate":  {"submit_position": true, "vote": true, "withdraw": true},
+				"gemot/participate":  {"submit_position": true, "vote": true, "withdraw": true, "register_key": true, "revoke_key": true},
 				"gemot/analyze":      {"run": true, "propose_compromise": true, "dispute_crux": true, "challenge": true, "expert_panel": true},
 				"gemot/decide":       {"commit": true, "fulfill": true, "break": true},
 				"gemot/coordinate":   {"delegate": true, "invite": true, "generate_join_code": true, "join": true},
@@ -709,6 +709,49 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 					return
 				}
 				writeA2AResult(w, req.ID, map[string]string{"status": "agent withdrawn"})
+
+			// Key registration has to exist on this transport, not just on
+			// /mcp. Proof-of-possession means a credentialed submission is only
+			// accepted from an agent whose key is registered, so without these
+			// an A2A-only caller can present a principal_credential it has no
+			// way to ever satisfy. Scoping goes through the same scope() helper
+			// submit_position uses, so the key lands under the identity the
+			// verifier will look up.
+			case "register_key":
+				agentID := scope(str(s, "agent_id"))
+				pubB64 := str(s, "public_key")
+				if agentID == "" || pubB64 == "" {
+					writeA2AError(w, req.ID, -32602, "agent_id and public_key (base64) are required")
+					return
+				}
+				pubBytes, err := base64.StdEncoding.DecodeString(pubB64)
+				if err != nil {
+					writeA2AError(w, req.ID, -32602, fmt.Sprintf("public_key must be base64-encoded: %v", err))
+					return
+				}
+				algo := str(s, "algo")
+				if algo == "" {
+					algo = "ed25519"
+				}
+				if err := svc.RegisterAgentKey(ctx, agentID, pubBytes, algo); err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, map[string]string{
+					"status": "public key registered — future signed positions and votes will be verified against it",
+				})
+
+			case "revoke_key":
+				agentID := scope(str(s, "agent_id"))
+				if agentID == "" {
+					writeA2AError(w, req.ID, -32602, "agent_id is required")
+					return
+				}
+				if err := svc.RevokeAgentKey(ctx, agentID); err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, map[string]string{"status": "signing key revoked"})
 
 			default:
 				writeA2AError(w, req.ID, -32602, fmt.Sprintf("unknown action %q for gemot/participate", action))

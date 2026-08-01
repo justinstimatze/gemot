@@ -91,17 +91,38 @@ func credentialParams(t *testing.T, priv ed25519.PrivateKey, c principal.Credent
 	}
 }
 
-// a2aDelegation registers the principal's key plus an agent key under the
-// caller's *scoped* identity, which is where proof-of-possession looks. Returns
-// the credential params and the agent's private key for signing positions.
-func a2aDelegation(t *testing.T, svc *deliberation.Service, token, principalID, agentID string) (map[string]any, ed25519.PrivateKey) {
+// a2aRegisterKey registers an agent key *through the transport*, the way a
+// real A2A client must.
+//
+// Earlier revisions of these helpers called svc.RegisterAgentKey directly. That
+// bypass is what hid the fact that A2A had no register_key action at all: the
+// tests passed while an A2A-only client had no way to satisfy
+// proof-of-possession. Registration goes through the wire here so the setup a
+// test performs is setup a client can actually perform.
+func a2aRegisterKey(t *testing.T, chain http.Handler, token, agentID string, pub ed25519.PublicKey) {
 	t.Helper()
-	ppriv := registerPrincipal(t, svc, principalID)
-	apub, apriv := newKeypair(t)
-	scoped := payments.KeyID(token) + ":" + agentID
-	if err := svc.RegisterAgentKey(context.Background(), scoped, apub, "ed25519"); err != nil {
-		t.Fatalf("register agent key: %v", err)
+	resp := a2aCall(t, chain, token, "gemot/participate", map[string]any{
+		"action":     "register_key",
+		"agent_id":   agentID,
+		"public_key": base64.StdEncoding.EncodeToString(pub),
+	})
+	if resp.Error != nil {
+		t.Fatalf("register_key over A2A: %v", resp.Error.Message)
 	}
+}
+
+// a2aDelegation sets up a delegation entirely over the wire: the agent
+// registers its own key, and the principal signs a credential bound to it.
+// Returns the credential params and the agent's private key for signing.
+func a2aDelegation(t *testing.T, svc *deliberation.Service, chain http.Handler, token, principalID, agentID string) (map[string]any, ed25519.PrivateKey) {
+	t.Helper()
+	// The principal is not an A2A caller — it is a human or org that signs
+	// offline — so its key is registered directly.
+	ppriv := registerPrincipal(t, svc, principalID)
+
+	apub, apriv := newKeypair(t)
+	a2aRegisterKey(t, chain, token, agentID, apub)
+
 	cred := credentialParams(t, ppriv, principal.Credential{
 		Principal: principalID, Agent: agentID, AgentKey: apub,
 	})
@@ -154,7 +175,7 @@ func TestA2A_SubmitAcceptsVerifiedCredential(t *testing.T) {
 	svc, db := newTestService(t)
 	ctx := context.Background()
 	chain, token := a2aChain(t, db, svc)
-	cred, agentPriv := a2aDelegation(t, svc, token, delegPrincipal, delegAgent)
+	cred, agentPriv := a2aDelegation(t, svc, chain, token, delegPrincipal, delegAgent)
 
 	d, err := svc.CreateDeliberation(ctx, "A2A credential", "")
 	if err != nil {
@@ -200,7 +221,7 @@ func TestA2A_SubmitRejectsForgedCredential(t *testing.T) {
 	svc, db := newTestService(t)
 	ctx := context.Background()
 	chain, token := a2aChain(t, db, svc)
-	_, agentPriv := a2aDelegation(t, svc, token, delegPrincipal, delegAgent)
+	_, agentPriv := a2aDelegation(t, svc, chain, token, delegPrincipal, delegAgent)
 	_, attackerPriv := newKeypair(t)
 	agentPub := agentPriv.Public().(ed25519.PublicKey)
 
@@ -295,7 +316,7 @@ func TestA2A_LeakedCredentialIsUselessToAnotherTenant(t *testing.T) {
 	chain := mcp.A2AAuthMiddleware("test-secret", credits, rateLim, nil, nil, false)(
 		mcp.A2AHandler(svc, credits, nil, db))
 
-	cred, agentPriv := a2aDelegation(t, svc, victimTok, delegPrincipal, delegAgent)
+	cred, agentPriv := a2aDelegation(t, svc, chain, victimTok, delegPrincipal, delegAgent)
 
 	d, err := svc.CreateDeliberation(ctx, "cross-tenant replay", "")
 	if err != nil {
@@ -343,5 +364,107 @@ func TestA2A_LeakedCredentialIsUselessToAnotherTenant(t *testing.T) {
 	}
 	if !strings.Contains(evil.Error.Message, "bound to a different key") {
 		t.Errorf("error = %q, want a confirmation-key mismatch", evil.Error.Message)
+	}
+}
+
+// The full delegation flow must be completable over A2A alone. Adding
+// principal_credential to the A2A submit path without a way to register the
+// agent's key made this impossible: an A2A-only client could present a
+// credential it had no route to ever satisfy. The only step not on the wire is
+// the principal signing its credential, which is offline by design.
+func TestA2A_DelegationIsCompletableOverA2AAlone(t *testing.T) {
+	svc, db := newTestService(t)
+	ctx := context.Background()
+	chain, token := a2aChain(t, db, svc)
+
+	// Step 1 (offline): the principal registers its key and signs a credential
+	// bound to the agent key generated in step 2.
+	principalPriv := registerPrincipal(t, svc, delegPrincipal)
+	agentPub, agentPriv := newKeypair(t)
+
+	// Step 2: the agent registers its own key — over A2A.
+	a2aRegisterKey(t, chain, token, delegAgent, agentPub)
+
+	cred := credentialParams(t, principalPriv, principal.Credential{
+		Principal: delegPrincipal, Agent: delegAgent, AgentKey: agentPub,
+	})
+
+	d, err := svc.CreateDeliberation(ctx, "A2A-only delegation", "",
+		deliberation.WithPrincipalPolicy("required"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Step 3: submit, proving possession — over A2A.
+	const content = "delegated, set up entirely over A2A"
+	resp := a2aCall(t, chain, token, "gemot/participate", map[string]any{
+		"action":               "submit_position",
+		"deliberation_id":      d.ID,
+		"agent_id":             delegAgent,
+		"content":              content,
+		"on_behalf_of":         delegPrincipal,
+		"principal_credential": cred,
+		"signature": base64.StdEncoding.EncodeToString(
+			signPosition(t, agentPriv, delegAgent, d.ID, d.Round, content)),
+	})
+	if resp.Error != nil {
+		t.Fatalf("A2A-only delegation failed at submit: %v", resp.Error.Message)
+	}
+	var p struct {
+		PrincipalVerified bool `json:"principal_verified"`
+	}
+	if err := json.Unmarshal(resp.Result, &p); err != nil {
+		t.Fatalf("decode position: %v", err)
+	}
+	if !p.PrincipalVerified {
+		t.Error("principal_verified = false after a fully A2A-driven delegation")
+	}
+}
+
+// Revocation must also be reachable over A2A, otherwise an A2A client can grant
+// itself signing authority but never withdraw it.
+func TestA2A_RevokeKeyOverA2A(t *testing.T) {
+	svc, db := newTestService(t)
+	ctx := context.Background()
+	chain, token := a2aChain(t, db, svc)
+
+	pub, priv := newKeypair(t)
+	a2aRegisterKey(t, chain, token, delegAgent, pub)
+
+	d, err := svc.CreateDeliberation(ctx, "A2A revoke", "",
+		deliberation.WithSignaturePolicy("required"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// While the key is live, signature_policy=required is satisfied by signing.
+	const first = "signed while the key is live"
+	ok := a2aCall(t, chain, token, "gemot/participate", map[string]any{
+		"action": "submit_position", "deliberation_id": d.ID,
+		"agent_id": delegAgent, "content": first,
+		"signature": base64.StdEncoding.EncodeToString(
+			signPosition(t, priv, delegAgent, d.ID, d.Round, first)),
+	})
+	if ok.Error != nil {
+		t.Fatalf("signed submit: %v", ok.Error.Message)
+	}
+
+	resp := a2aCall(t, chain, token, "gemot/participate", map[string]any{
+		"action": "revoke_key", "agent_id": delegAgent,
+	})
+	if resp.Error != nil {
+		t.Fatalf("revoke_key over A2A: %v", resp.Error.Message)
+	}
+
+	// The same signature no longer verifies against any registered key.
+	const second = "signed after revocation"
+	after := a2aCall(t, chain, token, "gemot/participate", map[string]any{
+		"action": "submit_position", "deliberation_id": d.ID,
+		"agent_id": delegAgent, "content": second,
+		"signature": base64.StdEncoding.EncodeToString(
+			signPosition(t, priv, delegAgent, d.ID, d.Round, second)),
+	})
+	if after.Error == nil {
+		t.Fatal("signed submission accepted after the key was revoked over A2A")
 	}
 }
