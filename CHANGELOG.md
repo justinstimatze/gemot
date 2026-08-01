@@ -10,7 +10,9 @@ All notable changes to gemot are documented here.
 
 Both actions now load the commitment and check standing. Resolution requires participation in the commitment's own deliberation (new `Service.CheckParticipant`, mirroring `CheckAccess`'s empty-keyID admin/dev-mode convention, so anonymous behaviour is unchanged). Fulfilment additionally rejects self-attestation — it raises the committer's own trust score, so it must come from another participant. Breaking your own commitment stays allowed: admitting a broken promise is honest reporting and costs the admitter. New `GetCommitmentByID` on the store interface and both backends, since no single-commitment lookup existed.
 
-Separately, both paths now route through `orderAction` like `Commit` already did. The pledge was BFT-ordered while the verdict on it reached only the lightweight audit callback — the one write in the commitment lifecycle that escaped the tamper-evident log, in a product whose audit trail is the point. Nine regression tests added on the memory store so they run without Postgres.
+Withdrawal also invalidates the departing agent's outstanding commitments, and that path called the store directly — those breaks count against reputation identically but reached no ordered log, so it is now ordered too. Withdrawal additionally forfeits resolution standing: the participation fallback that admits an agent who committed without posting a position now requires an *outstanding* commitment, so a withdrawn agent stops being able to resolve everyone else's.
+
+Separately, all these paths now route through `orderAction` like `Commit` already did. The pledge was BFT-ordered while the verdict on it reached only the lightweight audit callback — the one write in the commitment lifecycle that escaped the tamper-evident log, in a product whose audit trail is the point. Nine regression tests added on the memory store so they run without Postgres.
 
 ## 0.13.1 — 2026-06-17
 
