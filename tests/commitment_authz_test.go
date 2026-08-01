@@ -194,6 +194,62 @@ func TestResolveMissingCommitmentIsNotFound(t *testing.T) {
 	}
 }
 
+// Withdrawal invalidates the withdrawn agent's outstanding commitments by
+// marking them broken, which counts against reputation the same way a
+// caller-initiated break does — so it has to reach the ordered log too.
+// This path wrote straight to the store and bypassed orderAction.
+func TestWithdrawalBreaksAreBFTOrdered(t *testing.T) {
+	ctx := context.Background()
+	svc, c, delibID := commitFixture(t)
+
+	before, err := svc.GetTamperEvidentLog(ctx, delibID)
+	if err != nil {
+		t.Fatalf("GetTamperEvidentLog: %v", err)
+	}
+	if err := svc.WithdrawAgent(ctx, delibID, "keyA:alice"); err != nil {
+		t.Fatalf("WithdrawAgent: %v", err)
+	}
+	// Chained HotStuff commits an entry only once later writes extend the
+	// chain, so flush before reading the log back.
+	advanceChain(t, svc, delibID)
+
+	got, err := svc.GetCommitmentByID(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetCommitmentByID: %v", err)
+	}
+	if got.Status != "broken" {
+		t.Fatalf("withdrawal should invalidate outstanding commitments, got %q", got.Status)
+	}
+
+	after, err := svc.GetTamperEvidentLog(ctx, delibID)
+	if err != nil {
+		t.Fatalf("GetTamperEvidentLog: %v", err)
+	}
+	if !hasAction(after[len(before):], "break") {
+		t.Fatal("withdrawal-triggered break never reached the tamper-evident log")
+	}
+}
+
+// advanceChain issues throwaway ordered writes so entries already proposed
+// reach the committed audit log under the two-chain rule.
+func advanceChain(t *testing.T, svc *deliberation.Service, delibID string) {
+	t.Helper()
+	for i := 0; i < 2; i++ {
+		if _, err := svc.Commit(context.Background(), delibID, "keyB:bob", "chain advance", ""); err != nil {
+			t.Fatalf("advanceChain: %v", err)
+		}
+	}
+}
+
+func hasAction(entries []deliberation.AuditLogEntry, action string) bool {
+	for _, e := range entries {
+		if e.ActionType == action {
+			return true
+		}
+	}
+	return false
+}
+
 // Commit was already BFT-ordered while fulfill and break wrote only to the
 // lightweight audit callback — the verdict on a commitment escaped the
 // tamper-evident log that the pledge was recorded in. Both now route
@@ -209,11 +265,12 @@ func TestCommitmentResolutionIsBFTOrdered(t *testing.T) {
 	if err := mcp.CoreBreakCommitment(ctx, svc, c.ID, "deadline passed", "keyB:bob", "keyB"); err != nil {
 		t.Fatalf("CoreBreakCommitment: %v", err)
 	}
+	advanceChain(t, svc, delibID)
 	after, err := svc.GetTamperEvidentLog(ctx, delibID)
 	if err != nil {
 		t.Fatalf("GetTamperEvidentLog: %v", err)
 	}
-	if len(after) <= len(before) {
+	if !hasAction(after[len(before):], "break") {
 		t.Fatal("breaking a commitment did not reach the tamper-evident log")
 	}
 }

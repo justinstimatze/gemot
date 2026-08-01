@@ -2379,6 +2379,15 @@ func (s *Service) CancelAnalysis(ctx context.Context, deliberationID string) err
 	return nil
 }
 
+const (
+	// systemActor attributes a commitment verdict the server made on its
+	// own initiative rather than on behalf of a caller.
+	systemActor = "system"
+	// withdrawalBreakReason is recorded on commitments invalidated because
+	// their author left the deliberation.
+	withdrawalBreakReason = "agent withdrew from deliberation"
+)
+
 // WithdrawAgent removes an agent from a deliberation by hiding their positions,
 // deleting their votes, and revoking their delegations.
 func (s *Service) WithdrawAgent(ctx context.Context, deliberationID, agentID string) error {
@@ -2427,11 +2436,18 @@ func (s *Service) WithdrawAgent(ctx context.Context, deliberationID, agentID str
 	if err := s.store.DeleteDelegationsByAgent(ctx, deliberationID, agentID); err != nil {
 		return fmt.Errorf("failed to revoke delegations: %w", err)
 	}
-	// Invalidate pending commitments by the withdrawn agent
+	// Invalidate pending commitments by the withdrawn agent. These breaks
+	// count against the agent's reputation exactly like a caller-initiated
+	// one, so they are ordered too — ordering first and skipping the write
+	// when it fails keeps the log authoritative for "did this happen."
+	// A failure here does not fail the withdrawal itself.
 	commitments, _ := s.store.GetCommitments(ctx, deliberationID)
 	for _, c := range commitments {
 		if c.AgentID == agentID && c.FulfilledAt == nil && c.BrokenAt == nil {
-			_ = s.store.BreakCommitment(ctx, c.ID, "agent withdrew from deliberation", "system")
+			if err := s.orderAction(ctx, "break", deliberationID, systemActor, c.ID, withdrawalBreakReason); err != nil {
+				continue
+			}
+			_ = s.store.BreakCommitment(ctx, c.ID, withdrawalBreakReason, systemActor)
 		}
 	}
 	s.emit("agent_withdrawn", deliberationID, agentID, "")
