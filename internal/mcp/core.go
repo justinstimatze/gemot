@@ -326,48 +326,23 @@ func CoreListByAgent(ctx context.Context, svc *deliberation.Service, agentID, ke
 	return svc.ListByAgent(ctx, agentID, limit, offset, effectiveKeyID)
 }
 
-// CoreFulfillCommitment marks a commitment as fulfilled.
-//
-// Fulfilment is an assertion that someone kept their word, and it feeds
-// AgentReputation's trust score directly — so the agent that made the
-// commitment is not allowed to be the one asserting it. Verification has to
-// come from another participant in the same deliberation.
+// CoreFulfillCommitment marks a commitment as fulfilled. Standing is
+// enforced in the service so it cannot be bypassed by a caller that skips
+// this wrapper; see Service.FulfillCommitment.
 func CoreFulfillCommitment(ctx context.Context, svc *deliberation.Service, commitmentID, verifiedBy, keyID string) error {
 	if commitmentID == "" {
 		return fmt.Errorf("commitment_id is required")
 	}
-	c, err := svc.GetCommitmentByID(ctx, commitmentID)
-	if err != nil {
-		return fmt.Errorf("commitment not found")
-	}
-	if err := svc.CheckParticipant(ctx, c.DeliberationID, keyID); err != nil {
-		return err
-	}
-	if keyID != "" && strings.HasPrefix(c.AgentID, keyID+":") {
-		return fmt.Errorf("access denied: a commitment cannot be fulfilled by the agent that made it")
-	}
-	return svc.FulfillCommitment(ctx, commitmentID, verifiedBy)
+	return svc.FulfillCommitment(ctx, commitmentID, verifiedBy, keyID)
 }
 
-// CoreBreakCommitment marks a commitment as broken with a reason.
-//
-// Unlike fulfilment, the committing agent may break its own commitment —
-// admitting a broken promise is honest reporting and costs the admitter.
-// Everyone else must be a participant: previously any caller holding a
-// commitment ID could mark a stranger's commitment broken in a deliberation
-// they had no part in, which silently degraded that agent's trust score.
+// CoreBreakCommitment marks a commitment as broken with a reason. Standing
+// is enforced in the service; see Service.BreakCommitment.
 func CoreBreakCommitment(ctx context.Context, svc *deliberation.Service, commitmentID, reason, verifiedBy, keyID string) error {
 	if commitmentID == "" || reason == "" {
 		return fmt.Errorf("commitment_id and reason are required")
 	}
-	c, err := svc.GetCommitmentByID(ctx, commitmentID)
-	if err != nil {
-		return fmt.Errorf("commitment not found")
-	}
-	if err := svc.CheckParticipant(ctx, c.DeliberationID, keyID); err != nil {
-		return err
-	}
-	return svc.BreakCommitment(ctx, commitmentID, reason, verifiedBy)
+	return svc.BreakCommitment(ctx, commitmentID, reason, verifiedBy, keyID)
 }
 
 // CoreAgentReputation returns an agent's commitment track record.

@@ -2061,10 +2061,23 @@ func (s *Service) GetCommitmentByID(ctx context.Context, commitmentID string) (*
 // the same reason Commit does: the verdict on a commitment is as much a
 // reputation-affecting fact as the pledge was, and a verdict that never
 // reaches the ordered log is one no audit can reconstruct or replay.
-func (s *Service) FulfillCommitment(ctx context.Context, commitmentID, verifiedBy string) error {
+// Both enforce standing themselves rather than trusting the transport to
+// have done it: these are the two writes that move an agent's reputation on
+// someone else's say-so, so the check belongs where it cannot be bypassed
+// by a future caller. keyID is the authenticated key, or "" for admin and
+// dev mode, matching CheckAccess.
+func (s *Service) FulfillCommitment(ctx context.Context, commitmentID, verifiedBy, keyID string) error {
 	c, err := s.store.GetCommitmentByID(ctx, commitmentID)
 	if err != nil {
 		return err
+	}
+	if err := s.CheckParticipant(ctx, c.DeliberationID, keyID); err != nil {
+		return err
+	}
+	// Fulfilment raises the committer's own trust score, so it may not be
+	// self-asserted. Breaking your own commitment stays allowed.
+	if keyID != "" && strings.HasPrefix(c.AgentID, keyID+":") {
+		return fmt.Errorf("access denied: a commitment cannot be fulfilled by the agent that made it")
 	}
 	// Field order is the canonical action_type|deliberation_id|agent_id|…
 	// that GetTamperEvidentLog parses; the acting agent is the verifier.
@@ -2078,9 +2091,12 @@ func (s *Service) FulfillCommitment(ctx context.Context, commitmentID, verifiedB
 	return nil
 }
 
-func (s *Service) BreakCommitment(ctx context.Context, commitmentID, reason, verifiedBy string) error {
+func (s *Service) BreakCommitment(ctx context.Context, commitmentID, reason, verifiedBy, keyID string) error {
 	c, err := s.store.GetCommitmentByID(ctx, commitmentID)
 	if err != nil {
+		return err
+	}
+	if err := s.CheckParticipant(ctx, c.DeliberationID, keyID); err != nil {
 		return err
 	}
 	if err := s.orderAction(ctx, "break", c.DeliberationID, verifiedBy, commitmentID, reason); err != nil {

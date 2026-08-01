@@ -194,6 +194,28 @@ func TestResolveMissingCommitmentIsNotFound(t *testing.T) {
 	}
 }
 
+// The checks live in the service, not the transport wrapper, so a caller
+// reaching the service directly cannot skip them. Without this the
+// guarantee would only hold for code that remembers to go through Core*.
+func TestServiceEnforcesStandingWithoutWrapper(t *testing.T) {
+	ctx := context.Background()
+	svc, c, _ := commitFixture(t)
+
+	if err := svc.BreakCommitment(ctx, c.ID, "did not ship", "keyM:mallory", "keyM"); err == nil {
+		t.Fatal("service accepted a break from a non-participant")
+	}
+	if err := svc.FulfillCommitment(ctx, c.ID, "keyA:alice", "keyA"); err == nil {
+		t.Fatal("service accepted a self-attested fulfilment")
+	}
+	got, err := svc.GetCommitmentByID(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("GetCommitmentByID: %v", err)
+	}
+	if got.Status != "active" {
+		t.Fatalf("commitment mutated despite both rejections, got %q", got.Status)
+	}
+}
+
 // Withdrawal hides an agent's positions but leaves their commitment rows
 // in place, so a fallback that accepted any commitment let a withdrawn
 // agent keep resolving everyone else's commitments in a deliberation they
