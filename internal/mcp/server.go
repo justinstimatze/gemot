@@ -175,8 +175,8 @@ func newServer(s *server) *sdkmcp.Server {
 		Description: `Commitments and reputation tracking. Actions:
 - commit: Commit to a deliberation outcome (deliberation_id, agent_id, statement; optional: conditional)
 - get_commitments: Get all commitments (deliberation_id)
-- fulfill: Mark a commitment as fulfilled (commitment_id; optional: verified_by)
-- break: Mark a commitment as broken (commitment_id, reason; optional: verified_by)
+- fulfill: Mark a commitment as fulfilled (commitment_id; optional: verified_by) — caller must be a participant in the commitment's deliberation, and cannot be the agent that made it
+- break: Mark a commitment as broken (commitment_id, reason; optional: verified_by) — caller must be a participant in the commitment's deliberation; the committing agent may break its own
 - reputation: Get an agent's commitment track record (agent_id; optional: group_id)`,
 	}, s.handleDecide)
 
@@ -1032,7 +1032,7 @@ func (s *server) handleDecide(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 		if verifiedBy == "" {
 			verifiedBy = keyID
 		}
-		if err := CoreFulfillCommitment(ctx, s.svc, args.CommitmentID, verifiedBy); err != nil {
+		if err := CoreFulfillCommitment(ctx, s.svc, args.CommitmentID, verifiedBy, keyID); err != nil {
 			return errResult(err)
 		}
 		return textResult("commitment fulfilled"), nil, nil
@@ -1042,7 +1042,7 @@ func (s *server) handleDecide(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 		if verifiedBy == "" {
 			verifiedBy = keyID
 		}
-		if err := CoreBreakCommitment(ctx, s.svc, args.CommitmentID, args.Reason, verifiedBy); err != nil {
+		if err := CoreBreakCommitment(ctx, s.svc, args.CommitmentID, args.Reason, verifiedBy, keyID); err != nil {
 			return errResult(err)
 		}
 		return textResult("commitment marked as broken"), nil, nil

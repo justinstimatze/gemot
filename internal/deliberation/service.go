@@ -83,6 +83,7 @@ type VoteStore interface {
 // CommitmentStore manages commitments and reputation.
 type CommitmentStore interface {
 	CreateCommitment(ctx context.Context, c *Commitment) error
+	GetCommitmentByID(ctx context.Context, id string) (*Commitment, error)
 	GetCommitments(ctx context.Context, deliberationID string) ([]Commitment, error)
 	GetCommitmentsByAgent(ctx context.Context, agentID string) ([]Commitment, error)
 	GetCommitmentsByGroup(ctx context.Context, groupID string) ([]Commitment, error)
@@ -336,7 +337,7 @@ type AuditLogEntry struct {
 	Height int64 `json:"height"`
 	// View is the consensus round that committed this entry.
 	View int64 `json:"view"`
-	// ActionType: submit_position, vote, commit, dispute_crux.
+	// ActionType: submit_position, vote, commit, fulfill, break, dispute_crux.
 	ActionType string `json:"action_type"`
 	// AgentID is the agent that initiated the action.
 	AgentID string `json:"agent_id"`
@@ -2048,20 +2049,48 @@ func (s *Service) GetCommitments(ctx context.Context, deliberationID string) ([]
 	return s.store.GetCommitments(ctx, deliberationID)
 }
 
+// GetCommitmentByID returns a single commitment. Callers use it to check
+// standing before resolving a commitment — the resolution paths below act
+// on a commitment ID alone, so the deliberation it belongs to has to be
+// loaded before any access decision can be made.
+func (s *Service) GetCommitmentByID(ctx context.Context, commitmentID string) (*Commitment, error) {
+	return s.store.GetCommitmentByID(ctx, commitmentID)
+}
+
+// FulfillCommitment and BreakCommitment both route through orderAction for
+// the same reason Commit does: the verdict on a commitment is as much a
+// reputation-affecting fact as the pledge was, and a verdict that never
+// reaches the ordered log is one no audit can reconstruct or replay.
 func (s *Service) FulfillCommitment(ctx context.Context, commitmentID, verifiedBy string) error {
-	err := s.store.FulfillCommitment(ctx, commitmentID, verifiedBy)
-	if err == nil {
-		s.audit("decide:fulfill", "", verifiedBy)
+	c, err := s.store.GetCommitmentByID(ctx, commitmentID)
+	if err != nil {
+		return err
 	}
-	return err
+	// Field order is the canonical action_type|deliberation_id|agent_id|…
+	// that GetTamperEvidentLog parses; the acting agent is the verifier.
+	if err := s.orderAction(ctx, "fulfill", c.DeliberationID, verifiedBy, commitmentID); err != nil {
+		return err
+	}
+	if err := s.store.FulfillCommitment(ctx, commitmentID, verifiedBy); err != nil {
+		return err
+	}
+	s.audit("decide:fulfill", c.DeliberationID, verifiedBy)
+	return nil
 }
 
 func (s *Service) BreakCommitment(ctx context.Context, commitmentID, reason, verifiedBy string) error {
-	err := s.store.BreakCommitment(ctx, commitmentID, reason, verifiedBy)
-	if err == nil {
-		s.audit("decide:break", "", verifiedBy)
+	c, err := s.store.GetCommitmentByID(ctx, commitmentID)
+	if err != nil {
+		return err
 	}
-	return err
+	if err := s.orderAction(ctx, "break", c.DeliberationID, verifiedBy, commitmentID, reason); err != nil {
+		return err
+	}
+	if err := s.store.BreakCommitment(ctx, commitmentID, reason, verifiedBy); err != nil {
+		return err
+	}
+	s.audit("decide:break", c.DeliberationID, verifiedBy)
+	return nil
 }
 
 func (s *Service) AgentReputation(ctx context.Context, agentID, groupID string) (ReputationSummary, error) {
@@ -2178,6 +2207,40 @@ func (s *Service) CheckAccess(ctx context.Context, deliberationID, keyID string)
 		return nil
 	}
 	return nil
+}
+
+// CheckParticipant reports whether keyID belongs to an agent that has taken
+// part in the given deliberation. Authenticated agent IDs are scoped as
+// "<keyID>:<name>" (see scopeAgentID), so key ownership is what a
+// participation check can actually assert.
+//
+// An empty keyID is admin or dev mode and passes, matching CheckAccess.
+func (s *Service) CheckParticipant(ctx context.Context, deliberationID, keyID string) error {
+	if keyID == "" {
+		return nil
+	}
+	prefix := keyID + ":"
+	positions, err := s.store.GetPositions(ctx, deliberationID, nil)
+	if err != nil {
+		return err
+	}
+	for _, p := range positions {
+		if strings.HasPrefix(p.AgentID, prefix) {
+			return nil
+		}
+	}
+	// An agent that has committed but not yet submitted a position still
+	// belongs to the deliberation.
+	commitments, err := s.store.GetCommitments(ctx, deliberationID)
+	if err != nil {
+		return err
+	}
+	for _, c := range commitments {
+		if strings.HasPrefix(c.AgentID, prefix) {
+			return nil
+		}
+	}
+	return fmt.Errorf("access denied: only participants in this deliberation can resolve its commitments")
 }
 
 func (s *Service) InviteAgent(ctx context.Context, deliberationID, invitedBy, invitedAgent, role, reason string) (*Invitation, error) {

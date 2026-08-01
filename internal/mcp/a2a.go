@@ -935,7 +935,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				if verifiedBy == "" {
 					verifiedBy = keyID
 				}
-				if err := CoreFulfillCommitment(ctx, svc, str(s, "commitment_id"), verifiedBy); err != nil {
+				if err := CoreFulfillCommitment(ctx, svc, str(s, "commitment_id"), verifiedBy, keyID); err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
 				}
@@ -946,7 +946,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				if verifiedBy == "" {
 					verifiedBy = keyID
 				}
-				if err := CoreBreakCommitment(ctx, svc, str(s, "commitment_id"), str(s, "reason"), verifiedBy); err != nil {
+				if err := CoreBreakCommitment(ctx, svc, str(s, "commitment_id"), str(s, "reason"), verifiedBy, keyID); err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return
 				}

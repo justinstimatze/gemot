@@ -715,6 +715,17 @@ func sortByCommitmentCreatedAt(out []deliberation.Commitment) {
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 }
 
+func (m *MemoryStore) GetCommitmentByID(_ context.Context, id string) (*deliberation.Commitment, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, ok := m.commitments[id]
+	if !ok {
+		return nil, fmt.Errorf("commitment not found: %s", id)
+	}
+	clone := *c
+	return &clone, nil
+}
+
 func (m *MemoryStore) GetCommitments(_ context.Context, deliberationID string) ([]deliberation.Commitment, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

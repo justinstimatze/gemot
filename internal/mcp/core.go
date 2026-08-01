@@ -327,17 +327,45 @@ func CoreListByAgent(ctx context.Context, svc *deliberation.Service, agentID, ke
 }
 
 // CoreFulfillCommitment marks a commitment as fulfilled.
-func CoreFulfillCommitment(ctx context.Context, svc *deliberation.Service, commitmentID, verifiedBy string) error {
+//
+// Fulfilment is an assertion that someone kept their word, and it feeds
+// AgentReputation's trust score directly — so the agent that made the
+// commitment is not allowed to be the one asserting it. Verification has to
+// come from another participant in the same deliberation.
+func CoreFulfillCommitment(ctx context.Context, svc *deliberation.Service, commitmentID, verifiedBy, keyID string) error {
 	if commitmentID == "" {
 		return fmt.Errorf("commitment_id is required")
+	}
+	c, err := svc.GetCommitmentByID(ctx, commitmentID)
+	if err != nil {
+		return fmt.Errorf("commitment not found")
+	}
+	if err := svc.CheckParticipant(ctx, c.DeliberationID, keyID); err != nil {
+		return err
+	}
+	if keyID != "" && strings.HasPrefix(c.AgentID, keyID+":") {
+		return fmt.Errorf("access denied: a commitment cannot be fulfilled by the agent that made it")
 	}
 	return svc.FulfillCommitment(ctx, commitmentID, verifiedBy)
 }
 
 // CoreBreakCommitment marks a commitment as broken with a reason.
-func CoreBreakCommitment(ctx context.Context, svc *deliberation.Service, commitmentID, reason, verifiedBy string) error {
+//
+// Unlike fulfilment, the committing agent may break its own commitment —
+// admitting a broken promise is honest reporting and costs the admitter.
+// Everyone else must be a participant: previously any caller holding a
+// commitment ID could mark a stranger's commitment broken in a deliberation
+// they had no part in, which silently degraded that agent's trust score.
+func CoreBreakCommitment(ctx context.Context, svc *deliberation.Service, commitmentID, reason, verifiedBy, keyID string) error {
 	if commitmentID == "" || reason == "" {
 		return fmt.Errorf("commitment_id and reason are required")
+	}
+	c, err := svc.GetCommitmentByID(ctx, commitmentID)
+	if err != nil {
+		return fmt.Errorf("commitment not found")
+	}
+	if err := svc.CheckParticipant(ctx, c.DeliberationID, keyID); err != nil {
+		return err
 	}
 	return svc.BreakCommitment(ctx, commitmentID, reason, verifiedBy)
 }

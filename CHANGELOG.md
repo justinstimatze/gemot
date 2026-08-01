@@ -2,6 +2,16 @@
 
 All notable changes to gemot are documented here.
 
+## Unreleased
+
+### Commitment resolution: authorization + BFT ordering — 2026-08-01
+
+`decide action:fulfill` and `decide action:break` accepted any caller holding a commitment ID. There was no participation check and no ownership check at any layer — `CoreFulfillCommitment`/`CoreBreakCommitment` validated only that the arguments were non-empty, and the store issued a bare `UPDATE ... WHERE id = $1`. Because `CheckAccess` admits anyone to an `open`-visibility deliberation (the default), commitment IDs were harvestable via `get_commitments` and then resolvable by a stranger, across deliberation boundaries. Since `AgentReputation` derives its trust score from fulfilled/broken counts, this was a remote reputation-vandalism vector against any agent whose deliberation ID was known — reachable from both the MCP and A2A transports, and covered by no test.
+
+Both actions now load the commitment and check standing. Resolution requires participation in the commitment's own deliberation (new `Service.CheckParticipant`, mirroring `CheckAccess`'s empty-keyID admin/dev-mode convention, so anonymous behaviour is unchanged). Fulfilment additionally rejects self-attestation — it raises the committer's own trust score, so it must come from another participant. Breaking your own commitment stays allowed: admitting a broken promise is honest reporting and costs the admitter. New `GetCommitmentByID` on the store interface and both backends, since no single-commitment lookup existed.
+
+Separately, both paths now route through `orderAction` like `Commit` already did. The pledge was BFT-ordered while the verdict on it reached only the lightweight audit callback — the one write in the commitment lifecycle that escaped the tamper-evident log, in a product whose audit trail is the point. Nine regression tests added on the memory store so they run without Postgres.
+
 ## 0.13.1 — 2026-06-17
 
 Close the loop on 0.13.0's private-deployment story: ship the `gemot admin create-api-key` CLI the deployment doc promised.

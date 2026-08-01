@@ -633,6 +633,20 @@ func (s *DB) GetCommitments(ctx context.Context, deliberationID string) ([]delib
 	)
 }
 
+func (s *DB) GetCommitmentByID(ctx context.Context, id string) (*deliberation.Commitment, error) {
+	out, err := s.scanCommitments(ctx,
+		`SELECT id, deliberation_id, agent_id, analysis_round, statement, COALESCE(conditional, ''), status, created_at, fulfilled_at, broken_at, COALESCE(broken_reason, ''), COALESCE(verified_by, '') FROM commitments WHERE id = $1`,
+		id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("commitment not found: %s", id)
+	}
+	return &out[0], nil
+}
+
 func (s *DB) GetCommitmentsByAgent(ctx context.Context, agentID string) ([]deliberation.Commitment, error) {
 	return s.scanCommitments(ctx,
 		`SELECT id, deliberation_id, agent_id, analysis_round, statement, COALESCE(conditional, ''), status, created_at, fulfilled_at, broken_at, COALESCE(broken_reason, ''), COALESCE(verified_by, '') FROM commitments WHERE agent_id = $1 ORDER BY created_at`,
