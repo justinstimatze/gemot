@@ -187,12 +187,30 @@ func (g *Gemot) ProposeCompromise(ctx context.Context, delibID string) (string, 
 	return resp.CompromiseProposal, nil
 }
 
+// dayFull maps full weekday names to the abbreviations Label uses, so a
+// compromise that writes "Friday at 14:00" still resolves to "Fri 14:00".
+var dayFull = map[string]string{
+	"Monday": "Mon", "Tuesday": "Tue", "Wednesday": "Wed", "Thursday": "Thu",
+	"Friday": "Fri", "Saturday": "Sat", "Sunday": "Sun",
+}
+
+// normalizeForMatch loosens slot phrasing: full day names -> abbreviations and
+// "Day at HH:MM" -> "Day HH:MM", so free-text compromises match Label().
+func normalizeForMatch(s string) string {
+	for full, ab := range dayFull {
+		s = strings.ReplaceAll(s, full, ab)
+	}
+	return strings.ReplaceAll(s, " at ", " ")
+}
+
 // parseSlot finds the earliest-occurring slot label in the compromise text —
-// the decision the synthesis names. Returns ok=false if no label appears.
+// the decision the synthesis names. Returns ok=false if no label appears. It
+// normalizes both text and labels so day-name and "at" variants still resolve.
 func parseSlot(in Instance, text string) (Slot, bool) {
+	text = normalizeForMatch(text)
 	best, bestIdx := Slot(-1), -1
 	for s := Slot(0); int(s) < in.slots(); s++ {
-		if idx := strings.Index(text, in.Label(s)); idx != -1 {
+		if idx := strings.Index(text, normalizeForMatch(in.Label(s))); idx != -1 {
 			if bestIdx == -1 || idx < bestIdx {
 				best, bestIdx = s, idx
 			}
