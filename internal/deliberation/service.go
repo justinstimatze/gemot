@@ -503,8 +503,11 @@ func (s *Service) ProposeCompromise(ctx context.Context, deliberationID string) 
 		return "", fmt.Errorf("no analysis results — run analyze first: %w", err)
 	}
 
-	if len(result.Cruxes) == 0 {
-		return "", fmt.Errorf("no cruxes detected — nothing to compromise on")
+	// Unstructured analyzers (ChatAnalyzer) produce no cruxes but preserve the
+	// raw positions as ExtractedClaims; a compromise can still be synthesized
+	// from those. Only refuse when there is genuinely nothing to work with.
+	if len(result.Cruxes) == 0 && len(result.ExtractedClaims) == 0 {
+		return "", fmt.Errorf("nothing to compromise on — analysis has no cruxes or positions")
 	}
 
 	return s.compromiser.GenerateCompromise(ctx, d.Topic, result)

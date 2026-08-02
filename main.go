@@ -142,6 +142,10 @@ func cmdServe(httpMode bool, addr string) {
 			}
 		}
 		analyzer = synth
+		if cfg.Analyzer == "chat" {
+			analyzer = analysis.NewChatAnalyzer(client)
+			fmt.Fprintln(os.Stderr, "gemot: ANALYZER=chat — unstructured control (no cruxes/clusters/synthesis)")
+		}
 	} else {
 		// config.Load already prints a one-line warning when the key is
 		// missing — no need to repeat. Just install the no-op analyzer
@@ -167,9 +171,13 @@ func cmdServe(httpMode bool, addr string) {
 		}
 		svc.SetBFTEngine(bftEngine)
 	}
-	if synth, ok := analyzer.(*analysis.Synthesizer); ok {
-		svc.SetCompromiseGenerator(synth)
-		svc.SetReframer(synth)
+	// Wire compromise/reframe by interface so any analyzer that implements
+	// them (Synthesizer, ChatAnalyzer) is a drop-in, not just *Synthesizer.
+	if cg, ok := analyzer.(deliberation.CompromiseGenerator); ok {
+		svc.SetCompromiseGenerator(cg)
+	}
+	if rf, ok := analyzer.(deliberation.Reframer); ok {
+		svc.SetReframer(rf)
 	}
 	if repWeigher != nil {
 		svc.SetReputationUpdater(repWeigher)
