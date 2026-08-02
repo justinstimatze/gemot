@@ -142,6 +142,10 @@ func cmdServe(httpMode bool, addr string) {
 			}
 		}
 		analyzer = synth
+		if cfg.Analyzer == "chat" {
+			analyzer = analysis.NewChatAnalyzer(client)
+			fmt.Fprintln(os.Stderr, "gemot: ANALYZER=chat — unstructured control (no cruxes/clusters/synthesis)")
+		}
 	} else {
 		// config.Load already prints a one-line warning when the key is
 		// missing — no need to repeat. Just install the no-op analyzer
