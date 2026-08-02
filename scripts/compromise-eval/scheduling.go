@@ -168,7 +168,7 @@ func (in Instance) RenderPosition(i int) string {
 // Generate produces `count` instances that satisfy the hidden-profile-for-
 // synthesis property, deterministically from seed. Instances that don't create
 // a genuine selection gap are rejected and resampled.
-func Generate(count int, seed int64, agents, days, perDay int) []Instance {
+func Generate(count int, seed int64, agents, days, perDay int, blockRate float64) []Instance {
 	rng := rand.New(rand.NewSource(seed))
 	out := make([]Instance, 0, count)
 	names := []string{"Ada", "Boris", "Chen", "Devi", "Ezra", "Faye"}
@@ -181,7 +181,7 @@ func Generate(count int, seed int64, agents, days, perDay int) []Instance {
 		for a := 0; a < agents; a++ {
 			ag := Agent{Name: names[a%len(names)], Blocked: map[Slot]bool{}, Pref: map[Slot]int{}}
 			for s := Slot(0); int(s) < total; s++ {
-				if rng.Float64() < 0.4 { // ~40% blocked
+				if rng.Float64() < blockRate {
 					ag.Blocked[s] = true
 				} else if rng.Float64() < 0.5 {
 					ag.Pref[s] = 1 + rng.Intn(3) // 1..3

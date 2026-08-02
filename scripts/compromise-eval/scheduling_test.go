@@ -12,7 +12,7 @@ import (
 // If this ever fails, selection could reach the optimum and the experiment
 // would be measuring nothing.
 func TestGenerateGapProperty(t *testing.T) {
-	suite := Generate(50, 2026, 3, 5, 4)
+	suite := Generate(50, 2026, 3, 5, 4, 0.4)
 	if len(suite) != 50 {
 		t.Fatalf("got %d instances, want 50", len(suite))
 	}
@@ -62,7 +62,7 @@ func TestCheckerFeasibilityAndOpt(t *testing.T) {
 }
 
 func TestRenderPositionSurfacesConstraints(t *testing.T) {
-	suite := Generate(1, 99, 3, 5, 4)
+	suite := Generate(1, 99, 3, 5, 4, 0.4)
 	in := suite[0]
 	pos := in.RenderPosition(0)
 	if !strings.Contains(pos, "proposal") {
@@ -74,8 +74,8 @@ func TestRenderPositionSurfacesConstraints(t *testing.T) {
 }
 
 func TestGenerateDeterministic(t *testing.T) {
-	a := Generate(10, 4242, 3, 5, 4)
-	b := Generate(10, 4242, 3, 5, 4)
+	a := Generate(10, 4242, 3, 5, 4, 0.4)
+	b := Generate(10, 4242, 3, 5, 4, 0.4)
 	if len(a) != len(b) {
 		t.Fatalf("lengths differ: %d vs %d", len(a), len(b))
 	}
@@ -90,7 +90,7 @@ func TestGenerateDeterministic(t *testing.T) {
 }
 
 func TestRandomDictatorPicksAProposal(t *testing.T) {
-	in := Generate(1, 1, 3, 5, 4)[0]
+	in := Generate(1, 1, 3, 5, 4, 0.4)[0]
 	rng := rand.New(rand.NewSource(1))
 	chosen := armRandomDictator(in, rng)
 	found := false

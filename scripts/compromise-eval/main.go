@@ -27,6 +27,7 @@ func main() {
 	agents := flag.Int("agents", 3, "agents per instance")
 	days := flag.Int("days", 5, "days in the grid")
 	perDay := flag.Int("perday", 4, "slots per day")
+	blockRate := flag.Float64("block-rate", 0.4, "per-agent per-slot block probability (lower it as agents grow so a feasible slot survives)")
 	show := flag.Bool("show", false, "print each instance's positions and arm choices")
 	url := flag.String("url", "", "gemot MCP URL; when set, adds a live gemot synthesis arm (e.g. http://localhost:8080/mcp)")
 	secret := flag.String("secret", os.Getenv("GEMOT_API_SECRET"), "gemot API secret (default: GEMOT_API_SECRET)")
@@ -48,7 +49,7 @@ func main() {
 	}
 	ctx := context.Background()
 
-	suite := Generate(*n, *seed, *agents, *days, *perDay)
+	suite := Generate(*n, *seed, *agents, *days, *perDay, *blockRate)
 	all := make([][]ArmResult, 0, len(suite))
 	for _, in := range suite {
 		rng := rand.New(rand.NewSource(*seed + int64(in.ID) + 1))
