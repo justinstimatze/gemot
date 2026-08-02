@@ -196,12 +196,14 @@ INSTRUCTIONS:
 - Use specific, concrete language — not vague platitudes
 - The statement should be 100-200 words
 - It should be something agents could vote on in the next round
+- If the deliberation calls for a decision among concrete options or actions, COMMIT to a specific one: name the exact option, action, or value the group should adopt. Apply the criteria and state the result — do not merely describe how to choose
 
 DO NOT:
 - Simply average the positions (that satisfies no one)
 - Ignore the cruxes (the whole point is addressing them)
 - Use hedge words like "perhaps" or "it could be argued" — be direct
 - Propose something no participant actually values
+- Describe a procedure for deciding instead of deciding — when a concrete choice is on the table, make it explicitly rather than listing criteria unapplied
 
 The goal is not unanimous agreement but maximum endorsement — a statement that a supermajority of participants would accept as a reasonable basis for moving forward, even if it's not their first choice.
 
