@@ -11,16 +11,13 @@ import (
 	"time"
 )
 
-// LLM writes the agents' arguments and casts their votes when --llm=on.
-// With --llm=off the same decisions are made by the deterministic heuristics in
-// agent.go, which keeps a full run free and reproducible; the LLM path trades
-// that for arguments that can actually persuade.
 type LLM struct {
-	apiKey  string
-	baseURL string
-	model   string
-	client  *http.Client
-	Calls   int
+	apiKey    string
+	baseURL   string
+	model     string
+	client    *http.Client
+	retryBase time.Duration // base backoff between retries; 0 in tests
+	Calls     int
 }
 
 func NewLLM(model string) (*LLM, error) {
@@ -33,10 +30,11 @@ func NewLLM(model string) (*LLM, error) {
 		base = "https://api.anthropic.com"
 	}
 	return &LLM{
-		apiKey:  key,
-		baseURL: strings.TrimSuffix(base, "/"),
-		model:   model,
-		client:  &http.Client{Timeout: 2 * time.Minute},
+		apiKey:    key,
+		baseURL:   strings.TrimSuffix(base, "/"),
+		model:     model,
+		client:    &http.Client{Timeout: 2 * time.Minute},
+		retryBase: 500 * time.Millisecond,
 	}, nil
 }
 
@@ -51,39 +49,66 @@ func (l *LLM) complete(system, user string, maxTokens int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequest("POST", l.baseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("x-api-key", l.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("content-type", "application/json")
 
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return "", err
+	const maxAttempts = 4
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff. retryBase is 0 under test, so this is free there.
+			time.Sleep(l.retryBase << (attempt - 1))
+		}
+
+		req, err := http.NewRequest("POST", l.baseURL+"/v1/messages", bytes.NewReader(body))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("x-api-key", l.apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("content-type", "application/json")
+
+		resp, err := l.client.Do(req)
+		if err != nil {
+			// Transport-level failures (timeouts, connection resets) are worth a retry.
+			lastErr = err
+			continue
+		}
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close() //nolint:errcheck
+		l.Calls++
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			apiErr := fmt.Errorf("anthropic API %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+			if retryableStatus(resp.StatusCode) {
+				lastErr = apiErr
+				continue
+			}
+			return "", apiErr
+		}
+
+		var parsed struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if err := json.Unmarshal(respBody, &parsed); err != nil {
+			return "", err
+		}
+		// Concatenate every text block: a response may lead with a non-text block
+		// (e.g. thinking) and taking only Content[0] would silently drop the answer.
+		var text strings.Builder
+		for _, c := range parsed.Content {
+			text.WriteString(c.Text)
+		}
+		if text.Len() == 0 {
+			return "", fmt.Errorf("empty response")
+		}
+		return text.String(), nil
 	}
-	defer resp.Body.Close() //nolint:errcheck
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	l.Calls++
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("anthropic API %d: %s", resp.StatusCode, truncate(string(respBody), 200))
-	}
-	var parsed struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return "", err
-	}
-	if len(parsed.Content) == 0 {
-		return "", fmt.Errorf("empty response")
-	}
-	return parsed.Content[0].Text, nil
+	return "", fmt.Errorf("anthropic API: giving up after %d attempts: %w", maxAttempts, lastErr)
 }
 
 func (l *LLM) systemFor(p Personality) string {
@@ -164,19 +189,27 @@ Vote on the merits of the move and the argument, not on whose idea it was. If th
 		return 0, "", err
 	}
 	var parsed struct {
-		Value  int    `json:"value"`
-		Caveat string `json:"caveat"`
+		Value  float64 `json:"value"`
+		Caveat string  `json:"caveat"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(out)), &parsed); err != nil {
 		return 0, "", fmt.Errorf("parsing vote: %w (raw: %s)", err, truncate(out, 120))
 	}
-	if parsed.Value < -2 {
-		parsed.Value = -2
+	// The prompt asks for an integer in -2..2, but models occasionally emit 2.0
+	// or a value a hair outside the range. Round to nearest, then clamp, rather
+	// than failing the whole vote. A float json field also accepts an integer,
+	// so this loosens parsing without rejecting well-formed answers.
+	v := int(parsed.Value + 0.5)
+	if parsed.Value < 0 {
+		v = int(parsed.Value - 0.5)
 	}
-	if parsed.Value > 2 {
-		parsed.Value = 2
+	if v < -2 {
+		v = -2
 	}
-	return parsed.Value, parsed.Caveat, nil
+	if v > 2 {
+		v = 2
+	}
+	return v, parsed.Caveat, nil
 }
 
 // Reconsider asks the agent, having seen gemot's analysis, which move it now
@@ -230,10 +263,15 @@ Reply with JSON only:
 	if err := json.Unmarshal([]byte(extractJSON(out)), &parsed); err != nil {
 		return "", "", fmt.Errorf("parsing reconsider: %w (raw: %s)", err, truncate(out, 120))
 	}
-	if _, ok := options[parsed.UCI]; !ok {
+	// Resolve the selection against the table. UCI is canonically lowercase
+	// (including the promotion suffix, e7e8q), but models also echo it as e7e8Q,
+	// with stray whitespace, or as SAN ("e5", "O-O") in the uci field. Accept all
+	// of those; reject only genuinely off-table moves.
+	uci, ok := resolveSelection(parsed.UCI, options)
+	if !ok {
 		return "", "", fmt.Errorf("agent picked %q which is not on the table", parsed.UCI)
 	}
-	return parsed.UCI, parsed.Reason, nil
+	return uci, parsed.Reason, nil
 }
 
 // extractJSON pulls the first JSON object out of a response that may be wrapped
@@ -265,4 +303,62 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "..."
+}
+
+// retryableStatus reports whether an Anthropic HTTP status is worth retrying.
+// 429 (rate limit) and 5xx — including the Anthropic-specific 529 "overloaded"
+// — are transient; a 4xx like 400/401/403 is our own fault and would fail
+// identically on retry.
+func retryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, // 429
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		http.StatusGatewayTimeout,      // 504
+		529:                            // overloaded (Anthropic-specific)
+		return true
+	}
+	return false
+}
+
+// resolveSelection maps a model's chosen move onto a canonical UCI key in the
+// options table. It accepts canonical UCI, case/whitespace variants, and SAN
+// ("e5", "O-O") echoed into the uci field — a common model slip that would
+// otherwise be rejected as off-table — returning the matching UCI key.
+func resolveSelection(sel string, options map[string]Candidate) (string, bool) {
+	if uci := strings.ToLower(strings.TrimSpace(sel)); uci != "" {
+		if _, ok := options[uci]; ok {
+			return uci, true
+		}
+	}
+	want := normalizeSAN(sel)
+	if want == "" {
+		return "", false
+	}
+	for uci, c := range options {
+		if normalizeSAN(c.SAN) == want {
+			return uci, true
+		}
+	}
+	return "", false
+}
+
+// normalizeSAN canonicalizes a SAN string for tolerant comparison: it unifies
+// castling zeros, drops capture/check/mate/annotation marks, and lowercases, so
+// "Nxe5+", "Ne5", and "nxe5" compare equal. A target square is either occupied
+// or empty for a given mover, so dropping "x" cannot collide a capture with a
+// non-capture to the same square.
+func normalizeSAN(s string) string {
+	s = strings.NewReplacer(
+		"0", "o", // 0-0 castling -> o-o
+		"O", "o",
+		"x", "",
+		"+", "",
+		"#", "",
+		"!", "",
+		"?", "",
+		" ", "",
+	).Replace(strings.TrimSpace(s))
+	return strings.ToLower(s)
 }

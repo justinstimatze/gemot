@@ -49,6 +49,10 @@ const (
 )
 
 func main() {
+	// Load .env so ANTHROPIC_API_KEY, GEMOT_API_SECRET, GEMOT_LIVE_URL etc. are
+	// available without a shell wrapper. Values already in the environment win.
+	loadDotEnv()
+
 	var (
 		enginePath  = flag.String("engine", "stockfish", "path to a UCI engine binary")
 		baseDepth   = flag.Int("depth", 12, "search depth for the agents")
@@ -919,20 +923,35 @@ func printPly(rec *PlyRecord) {
 		rec.Label, rec.ChosenSAN, rec.ChosenBy, loss, strings.Join(picks, " "), extra)
 }
 
-func gemotSecret() string {
-	if s := os.Getenv("GEMOT_API_SECRET"); s != "" {
-		return s
-	}
+// loadDotEnv reads .env from the working directory and exports any key not
+// already set in the environment (existing values win). Values may be quoted.
+// The repo does not use godotenv; this matches the hand-rolled loader in the
+// other scripts/ commands.
+func loadDotEnv() {
 	data, err := os.ReadFile(".env")
 	if err != nil {
-		return ""
+		return
 	}
 	for _, line := range strings.Split(string(data), "\n") {
-		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "GEMOT_API_SECRET="); ok {
-			return strings.Trim(rest, `"'`)
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		k = strings.TrimSpace(k)
+		v = strings.Trim(strings.TrimSpace(v), `"'`)
+		if os.Getenv(k) == "" {
+			_ = os.Setenv(k, v)
 		}
 	}
-	return ""
+}
+
+func gemotSecret() string {
+	// .env is loaded into the environment by loadDotEnv at startup.
+	return os.Getenv("GEMOT_API_SECRET")
 }
 
 func fatal(format string, args ...any) {
