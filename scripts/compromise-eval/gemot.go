@@ -187,6 +187,25 @@ func (g *Gemot) ProposeCompromise(ctx context.Context, delibID string) (string, 
 	return resp.CompromiseProposal, nil
 }
 
+// ProposeCompromiseChoice runs forced-choice synthesis: the server selects
+// exactly one of the supplied option labels. Returns (statement, selected).
+func (g *Gemot) ProposeCompromiseChoice(ctx context.Context, delibID string, options []string) (string, string, error) {
+	out, err := g.Call(ctx, "analyze", map[string]any{
+		"action": "propose_compromise", "deliberation_id": delibID, "options": options,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	var resp struct {
+		CompromiseProposal string `json:"compromise_proposal"`
+		SelectedOption     string `json:"selected_option"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return "", "", fmt.Errorf("parse choice compromise: %w", err)
+	}
+	return resp.CompromiseProposal, resp.SelectedOption, nil
+}
+
 // dayFull maps full weekday names to the abbreviations Label uses, so a
 // compromise that writes "Friday at 14:00" still resolves to "Fri 14:00".
 var dayFull = map[string]string{
@@ -235,7 +254,7 @@ func voteValue(in Instance, voter int, proposerSlot Slot) int {
 // RunGemotArm runs one instance through a live gemot server and returns the
 // slot its synthesized compromise names. ok is false if any step fails or the
 // compromise names no slot (scored as infeasible by the caller).
-func RunGemotArm(ctx context.Context, g *Gemot, in Instance, template, groupID string) (Slot, string, bool) {
+func RunGemotArm(ctx context.Context, g *Gemot, in Instance, template, groupID, mode string) (Slot, string, bool) {
 	var slotList []string
 	for s := Slot(0); int(s) < in.slots(); s++ {
 		slotList = append(slotList, in.Label(s))
@@ -272,6 +291,28 @@ func RunGemotArm(ctx context.Context, g *Gemot, in Instance, template, groupID s
 		fmt.Printf("    [gemot] analyze failed: %v\n", err)
 		return -1, "", false
 	}
+	if mode == "choice" {
+		var opts []string
+		for sl := Slot(0); int(sl) < in.slots(); sl++ {
+			opts = append(opts, in.Label(sl))
+		}
+		stmt, selected, err := g.ProposeCompromiseChoice(ctx, delibID, opts)
+		if err != nil {
+			fmt.Printf("    [gemot] propose_compromise (choice) failed: %v\n", err)
+			return -1, "", false
+		}
+		for sl := Slot(0); int(sl) < in.slots(); sl++ {
+			if in.Label(sl) == selected {
+				return sl, stmt, true
+			}
+		}
+		if slot, ok := parseSlot(in, selected); ok {
+			return slot, stmt, true
+		}
+		fmt.Printf("    [gemot] choice returned unmatched option: %q\n", selected)
+		return -1, stmt, false
+	}
+
 	compromise, err := g.ProposeCompromise(ctx, delibID)
 	if err != nil {
 		fmt.Printf("    [gemot] propose_compromise failed: %v\n", err)

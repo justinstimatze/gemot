@@ -32,6 +32,7 @@ func main() {
 	secret := flag.String("secret", os.Getenv("GEMOT_API_SECRET"), "gemot API secret (default: GEMOT_API_SECRET)")
 	template := flag.String("template", "negotiation", "deliberation template for the gemot arm")
 	armLabel := flag.String("arm-label", "gemot", "scoreboard label for the gemot arm")
+	gemotMode := flag.String("gemot-mode", "free", "gemot compromise mode: free (synthesis) or choice (forced-choice over all slots)")
 	flag.Parse()
 
 	if *agents < 2 || *agents > 6 {
@@ -54,7 +55,7 @@ func main() {
 		results := RunDeterministic(in, rng)
 		if g != nil {
 			start := time.Now()
-			slot, _, ok := RunGemotArm(ctx, g, in, *template, fmt.Sprintf("compromise_eval_%d_%d", *seed, in.ID))
+			slot, _, ok := RunGemotArm(ctx, g, in, *template, fmt.Sprintf("compromise_eval_%d_%d", *seed, in.ID), *gemotMode)
 			if ok {
 				results = append(results, score(in, *armLabel, slot))
 			} else {
