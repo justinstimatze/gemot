@@ -8,6 +8,22 @@ All notable changes to gemot are documented here.
 
 `AccumulateTrustEdges` and `ApplyDisputeEdges` expanded parallel arrays into a single `INSERT ... ON CONFLICT` via `unnest`. A batch containing duplicate `(from_agent, to_agent)` pairs — which any 3+ agent deliberation produces — made Postgres reject the statement ("ON CONFLICT DO UPDATE command cannot affect row a second time"), silently failing the reputation update on every such deliberation. Edges are now deduped and their weights summed before the upsert (matching the `DO UPDATE` accumulation). Surfaced during a multi-agent keyed run where 6/6 deliberations warned.
 
+### Fix: single-node BFT view wedge on post-propose error
+
+`bft.Engine.Submit` marked a view proposed via `replica.Propose` but only advanced the view on the success path. Any failure after `Propose` (self-vote drain, QC check, context cancellation) returned without advancing, leaving the replica "already proposed in this view" — so every subsequent `Submit` failed with `ErrDoublePropose` in perpetuity, a permanent wedge cleared only by restart. Under batch submission one transient error bricks all later writes. `Submit` now advances the view on every exit after a successful `Propose`, so a failed round is abandoned rather than wedging the engine.
+
+### Fix: compromise generation for non-Synthesizer analyzers
+
+`ProposeCompromise` refused when the analysis had zero cruxes, and `main` wired the compromise/reframe generators only via a concrete `*analysis.Synthesizer` type assertion. Together these made any alternative analyzer unable to produce a compromise. Wiring is now by the `CompromiseGenerator`/`Reframer` interfaces, and `ProposeCompromise` refuses only when there are neither cruxes nor positions to work from.
+
+### compromise synthesis commits to a concrete decision
+
+The options-empty compromise prompt asked for a "statement agents could vote on", which on decision-type deliberations produced procedural language rather than a concrete choice. It now commits to a specific option/action when the deliberation calls for one — conditional, so consultation-style deliberations that legitimately produce statements are unaffected.
+
+### freeform template + chat analyzer
+
+New `freeform` governance template (neutral analysis hint, no procedural rules) and a `ChatAnalyzer` (selected with `GEMOT_ANALYZER=chat`) that bypasses claim extraction, clustering, crux detection, and synthesis in favor of a single unstructured pass over the raw positions. Together they provide an unstructured baseline for measuring what the structured pipeline adds.
+
 ## 0.13.1 — 2026-06-17
 
 Close the loop on 0.13.0's private-deployment story: ship the `gemot admin create-api-key` CLI the deployment doc promised.
