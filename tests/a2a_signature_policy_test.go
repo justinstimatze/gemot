@@ -1,12 +1,9 @@
 package tests
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/justinstimatze/gemot/internal/payments"
 )
 
 // signature_policy was reachable only from Go until it gained a create surface:
@@ -44,16 +41,13 @@ func TestA2A_CreateHonorsSignaturePolicy(t *testing.T) {
 	// The policy must reach enforcement: an agent with a registered key that
 	// submits unsigned is exactly the case "required" exists to reject.
 	//
-	// Hosted mode namespaces agents per API key, so the stored agent_id — and
-	// therefore the key-registry entry the verifier looks up — is
-	// "<keyID>:<agent_id>". Registering under the unscoped name would leave the
-	// verifier finding no key, which reads as "agent never opted into signing"
-	// and silently exempts it from the policy.
+	// Registration goes over the wire with the plain agent_id. The transport
+	// namespaces it per API key, so the key lands under the identity the
+	// verifier looks up without the caller computing anything. Registering
+	// through the service instead would let this test pass against a transport
+	// that offers no way to register at all.
 	pub, _ := newKeypair(t)
-	scoped := payments.KeyID(token) + ":signing-agent"
-	if err := svc.RegisterAgentKey(context.Background(), scoped, pub, "ed25519"); err != nil {
-		t.Fatalf("register key: %v", err)
-	}
+	a2aRegisterKey(t, chain, token, "signing-agent", pub)
 
 	unsigned := a2aCall(t, chain, token, "gemot/participate", map[string]any{
 		"action":          "submit_position",
@@ -127,4 +121,34 @@ func TestA2A_CreateNormalizesUnknownSignaturePolicy(t *testing.T) {
 	if created.SignaturePolicy != "none" {
 		t.Fatalf("signature_policy = %q, want \"none\" (unknown values must fail closed)", created.SignaturePolicy)
 	}
+}
+
+// A2A serves get_audit_log, whose entries carry BLS proofs. Without
+// replica_pubkey on the same transport, an A2A-only client can read those
+// proofs but has no way to verify them — leaving it trusting the server's
+// report of its own log, which is what the signed log exists to avoid.
+func TestA2A_ReplicaPubkeyIsAvailableForAuditVerification(t *testing.T) {
+	svc, db := newTestService(t)
+	chain, token := a2aChain(t, db, svc)
+
+	resp := a2aCall(t, chain, token, "gemot/admin", map[string]any{
+		"action": "replica_pubkey",
+	})
+	if resp.Error != nil {
+		t.Fatalf("replica_pubkey over A2A: %v", resp.Error.Message)
+	}
+	var got struct {
+		PublicKeyHex string `json:"public_key_hex"`
+		Algorithm    string `json:"algorithm"`
+	}
+	if err := json.Unmarshal(resp.Result, &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.PublicKeyHex == "" {
+		t.Error("public_key_hex is empty — proofs cannot be verified offline")
+	}
+	if got.Algorithm != "bls12-381-g2" {
+		t.Errorf("algorithm = %q, want bls12-381-g2", got.Algorithm)
+	}
+	_ = svc
 }

@@ -1149,6 +1149,23 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 			case "list_templates":
 				writeA2AResult(w, req.ID, deliberation.ListTemplates())
 
+			// A2A serves get_audit_log, whose tamper_evident_log entries carry
+			// BLS proofs. Without the replica's public key an A2A-only client
+			// can read those proofs but cannot check them, which leaves it
+			// trusting the server's report of its own log — the exact thing the
+			// signed log exists to avoid.
+			case "replica_pubkey":
+				pub, err := svc.ReplicaPublicKey()
+				if err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, map[string]any{
+					"public_key_hex": fmt.Sprintf("%x", pub),
+					"algorithm":      "bls12-381-g2",
+					"usage":          "verify `proof` fields in get_audit_log's tamper_evident_log",
+				})
+
 			case "get_votes":
 				votes, err := CoreGetVotes(ctx, svc, str(s, "deliberation_id"), keyID)
 				if err != nil {

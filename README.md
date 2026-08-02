@@ -279,7 +279,7 @@ gemot/
 │   ├── principal/                   # Verifiable on_behalf_of delegation credentials
 │   ├── sanitize/                    # PII stripping, prompt injection detection
 │   └── cost/tracker.go             # Per-deliberation model-aware cost tracking
-├── tests/                           # 344 tests
+├── tests/                           # 345 tests
 ├── THREAT_MODEL.md
 ```
 
