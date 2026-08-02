@@ -2,6 +2,12 @@
 
 All notable changes to gemot are documented here.
 
+## Unreleased
+
+### Fix: trust-edge upsert double-row conflict (SQLSTATE 21000)
+
+`AccumulateTrustEdges` and `ApplyDisputeEdges` expanded parallel arrays into a single `INSERT ... ON CONFLICT` via `unnest`. A batch containing duplicate `(from_agent, to_agent)` pairs — which any 3+ agent deliberation produces — made Postgres reject the statement ("ON CONFLICT DO UPDATE command cannot affect row a second time"), silently failing the reputation update on every such deliberation. Edges are now deduped and their weights summed before the upsert (matching the `DO UPDATE` accumulation). Surfaced during a multi-agent keyed run where 6/6 deliberations warned.
+
 ## 0.13.1 — 2026-06-17
 
 Close the loop on 0.13.0's private-deployment story: ship the `gemot admin create-api-key` CLI the deployment doc promised.
