@@ -13,10 +13,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"math/rand"
 	"os"
+	"time"
 )
 
 func main() {
@@ -26,6 +28,10 @@ func main() {
 	days := flag.Int("days", 5, "days in the grid")
 	perDay := flag.Int("perday", 4, "slots per day")
 	show := flag.Bool("show", false, "print each instance's positions and arm choices")
+	url := flag.String("url", "", "gemot MCP URL; when set, adds a live gemot synthesis arm (e.g. http://localhost:8080/mcp)")
+	secret := flag.String("secret", os.Getenv("GEMOT_API_SECRET"), "gemot API secret (default: GEMOT_API_SECRET)")
+	template := flag.String("template", "negotiation", "deliberation template for the gemot arm")
+	armLabel := flag.String("arm-label", "gemot", "scoreboard label for the gemot arm")
 	flag.Parse()
 
 	if *agents < 2 || *agents > 6 {
@@ -33,11 +39,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	var g *Gemot
+	if *url != "" {
+		g = NewGemot(*url, *secret)
+		defer g.Close()
+		fmt.Printf("live gemot arm %q via %s (template %q)\n", *armLabel, *url, *template)
+	}
+	ctx := context.Background()
+
 	suite := Generate(*n, *seed, *agents, *days, *perDay)
 	all := make([][]ArmResult, 0, len(suite))
 	for _, in := range suite {
 		rng := rand.New(rand.NewSource(*seed + int64(in.ID) + 1))
 		results := RunDeterministic(in, rng)
+		if g != nil {
+			start := time.Now()
+			slot, _, ok := RunGemotArm(ctx, g, in, *template, fmt.Sprintf("compromise_eval_%d_%d", *seed, in.ID))
+			if ok {
+				results = append(results, score(in, *armLabel, slot))
+			} else {
+				results = append(results, ArmResult{Arm: *armLabel, Chosen: -1, Feasible: false})
+			}
+			fmt.Printf("  instance %d/%d: %s arm done (%.0fs)\n", in.ID+1, len(suite), *armLabel, time.Since(start).Seconds())
+		}
 		all = append(all, results)
 		if *show {
 			printInstance(in, results)
