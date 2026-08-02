@@ -36,8 +36,8 @@ func main() {
 	gemotMode := flag.String("gemot-mode", "free", "gemot compromise mode: free (synthesis) or choice (forced-choice over all slots)")
 	flag.Parse()
 
-	if *agents < 2 || *agents > 6 {
-		fmt.Fprintln(os.Stderr, "compromise-eval: --agents must be 2..6")
+	if *agents < 2 || *agents > 12 {
+		fmt.Fprintln(os.Stderr, "compromise-eval: --agents must be 2..12")
 		os.Exit(1)
 	}
 

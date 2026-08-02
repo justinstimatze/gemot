@@ -45,7 +45,7 @@ type Instance struct {
 func (in Instance) slots() int { return in.Days * in.PerDay }
 
 var dayNames = []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
-var timeNames = []string{"09:00", "11:00", "14:00", "16:00", "18:00", "20:00"}
+var timeNames = []string{"08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00"}
 
 // Label renders a slot as e.g. "Wed 14:00".
 func (in Instance) Label(s Slot) string {
@@ -171,7 +171,7 @@ func (in Instance) RenderPosition(i int) string {
 func Generate(count int, seed int64, agents, days, perDay int, blockRate float64) []Instance {
 	rng := rand.New(rand.NewSource(seed))
 	out := make([]Instance, 0, count)
-	names := []string{"Ada", "Boris", "Chen", "Devi", "Ezra", "Faye"}
+	names := []string{"Ada", "Boris", "Chen", "Devi", "Ezra", "Faye", "Gita", "Hugo", "Iris", "Jamal", "Kira", "Liam"}
 	for id := 0; len(out) < count; id++ {
 		if id > count*10000 {
 			panic("compromise-eval: generator could not meet the gap property; loosen parameters")
