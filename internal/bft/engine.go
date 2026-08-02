@@ -110,6 +110,17 @@ func (e *Engine) Submit(ctx context.Context, payload []byte) (QC, Block, error) 
 		return QC{}, Block{}, fmt.Errorf("bft: propose: %w", err)
 	}
 
+	// The replica has now proposed in currentView. Any failure BELOW must
+	// still advance the view, or the next Submit hits ErrDoublePropose in
+	// perpetuity — a permanent single-node wedge cleared only by restart.
+	// Advance-on-exit unless the success path already did.
+	advanced := false
+	defer func() {
+		if !advanced {
+			_ = e.replica.AdvanceView(currentView + 1)
+		}
+	}()
+
 	if err := e.replica.HandleProposal(*proposal); err != nil {
 		return QC{}, Block{}, fmt.Errorf("bft: handle own proposal: %w", err)
 	}
@@ -150,6 +161,7 @@ func (e *Engine) Submit(ctx context.Context, payload []byte) (QC, Block, error) 
 	if err := e.replica.AdvanceView(currentView + 1); err != nil {
 		return QC{}, Block{}, fmt.Errorf("bft: advance view: %w", err)
 	}
+	advanced = true
 	return preparedQC, proposal.Block, nil
 }
 
