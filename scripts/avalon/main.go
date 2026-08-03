@@ -27,6 +27,7 @@ func main() {
 	n := flag.Int("n", 5, "players per game (5-10)")
 	games := flag.Int("games", 10, "games per arm")
 	seed := flag.Int64("seed", 2026, "base seed (game i uses seed*10000+i, identical across arms)")
+	startOffset := flag.Int("start-offset", 0, "first game/deal offset; advance it per batch (same --seed) to accumulate poolable games without replaying deals. The run prints the next --start-offset to use.")
 	armsFlag := flag.String("arms", "bot", "comma-separated arms: bot,solo,chat,summary,structured")
 	model := flag.String("model", "claude-sonnet-4-6", "Anthropic model for LLM agents")
 	percival := flag.Bool("percival", true, "include Percival + Morgana (needs >=2 evil seats)")
@@ -119,9 +120,10 @@ func main() {
 		arm string
 		out Outcome
 	}
-	committed, seedOffset, discarded := 0, 0, 0
+	committed, seedOffset, discarded := 0, *startOffset, 0
 	maxDiscards := *games*3 + 10 // fail loudly rather than spin forever if gemot is down
 	for committed < *games {
+		thisOffset := seedOffset // absolute game index — unique across batches for clean pooling
 		gameSeed := *seed*10000 + int64(seedOffset)
 		seedOffset++
 		jSnap := journal.Len()
@@ -137,7 +139,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "avalon:", err)
 				os.Exit(1)
 			}
-			journal.Begin(arm, committed)
+			journal.Begin(arm, thisOffset)
 			players, cfg, err := buildArm(arm, g, sharedLLM, gm, journal, gameSeed)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "avalon:", err)
@@ -176,7 +178,7 @@ func main() {
 			}
 			if *show {
 				fmt.Printf("  [%s] game %d: good=%v 3-successes=%v merlin-killed=%v quests=%v\n",
-					p.arm, committed, p.out.GoodWin, p.out.ThreeSuccesses, p.out.MerlinKilled, p.out.Results)
+					p.arm, thisOffset, p.out.GoodWin, p.out.ThreeSuccesses, p.out.MerlinKilled, p.out.Results)
 			}
 		}
 		committed++
@@ -237,6 +239,7 @@ func main() {
 	} else {
 		fmt.Printf("journal: %s (%d entries)\n", jpath, journal.Len())
 	}
+	fmt.Printf("to add more poolable games later: --seed %d --start-offset %d (a new --journal), then pool the JSONL files.\n", *seed, seedOffset)
 }
 
 // buildArm constructs the seat policies and run config for one arm on game g.
