@@ -8,7 +8,7 @@ import "fmt"
 // their deliberation. Solo and rule-bot arms leave it nil.
 type RunConfig struct {
 	Arm     string
-	Discuss func(g *Game, players []Player, log []string) []Statement
+	Discuss func(g *Game, players []Player, knows []PlayerKnowledge, log []string) []Statement
 }
 
 // RunGame plays one Avalon match to completion under cfg and returns its outcome.
@@ -33,7 +33,7 @@ func RunGame(g *Game, players []Player, cfg RunConfig) Outcome {
 		switch g.Phase {
 		case TeamSelection:
 			if cfg.Discuss != nil && discussedQuest != g.Quest {
-				transcript = cfg.Discuss(g, players, log)
+				transcript = cfg.Discuss(g, players, knows, log)
 				discussedQuest = g.Quest
 				for _, s := range transcript {
 					log = append(log, fmt.Sprintf("(talk) seat %d: %s", s.Seat, truncate(s.Text, 160)))

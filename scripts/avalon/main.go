@@ -27,10 +27,11 @@ func main() {
 	games := flag.Int("games", 10, "games per arm")
 	seed := flag.Int64("seed", 2026, "base seed (game i uses seed*10000+i, identical across arms)")
 	armsFlag := flag.String("arms", "bot", "comma-separated arms: bot,solo,chat,structured")
-	model := flag.String("model", "claude-haiku-4-5", "Anthropic model for LLM agents")
+	model := flag.String("model", "claude-sonnet-4-6", "Anthropic model for LLM agents")
 	percival := flag.Bool("percival", true, "include Percival + Morgana (needs >=2 evil seats)")
 	url := flag.String("url", "http://localhost:8080/mcp", "gemot MCP URL (chat/structured arms)")
 	secret := flag.String("secret", os.Getenv("GEMOT_API_SECRET"), "gemot API secret (chat/structured arms)")
+	template := flag.String("template", "review", "gemot deliberation template (structured arm)")
 	show := flag.Bool("show", false, "print each game's outcome")
 	flag.Parse()
 
@@ -56,8 +57,15 @@ func main() {
 		}
 		sharedLLM = l
 	}
-	_ = url
-	_ = secret
+	var gm *GemotArm
+	for _, a := range arms {
+		if a == "structured" {
+			client := NewGemot(*url, *secret)
+			defer client.Close()
+			gm = NewGemotArm(client, *template, fmt.Sprintf("avalon_%d", *seed))
+			fmt.Printf("structured arm via %s (template %q)\n", *url, *template)
+		}
+	}
 
 	fmt.Printf("avalon: %d players, %d games/arm, seed %d, arms=%s", *n, *games, *seed, *armsFlag)
 	if needLLM {
@@ -82,7 +90,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "avalon:", err)
 				os.Exit(1)
 			}
-			players, cfg, err := buildArm(arm, g, sharedLLM, gameSeed)
+			players, cfg, err := buildArm(arm, g, sharedLLM, gm, gameSeed)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "avalon:", err)
 				os.Exit(1)
@@ -125,9 +133,14 @@ func main() {
 }
 
 // buildArm constructs the seat policies and run config for one arm on game g.
-func buildArm(arm string, g *Game, llm *LLM, seed int64) ([]Player, RunConfig, error) {
+func buildArm(arm string, g *Game, llm *LLM, gm *GemotArm, seed int64) ([]Player, RunConfig, error) {
 	rng := rand.New(rand.NewSource(seed ^ 0x5eed))
 	players := make([]Player, g.NumPlayers)
+	llmAgents := func() {
+		for s := range players {
+			players[s] = NewLLMAgent(llm, fmt.Sprintf("seat%d", s), NewRuleBot(fmt.Sprintf("bot%d", s), rng))
+		}
+	}
 	switch arm {
 	case "bot":
 		for s := range players {
@@ -135,12 +148,19 @@ func buildArm(arm string, g *Game, llm *LLM, seed int64) ([]Player, RunConfig, e
 		}
 		return players, RunConfig{Arm: arm}, nil
 	case "solo":
-		for s := range players {
-			players[s] = NewLLMAgent(llm, fmt.Sprintf("seat%d", s), NewRuleBot(fmt.Sprintf("bot%d", s), rng))
-		}
+		llmAgents()
 		return players, RunConfig{Arm: arm}, nil
+	case "chat":
+		llmAgents()
+		return players, RunConfig{Arm: arm, Discuss: chatDiscuss}, nil
+	case "structured":
+		if gm == nil {
+			return nil, RunConfig{}, fmt.Errorf("structured arm needs a gemot client")
+		}
+		llmAgents()
+		return players, RunConfig{Arm: arm, Discuss: gm.discuss}, nil
 	default:
-		return nil, RunConfig{}, fmt.Errorf("arm %q not implemented yet (bot, solo available; chat/structured need gemot.go)", arm)
+		return nil, RunConfig{}, fmt.Errorf("unknown arm %q (bot, solo, chat, structured)", arm)
 	}
 }
 

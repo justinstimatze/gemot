@@ -109,7 +109,11 @@ func (v GameView) promptContext() string {
 	if len(v.Transcript) > 0 {
 		b.WriteString("\nThis round's table talk:\n")
 		for _, s := range v.Transcript {
-			fmt.Fprintf(&b, "  - seat %d: %s\n", s.Seat, s.Text)
+			if s.Seat < 0 {
+				fmt.Fprintf(&b, "  - [table synthesis]: %s\n", s.Text)
+			} else {
+				fmt.Fprintf(&b, "  - seat %d: %s\n", s.Seat, s.Text)
+			}
 		}
 	}
 	return b.String()

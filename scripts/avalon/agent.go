@@ -88,6 +88,30 @@ func (a *LLMAgent) Assassinate(v GameView) int {
 	return a.fallback.Assassinate(v)
 }
 
+// Position is an agent's public case for a structured discussion round: a spoken
+// statement plus the seats it most suspects of being evil. The chat and
+// structured arms both use it, so their only difference is gemot aggregation.
+func (a *LLMAgent) Position(v GameView) (statement string, suspects []int) {
+	user := v.promptContext() +
+		"\nMake your case to the table (2-4 sentences): based on the proposals, votes, and quest results, who do you trust and who do you suspect of being evil, and why? Do NOT state your secret role directly.\nReply with JSON only: {\"statement\": \"...\", \"suspect\": [seat numbers you most suspect]}"
+	var r struct {
+		Statement string `json:"statement"`
+		Suspect   []int  `json:"suspect"`
+	}
+	if a.ask(v, user, 500, &r) {
+		if st := strings.TrimSpace(r.Statement); st != "" {
+			var sus []int
+			for _, s := range r.Suspect {
+				if s >= 0 && s < v.NumPlayers && s != v.Seat {
+					sus = append(sus, s)
+				}
+			}
+			return st, sus
+		}
+	}
+	return "", nil
+}
+
 func (a *LLMAgent) Discuss(v GameView) string {
 	user := v.promptContext() +
 		"\nMake a brief public statement to the table (1-3 sentences): share suspicions or defend yourself to move the game your way. Good players build trust and hunt evil; evil players deceive and deflect. Do NOT state your secret role directly.\nReply with JSON only: {\"statement\": \"...\"}"
