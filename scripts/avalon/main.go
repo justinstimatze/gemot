@@ -62,6 +62,13 @@ func main() {
 			os.Exit(1)
 		}
 		sharedLLM = l
+		// Warm the cached system prefix with one call so the subsequent parallel
+		// per-seat batches READ the cache instead of each writing it.
+		if _, err := sharedLLM.complete(avalonSystemPrompt, "Reply with the single word: ready.", 8); err != nil {
+			fmt.Fprintln(os.Stderr, "avalon: cache warm-up failed:", err)
+		} else {
+			fmt.Println("cache warmed:", sharedLLM.Stats())
+		}
 	}
 	var gm *GemotArm
 	for _, a := range arms {
@@ -144,6 +151,9 @@ func main() {
 		} else if gm.Deliberations > 0 {
 			fmt.Printf("\nstructured: %d/%d gemot deliberations succeeded (0 degraded).\n", gm.Deliberations, gm.Deliberations)
 		}
+	}
+	if sharedLLM != nil {
+		fmt.Println(sharedLLM.Stats())
 	}
 	if err := journal.WriteJSONL(jpath); err != nil {
 		fmt.Fprintln(os.Stderr, "avalon: journal write failed:", err)

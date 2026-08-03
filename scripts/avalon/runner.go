@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // RunConfig selects an arm's behaviour. Discuss, if set, runs once per quest
 // before team selection and produces the public transcript fed into every
@@ -59,11 +62,18 @@ func RunGame(g *Game, players []Player, cfg RunConfig) Outcome {
 		case TeamVoting:
 			team := g.Team
 			votes := make([]bool, g.NumPlayers)
-			approve := 0
+			var wg sync.WaitGroup
 			for i := range players {
-				v := viewFor(g, i, knows, log, team, transcript)
-				votes[i] = players[i].VoteTeam(v)
-				if votes[i] {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					votes[i] = players[i].VoteTeam(viewFor(g, i, knows, log, team, transcript))
+				}(i)
+			}
+			wg.Wait()
+			approve := 0
+			for _, ok := range votes {
+				if ok {
 					approve++
 				}
 			}
@@ -73,10 +83,15 @@ func RunGame(g *Game, players []Player, cfg RunConfig) Outcome {
 		case QuestVoting:
 			team := g.Team
 			votes := make([]bool, len(team))
+			var wg sync.WaitGroup
 			for i, seat := range team {
-				v := viewFor(g, seat, knows, log, team, transcript)
-				votes[i] = players[seat].VoteQuest(v)
+				wg.Add(1)
+				go func(i, seat int) {
+					defer wg.Done()
+					votes[i] = players[seat].VoteQuest(viewFor(g, seat, knows, log, team, transcript))
+				}(i, seat)
 			}
+			wg.Wait()
 			quest := g.Quest
 			success, nf, _ := g.GatherQuestVotes(votes)
 			log = append(log, fmt.Sprintf("Quest %d resolved: %s (%d fail vote(s))",

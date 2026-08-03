@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -193,10 +194,19 @@ func positionOf(p Player, v GameView) (string, []int) {
 // chatDiscuss is the unstructured control: every seat speaks once (seeing prior
 // speakers this round), producing a public transcript. No aggregation.
 func chatDiscuss(g *Game, players []Player, knows []PlayerKnowledge, log []string) []Statement {
-	var transcript []Statement
+	stmts := make([]string, g.NumPlayers)
+	var wg sync.WaitGroup
 	for seat := 0; seat < g.NumPlayers; seat++ {
-		v := viewFor(g, seat, knows, log, nil, transcript)
-		if st, _ := positionOf(players[seat], v); st != "" {
+		wg.Add(1)
+		go func(seat int) {
+			defer wg.Done()
+			stmts[seat], _ = positionOf(players[seat], viewFor(g, seat, knows, log, nil, nil))
+		}(seat)
+	}
+	wg.Wait()
+	var transcript []Statement
+	for seat, st := range stmts {
+		if st != "" {
 			transcript = append(transcript, Statement{Seat: seat, Text: st})
 		}
 	}
@@ -236,11 +246,22 @@ func NewGemotArm(g *Gemot, template, groupBase string, j *Journal) *GemotArm {
 func (gm *GemotArm) discuss(g *Game, players []Player, knows []PlayerKnowledge, log []string) []Statement {
 	ctx := context.Background()
 
-	var poss []seatPosition
+	slots := make([]*seatPosition, g.NumPlayers)
+	var wg sync.WaitGroup
 	for seat := 0; seat < g.NumPlayers; seat++ {
-		v := viewFor(g, seat, knows, log, nil, nil)
-		if st, sus := positionOf(players[seat], v); st != "" {
-			poss = append(poss, seatPosition{seat, st, sus})
+		wg.Add(1)
+		go func(seat int) {
+			defer wg.Done()
+			if st, sus := positionOf(players[seat], viewFor(g, seat, knows, log, nil, nil)); st != "" {
+				slots[seat] = &seatPosition{seat, st, sus}
+			}
+		}(seat)
+	}
+	wg.Wait()
+	var poss []seatPosition
+	for _, p := range slots {
+		if p != nil {
+			poss = append(poss, *p)
 		}
 	}
 	transcript := make([]Statement, 0, len(poss)+1)

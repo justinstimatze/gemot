@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,7 +21,12 @@ type LLM struct {
 	client      *http.Client
 	retryBase   time.Duration
 	temperature float64
-	Calls       int
+
+	Calls      int64 // atomic
+	inTok      int64 // atomic: uncached input tokens
+	outTok     int64 // atomic
+	cacheWrite int64 // atomic: cache_creation_input_tokens
+	cacheRead  int64 // atomic: cache_read_input_tokens
 }
 
 func NewLLM(model string) (*LLM, error) {
@@ -45,8 +51,12 @@ func (l *LLM) complete(system, user string, maxTokens int) (string, error) {
 	payload := map[string]any{
 		"model":      l.model,
 		"max_tokens": maxTokens,
-		"system":     system,
-		"messages":   []map[string]string{{"role": "user", "content": user}},
+		// Uniform system prompt marked cacheable: identical bytes across every
+		// call form one cached prefix for the whole run (write once, read after).
+		"system": []map[string]any{
+			{"type": "text", "text": system, "cache_control": map[string]string{"type": "ephemeral"}},
+		},
+		"messages": []map[string]string{{"role": "user", "content": user}},
 	}
 	if l.temperature > 0 {
 		payload["temperature"] = l.temperature
@@ -75,7 +85,7 @@ func (l *LLM) complete(system, user string, maxTokens int) (string, error) {
 		}
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close() //nolint:errcheck
-		l.Calls++
+		atomic.AddInt64(&l.Calls, 1)
 		if readErr != nil {
 			lastErr = readErr
 			continue
@@ -99,10 +109,20 @@ func (l *LLM) complete(system, user string, maxTokens int) (string, error) {
 			Content []struct {
 				Text string `json:"text"`
 			} `json:"content"`
+			Usage struct {
+				InputTokens              int64 `json:"input_tokens"`
+				OutputTokens             int64 `json:"output_tokens"`
+				CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+				CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+			} `json:"usage"`
 		}
 		if err := json.Unmarshal(respBody, &parsed); err != nil {
 			return "", err
 		}
+		atomic.AddInt64(&l.inTok, parsed.Usage.InputTokens)
+		atomic.AddInt64(&l.outTok, parsed.Usage.OutputTokens)
+		atomic.AddInt64(&l.cacheWrite, parsed.Usage.CacheCreationInputTokens)
+		atomic.AddInt64(&l.cacheRead, parsed.Usage.CacheReadInputTokens)
 		var text strings.Builder
 		for _, c := range parsed.Content {
 			text.WriteString(c.Text)
@@ -113,6 +133,16 @@ func (l *LLM) complete(system, user string, maxTokens int) (string, error) {
 		return text.String(), nil
 	}
 	return "", fmt.Errorf("anthropic API: giving up after %d attempts: %w", maxAttempts, lastErr)
+}
+
+// Stats summarises token usage, including cache effectiveness.
+func (l *LLM) Stats() string {
+	return fmt.Sprintf("llm: %d calls | input %dk (cache-read %dk, cache-write %dk) | output %dk",
+		atomic.LoadInt64(&l.Calls),
+		atomic.LoadInt64(&l.inTok)/1000,
+		atomic.LoadInt64(&l.cacheRead)/1000,
+		atomic.LoadInt64(&l.cacheWrite)/1000,
+		atomic.LoadInt64(&l.outTok)/1000)
 }
 
 func retryableStatus(code int) bool {

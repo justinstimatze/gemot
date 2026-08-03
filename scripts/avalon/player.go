@@ -92,8 +92,6 @@ func (v GameView) knowledgeLine() string {
 // promptContext renders the shared public situation for any decision prompt.
 func (v GameView) promptContext() string {
 	var b strings.Builder
-	b.WriteString(gameRules)
-	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "This is a %d-player game. %s\n", v.NumPlayers, v.knowledgeLine())
 	fmt.Fprintf(&b, "%s\n", v.scoreLine())
 	if v.Quest < len(v.FailsReq) {
