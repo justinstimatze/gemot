@@ -9,6 +9,7 @@ import "fmt"
 type RunConfig struct {
 	Arm     string
 	Discuss func(g *Game, players []Player, knows []PlayerKnowledge, log []string) []Statement
+	Journal *Journal
 }
 
 // RunGame plays one Avalon match to completion under cfg and returns its outcome.
@@ -18,6 +19,10 @@ func RunGame(g *Game, players []Player, cfg RunConfig) Outcome {
 	knows := make([]PlayerKnowledge, g.NumPlayers)
 	for i := range knows {
 		knows[i] = g.Knowledge(i)
+	}
+	for i := range knows {
+		cfg.Journal.Record(JournalEntry{Seat: i, Role: g.Roles[i].String(),
+			Side: sideName(!g.Roles[i].Evil()), Action: "role"})
 	}
 	var log []string
 	var transcript []Statement
@@ -88,6 +93,9 @@ func RunGame(g *Game, players []Player, cfg RunConfig) Outcome {
 		}
 	}
 
+	cfg.Journal.Record(JournalEntry{Seat: -1, Action: "result",
+		Choice: fmt.Sprintf("goodWin=%v threeSuccesses=%v merlinKilled=%v quests=%v",
+			g.GoodVictory, g.Successes() >= questsToWin, g.Successes() >= questsToWin && !g.GoodVictory, g.QuestResults)})
 	return Outcome{
 		Arm:            cfg.Arm,
 		GoodWin:        g.GoodVictory,

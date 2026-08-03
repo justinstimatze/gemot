@@ -32,10 +32,16 @@ func main() {
 	url := flag.String("url", "http://localhost:8080/mcp", "gemot MCP URL (chat/structured arms)")
 	secret := flag.String("secret", os.Getenv("GEMOT_API_SECRET"), "gemot API secret (chat/structured arms)")
 	template := flag.String("template", "review", "gemot deliberation template (structured arm)")
+	journalPath := flag.String("journal", "", "path to write the per-game journal (JSONL); default avalon-journal-seed<seed>.jsonl")
 	show := flag.Bool("show", false, "print each game's outcome")
 	flag.Parse()
 
 	opts := Options{Percival: *percival, Morgana: *percival}
+	journal := NewJournal()
+	jpath := *journalPath
+	if jpath == "" {
+		jpath = fmt.Sprintf("avalon-journal-seed%d.jsonl", *seed)
+	}
 	arms := strings.Split(*armsFlag, ",")
 	for i := range arms {
 		arms[i] = strings.TrimSpace(arms[i])
@@ -62,7 +68,7 @@ func main() {
 		if a == "structured" {
 			client := NewGemot(*url, *secret)
 			defer client.Close()
-			gm = NewGemotArm(client, *template, fmt.Sprintf("avalon_%d", *seed))
+			gm = NewGemotArm(client, *template, fmt.Sprintf("avalon_%d", *seed), journal)
 			fmt.Printf("structured arm via %s (template %q)\n", *url, *template)
 		}
 	}
@@ -90,7 +96,8 @@ func main() {
 				fmt.Fprintln(os.Stderr, "avalon:", err)
 				os.Exit(1)
 			}
-			players, cfg, err := buildArm(arm, g, sharedLLM, gm, gameSeed)
+			journal.Begin(arm, i)
+			players, cfg, err := buildArm(arm, g, sharedLLM, gm, journal, gameSeed)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "avalon:", err)
 				os.Exit(1)
@@ -130,15 +137,28 @@ func main() {
 	}
 	fmt.Println("\ngood-win% = good team victories; 3-success% = good passed 3 quests (reached assassination);")
 	fmt.Println("merlin-kill% = of those, how often the assassin found Merlin.")
+
+	if gm != nil {
+		if gm.Degraded > 0 {
+			fmt.Printf("\nWARNING: structured arm degraded to chat on %d/%d deliberations — those data points are contaminated.\n", gm.Degraded, gm.Deliberations)
+		} else if gm.Deliberations > 0 {
+			fmt.Printf("\nstructured: %d/%d gemot deliberations succeeded (0 degraded).\n", gm.Deliberations, gm.Deliberations)
+		}
+	}
+	if err := journal.WriteJSONL(jpath); err != nil {
+		fmt.Fprintln(os.Stderr, "avalon: journal write failed:", err)
+	} else {
+		fmt.Printf("journal: %s (%d entries)\n", jpath, journal.Len())
+	}
 }
 
 // buildArm constructs the seat policies and run config for one arm on game g.
-func buildArm(arm string, g *Game, llm *LLM, gm *GemotArm, seed int64) ([]Player, RunConfig, error) {
+func buildArm(arm string, g *Game, llm *LLM, gm *GemotArm, journal *Journal, seed int64) ([]Player, RunConfig, error) {
 	rng := rand.New(rand.NewSource(seed ^ 0x5eed))
 	players := make([]Player, g.NumPlayers)
 	llmAgents := func() {
 		for s := range players {
-			players[s] = NewLLMAgent(llm, fmt.Sprintf("seat%d", s), NewRuleBot(fmt.Sprintf("bot%d", s), rng))
+			players[s] = NewLLMAgent(llm, fmt.Sprintf("seat%d", s), NewRuleBot(fmt.Sprintf("bot%d", s), rng), journal)
 		}
 	}
 	switch arm {
@@ -146,19 +166,19 @@ func buildArm(arm string, g *Game, llm *LLM, gm *GemotArm, seed int64) ([]Player
 		for s := range players {
 			players[s] = NewRuleBot(fmt.Sprintf("bot%d", s), rng)
 		}
-		return players, RunConfig{Arm: arm}, nil
+		return players, RunConfig{Arm: arm, Journal: journal}, nil
 	case "solo":
 		llmAgents()
-		return players, RunConfig{Arm: arm}, nil
+		return players, RunConfig{Arm: arm, Journal: journal}, nil
 	case "chat":
 		llmAgents()
-		return players, RunConfig{Arm: arm, Discuss: chatDiscuss}, nil
+		return players, RunConfig{Arm: arm, Discuss: chatDiscuss, Journal: journal}, nil
 	case "structured":
 		if gm == nil {
 			return nil, RunConfig{}, fmt.Errorf("structured arm needs a gemot client")
 		}
 		llmAgents()
-		return players, RunConfig{Arm: arm, Discuss: gm.discuss}, nil
+		return players, RunConfig{Arm: arm, Discuss: gm.discuss, Journal: journal}, nil
 	default:
 		return nil, RunConfig{}, fmt.Errorf("unknown arm %q (bot, solo, chat, structured)", arm)
 	}

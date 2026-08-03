@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -202,34 +203,44 @@ func chatDiscuss(g *Game, players []Player, knows []PlayerKnowledge, log []strin
 	return transcript
 }
 
+// seatPosition is one player's public position for a structured round.
+type seatPosition struct {
+	seat     int
+	text     string
+	suspects []int
+}
+
 // GemotArm runs the structured discussion: the same per-seat positions as the
 // chat arm, but submitted to a gemot deliberation that votes, analyses, and
 // synthesises a trust recommendation appended to the transcript. The delta vs
 // chatDiscuss is exactly the gemot aggregation layer.
+//
+// It never silently degrades: aggregate() returns errors, discuss() retries once
+// and counts any fallback so main can report (and flag) contamination. A run with
+// Degraded > 0 has structured data points that are really chat and must not be
+// trusted as-is.
 type GemotArm struct {
-	g         *Gemot
-	template  string
-	groupBase string
-	counter   int
+	g             *Gemot
+	template      string
+	groupBase     string
+	counter       int
+	Deliberations int // aggregation attempts (one per quest that had >=2 positions)
+	Degraded      int // attempts that fell back to chat after a retry
+	journal       *Journal
 }
 
-func NewGemotArm(g *Gemot, template, groupBase string) *GemotArm {
-	return &GemotArm{g: g, template: template, groupBase: groupBase}
+func NewGemotArm(g *Gemot, template, groupBase string, j *Journal) *GemotArm {
+	return &GemotArm{g: g, template: template, groupBase: groupBase, journal: j}
 }
 
 func (gm *GemotArm) discuss(g *Game, players []Player, knows []PlayerKnowledge, log []string) []Statement {
 	ctx := context.Background()
 
-	type pos struct {
-		seat     int
-		text     string
-		suspects []int
-	}
-	var poss []pos
+	var poss []seatPosition
 	for seat := 0; seat < g.NumPlayers; seat++ {
 		v := viewFor(g, seat, knows, log, nil, nil)
 		if st, sus := positionOf(players[seat], v); st != "" {
-			poss = append(poss, pos{seat, st, sus})
+			poss = append(poss, seatPosition{seat, st, sus})
 		}
 	}
 	transcript := make([]Statement, 0, len(poss)+1)
@@ -237,9 +248,39 @@ func (gm *GemotArm) discuss(g *Game, players []Player, knows []PlayerKnowledge, 
 		transcript = append(transcript, Statement{Seat: p.seat, Text: p.text})
 	}
 	if len(poss) < 2 {
-		return transcript // nothing to aggregate; degrade to plain talk
+		fmt.Fprintf(os.Stderr, "  [structured q%d] only %d positions; skipping aggregation\n", g.Quest+1, len(poss))
+		return transcript
 	}
 
+	gm.Deliberations++
+	synth, err := gm.aggregate(ctx, g, poss)
+	if err != nil {
+		// One retry on a fresh connection before giving up.
+		gm.g.Close()
+		synth, err = gm.aggregate(ctx, g, poss)
+	}
+	if err != nil {
+		gm.Degraded++
+		fmt.Fprintf(os.Stderr, "  [structured q%d] DEGRADED to chat (gemot failed twice): %v\n", g.Quest+1, err)
+		if gm.journal != nil {
+			gm.journal.Record(JournalEntry{Quest: g.Quest + 1, Phase: "structured", Seat: -1,
+				Role: "gemot", Action: "degraded", Private: err.Error()})
+		}
+		return transcript
+	}
+	if gm.journal != nil {
+		gm.journal.Record(JournalEntry{Quest: g.Quest + 1, Phase: "structured", Seat: -1,
+			Role: "gemot", Action: "synthesis", Choice: synth})
+	}
+	transcript = append(transcript, Statement{Seat: -1, Text: synth})
+	return transcript
+}
+
+// aggregate runs one gemot deliberation over the seat positions and returns the
+// synthesised trust recommendation, or an error. It NEVER swallows a failure —
+// the caller counts degradations so the structured arm can never quietly become
+// the chat arm.
+func (gm *GemotArm) aggregate(ctx context.Context, g *Game, poss []seatPosition) (string, error) {
 	gm.counter++
 	groupID := fmt.Sprintf("%s_q%d_%d", gm.groupBase, g.Quest, gm.counter)
 	topic := fmt.Sprintf("Avalon quest %d: which players are safe to send on the quest?", g.Quest+1)
@@ -256,7 +297,7 @@ listing the seats safest to send, most to least trusted.`,
 
 	delibID, err := gm.g.CreateDeliberation(ctx, topic, desc, gm.template, groupID)
 	if err != nil {
-		return transcript
+		return "", fmt.Errorf("create: %w", err)
 	}
 	posID := make(map[int]string, len(poss))
 	for _, p := range poss {
@@ -264,9 +305,11 @@ listing the seats safest to send, most to least trusted.`,
 		if len(p.suspects) > 0 {
 			content += fmt.Sprintf(" (most suspects seats: %s)", seatList(p.suspects))
 		}
-		if id, err := gm.g.SubmitPosition(ctx, delibID, fmt.Sprintf("seat%d", p.seat), content); err == nil {
-			posID[p.seat] = id
+		id, serr := gm.g.SubmitPosition(ctx, delibID, fmt.Sprintf("seat%d", p.seat), content)
+		if serr != nil {
+			return "", fmt.Errorf("submit seat %d: %w", p.seat, serr)
 		}
+		posID[p.seat] = id
 	}
 	// Each author endorses positions of seats it trusts and opposes those it
 	// suspects, giving gemot the controversy signal to find cruxes.
@@ -291,14 +334,16 @@ listing the seats safest to send, most to least trusted.`,
 		}
 	}
 	if err := gm.g.AnalyzeRun(ctx, delibID, 3*time.Minute); err != nil {
-		return transcript
+		return "", fmt.Errorf("analyze: %w", err)
 	}
 	synth, err := gm.g.ProposeCompromise(ctx, delibID)
-	if err != nil || strings.TrimSpace(synth) == "" {
-		return transcript
+	if err != nil {
+		return "", fmt.Errorf("compromise: %w", err)
 	}
-	transcript = append(transcript, Statement{Seat: -1, Text: strings.TrimSpace(synth)})
-	return transcript
+	if strings.TrimSpace(synth) == "" {
+		return "", fmt.Errorf("compromise returned empty synthesis")
+	}
+	return strings.TrimSpace(synth), nil
 }
 
 func scoreLineFor(g *Game) string {
