@@ -46,8 +46,13 @@ Reply with JSON only:
 		idx  []int
 	}
 	var best attempt
-	for try := 0; try < 3; try++ {
-		out, cerr := l.complete("You are an expert Codenames spymaster. Every target must be one of your team's words. Output only the JSON object.", user, 2048)
+	var avoidNote string // feedback appended after a clue that flunks the danger check
+	for try := 0; try < 4; try++ {
+		prompt := user
+		if avoidNote != "" {
+			prompt += "\n\n" + avoidNote
+		}
+		out, cerr := l.complete("You are an expert Codenames spymaster. Every target must be one of your team's words. Output only the JSON object.", prompt, 2048)
 		if cerr != nil {
 			return "", 0, nil, cerr
 		}
@@ -74,12 +79,30 @@ Reply with JSON only:
 		}
 		validTargets = len(teamIdx)
 		cl := strings.TrimSpace(parsed.Clue)
-		if cl != "" && validTargets == len(parsed.Targets) && validTargets > 0 {
-			return cl, validTargets, teamIdx, nil // fully valid clue
+		fullyValid := cl != "" && validTargets == len(parsed.Targets) && validTargets > 0
+		if !fullyValid {
+			if validTargets > len(best.idx) {
+				best = attempt{cl, teamIdx}
+			}
+			continue
 		}
-		if validTargets > len(best.idx) {
-			best = attempt{cl, teamIdx}
+		// Danger check: a clue whose targets are all team words can still walk the
+		// guessers into the assassin (the "STATION" -> SPACE wipe). Simulate a
+		// guesser's read of the clue against the real board; if the assassin
+		// surfaces within the words a guesser would reach, reject and retry with
+		// explicit feedback rather than shipping a losing clue.
+		if len(assassin) > 0 {
+			if ranked, rerr := l.clueRanking(cl, b.Words); rerr == nil {
+				if rank := assassinRank(ranked, assassin[0]); rank >= 0 && rank <= validTargets {
+					avoidNote = fmt.Sprintf("Your previous clue %q pulls too strongly toward the ASSASSIN word %q -- a guesser reading it would reach %q. Choose a DIFFERENT clue that does not evoke %q at all.", cl, assassin[0], assassin[0], assassin[0])
+					if len(best.idx) == 0 { // keep only as an absolute last resort
+						best = attempt{cl, teamIdx}
+					}
+					continue
+				}
+			}
 		}
+		return cl, validTargets, teamIdx, nil // valid AND not assassin-adjacent
 	}
 	if len(best.idx) == 0 {
 		if err == nil {
@@ -88,4 +111,38 @@ Reply with JSON only:
 		return "", 0, nil, err
 	}
 	return best.clue, len(best.idx), best.idx, nil
+}
+
+// clueRanking asks the model to rank board words by association strength to a
+// clue, exactly as a guesser would read it. Used to detect clues that lead into
+// the assassin before the clue is ever shown to the guessing fleet.
+func (l *LLM) clueRanking(clue string, boardWords []string) ([]string, error) {
+	user := fmt.Sprintf(`Board words: %s
+
+For the one-word clue %q, list the board words most strongly associated with it, from MOST to LEAST associated. Include the top 8. Use only words from the board.
+
+Reply with JSON only:
+{"ranked": ["<word>", ...]}`, strings.Join(boardWords, ", "), clue)
+	out, err := l.complete("You rank word associations like a Codenames guesser. Output only the JSON object.", user, 400)
+	if err != nil {
+		return nil, err
+	}
+	var parsed struct {
+		Ranked []string `json:"ranked"`
+	}
+	if err := jsonUnmarshal(out, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Ranked, nil
+}
+
+// assassinRank is the 0-based position of the assassin word in a ranked list, or
+// -1 if it does not appear.
+func assassinRank(ranked []string, assassin string) int {
+	for i, w := range ranked {
+		if strings.EqualFold(strings.TrimSpace(w), assassin) {
+			return i
+		}
+	}
+	return -1
 }

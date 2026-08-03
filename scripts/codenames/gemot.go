@@ -176,10 +176,80 @@ func (g *Gemot) ProposeCompromise(ctx context.Context, delibID string) (string, 
 	return resp.CompromiseProposal, nil
 }
 
-// parseGuesses extracts board words named in the compromise text, ordered by
-// first appearance — the team's ranked guess sequence.
-func parseGuesses(b Board, text string) []string {
-	lower := strings.ToLower(text)
+// avoidMarkers flag a line that argues AGAINST guessing words rather than for
+// them, so a word named only as a warning ("avoid SPACE — likely the assassin")
+// is never mistaken for a guess. This was the failure that walked the gemot arm
+// into the assassin on a board where the synthesis correctly warned against it.
+var avoidMarkers = []string{
+	"avoid", "assassin", "danger", "risky", "risk", "do not", "don't", "dont",
+	"never", "skip", "opponent", "civilian", "not guess", "steer clear",
+	"stay away", "leave", "exclude",
+}
+
+// parseGuesses turns the synthesis text into the team's ordered guess list. It
+// prefers an explicit final line ("FINAL: word1, word2, ...") the deliberation
+// is asked to emit; failing that it falls back to appearance order across the
+// lines that are NOT warnings. Words are matched on token boundaries so a board
+// word is never found inside a larger word (ICE inside PRICE). The result is
+// capped at limit (the clue's number) — the guessing fleet's calibrated size.
+func parseGuesses(b Board, text string, limit int) []string {
+	if final := parseFinalLine(b, text); len(final) > 0 {
+		return capWords(final, limit)
+	}
+	type hit struct {
+		word string
+		idx  int
+	}
+	var hits []hit
+	seen := map[string]bool{}
+	offset := 0
+	for _, line := range strings.Split(text, "\n") {
+		ll := strings.ToLower(line)
+		warn := false
+		for _, m := range avoidMarkers {
+			if strings.Contains(ll, m) {
+				warn = true
+				break
+			}
+		}
+		if !warn {
+			for _, w := range b.Words {
+				if seen[w] {
+					continue
+				}
+				if i := indexWord(ll, strings.ToLower(w)); i != -1 {
+					hits = append(hits, hit{w, offset + i})
+					seen[w] = true
+				}
+			}
+		}
+		offset += len(line) + 1
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].idx < hits[j].idx })
+	out := make([]string, len(hits))
+	for i, h := range hits {
+		out[i] = h.word
+	}
+	return capWords(out, limit)
+}
+
+// parseFinalLine reads an explicit "FINAL: ..." (or "guesses:"/"answer:") line if
+// the synthesis emitted one, returning its board words in stated order.
+func parseFinalLine(b Board, text string) []string {
+	for _, line := range strings.Split(text, "\n") {
+		ll := strings.ToLower(strings.TrimSpace(line))
+		if strings.HasPrefix(ll, "final") || strings.HasPrefix(ll, "guesses:") ||
+			strings.HasPrefix(ll, "guess order") || strings.HasPrefix(ll, "answer:") {
+			return orderedBoardWords(b, line)
+		}
+	}
+	return nil
+}
+
+// orderedBoardWords returns the board words appearing in s, in order, matched on
+// token boundaries.
+func orderedBoardWords(b Board, s string) []string {
+	ls := strings.ToLower(s)
 	type hit struct {
 		word string
 		idx  int
@@ -190,7 +260,7 @@ func parseGuesses(b Board, text string) []string {
 		if seen[w] {
 			continue
 		}
-		if i := strings.Index(lower, strings.ToLower(w)); i != -1 {
+		if i := indexWord(ls, strings.ToLower(w)); i != -1 {
 			hits = append(hits, hit{w, i})
 			seen[w] = true
 		}
@@ -203,11 +273,43 @@ func parseGuesses(b Board, text string) []string {
 	return out
 }
 
+// indexWord finds word in haystack as a whole token (bounded by non-alphanumeric
+// characters), returning its byte offset or -1. Both arguments must be lowercase.
+func indexWord(haystack, word string) int {
+	from := 0
+	for {
+		i := strings.Index(haystack[from:], word)
+		if i < 0 {
+			return -1
+		}
+		abs := from + i
+		beforeOK := abs == 0 || !isAlnumByte(haystack[abs-1])
+		end := abs + len(word)
+		afterOK := end >= len(haystack) || !isAlnumByte(haystack[end])
+		if beforeOK && afterOK {
+			return abs
+		}
+		from = abs + 1
+	}
+}
+
+func isAlnumByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+// capWords trims a guess list to at most n entries (n <= 0 means no cap).
+func capWords(words []string, n int) []string {
+	if n > 0 && len(words) > n {
+		return words[:n]
+	}
+	return words
+}
+
 // RunGemotGuess submits the guessers' positions to a live gemot deliberation and
 // returns the synthesized team guess (ordered board words). ok=false on failure.
 func RunGemotGuess(ctx context.Context, g *Gemot, b Board, positions []GuesserPosition, template, groupID string) ([]string, bool) {
 	topic := fmt.Sprintf("Codenames: clue %q %d — which board words does it point to?", b.Clue, b.ClueN)
-	desc := fmt.Sprintf("%s\n\nBoard words: %s\n\nThe spymaster's clue is %q for %d words. Decide the ordered list of board words the team should guess (most to least confident), including only words the team believes are theirs. Name the exact board words.",
+	desc := fmt.Sprintf("%s\n\nBoard words: %s\n\nThe spymaster's clue is %q for %d words. Decide the ordered list of board words the team should guess (most to least confident), including ONLY words the team is genuinely confident are theirs — a single wrong guess ends the turn and the assassin loses the game, so a short confident list beats a long hopeful one. Name the exact board words.\n\nEnd your recommendation with a single line in exactly this form:\nFINAL: word1, word2, ...\nlisting only the board words the team should actually guess, most to least confident. Do NOT put any word you are warning against on the FINAL line.",
 		gameRules, strings.Join(b.Words, ", "), b.Clue, b.ClueN)
 
 	delibID, err := g.CreateDeliberation(ctx, topic, desc, template, groupID)
@@ -247,7 +349,7 @@ func RunGemotGuess(ctx context.Context, g *Gemot, b Board, positions []GuesserPo
 		fmt.Printf("    [gemot] propose_compromise failed: %v\n", err)
 		return nil, false
 	}
-	guesses := parseGuesses(b, compromise)
+	guesses := parseGuesses(b, compromise, b.ClueN)
 	if len(guesses) == 0 {
 		fmt.Printf("    [gemot] compromise named no board word: %q\n", truncate(compromise, 140))
 		return nil, false
