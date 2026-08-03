@@ -14,12 +14,13 @@ import (
 // LLM is a small Anthropic client with retry/backoff, mirroring the hardened
 // wrapper in scripts/chess-consensus. Used for the codemaster and the guessers.
 type LLM struct {
-	apiKey    string
-	baseURL   string
-	model     string
-	client    *http.Client
-	retryBase time.Duration
-	Calls     int
+	apiKey      string
+	baseURL     string
+	model       string
+	client      *http.Client
+	retryBase   time.Duration
+	temperature float64 // >0 raises sampling diversity (for guessers)
+	Calls       int
 }
 
 func NewLLM(model string) (*LLM, error) {
@@ -47,15 +48,18 @@ func (l *LLM) complete(system, user string, maxTokens int) (string, error) {
 		"system":     system,
 		"messages":   []map[string]string{{"role": "user", "content": user}},
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
+	if l.temperature > 0 {
+		payload["temperature"] = l.temperature
 	}
 	const maxAttempts = 4
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			time.Sleep(l.retryBase << (attempt - 1))
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return "", err
 		}
 		req, err := http.NewRequest("POST", l.baseURL+"/v1/messages", bytes.NewReader(body))
 		if err != nil {
@@ -78,6 +82,14 @@ func (l *LLM) complete(system, user string, maxTokens int) (string, error) {
 		}
 		if resp.StatusCode != http.StatusOK {
 			apiErr := fmt.Errorf("anthropic API %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+			// Some models reject `temperature` (deprecated); drop it and retry.
+			if resp.StatusCode == http.StatusBadRequest && strings.Contains(string(respBody), "temperature") {
+				if _, ok := payload["temperature"]; ok {
+					delete(payload, "temperature")
+					lastErr = apiErr
+					continue
+				}
+			}
 			if retryableStatus(resp.StatusCode) {
 				lastErr = apiErr
 				continue

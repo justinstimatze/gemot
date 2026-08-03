@@ -24,7 +24,8 @@ func main() {
 	n := flag.Int("n", 5, "number of boards")
 	seed := flag.Int64("seed", 2026, "generator seed")
 	cmModel := flag.String("cm-model", "claude-haiku-4-5", "codemaster (spymaster) model")
-	gModel := flag.String("guesser-model", "claude-haiku-4-5", "guesser model")
+	guesserModels := flag.String("guesser-models", "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-8", "comma-separated Anthropic models, one per guesser style (cycled if fewer) — heterogeneous fleet for genuine judgment diversity")
+	guesserTemp := flag.Float64("guesser-temp", 0.9, "guesser sampling temperature (raises diversity)")
 	url := flag.String("url", "", "gemot MCP URL; when set, adds a live gemot deliberation arm")
 	secret := flag.String("secret", os.Getenv("GEMOT_API_SECRET"), "gemot API secret / key")
 	template := flag.String("template", "review", "deliberation template for the gemot arm (min_participants <= guesser count)")
@@ -37,10 +38,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "codenames:", err)
 		os.Exit(1)
 	}
-	guesser, err := NewLLM(*gModel)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "codenames:", err)
-		os.Exit(1)
+	models := strings.Split(*guesserModels, ",")
+	guesserLLMs := make([]*LLM, len(guessStyles))
+	for i := range guessStyles {
+		m := strings.TrimSpace(models[i%len(models)])
+		gl, err := NewLLM(m)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "codenames:", err)
+			os.Exit(1)
+		}
+		gl.temperature = *guesserTemp
+		guesserLLMs[i] = gl
 	}
 	var g *Gemot
 	if *url != "" {
@@ -51,7 +59,7 @@ func main() {
 	ctx := context.Background()
 
 	boards := Generate(*n, *seed)
-	fmt.Printf("codenames: %d boards, codemaster=%s guesser=%s\n", len(boards), *cmModel, *gModel)
+	fmt.Printf("codenames: %d boards, codemaster=%s guessers=%s (temp %.1f)\n", len(boards), *cmModel, *guesserModels, *guesserTemp)
 
 	var all [][]ArmResult
 	for i := range boards {
@@ -64,8 +72,8 @@ func main() {
 		b.Clue, b.ClueN, b.IntendedIdx = clue, num, intended
 
 		var positions []GuesserPosition
-		for _, st := range guessStyles {
-			gs, reason, err := guesser.Guess(st, b.Words, clue, num)
+		for i, st := range guessStyles {
+			gs, reason, err := guesserLLMs[i].Guess(st, b.Words, clue, num)
 			if err != nil {
 				fmt.Printf("  board %d guesser %s failed: %v\n", b.ID, st.Name, err)
 				continue
