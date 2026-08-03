@@ -23,7 +23,7 @@ import (
 func main() {
 	n := flag.Int("n", 5, "number of boards")
 	seed := flag.Int64("seed", 2026, "generator seed")
-	cmModel := flag.String("cm-model", "claude-haiku-4-5", "codemaster (spymaster) model")
+	cmModel := flag.String("cm-model", "claude-sonnet-4-6", "codemaster (spymaster) model")
 	guesserModels := flag.String("guesser-models", "claude-haiku-4-5,claude-sonnet-4-6,claude-opus-4-8", "comma-separated Anthropic models, one per guesser style (cycled if fewer) — heterogeneous fleet for genuine judgment diversity")
 	guesserTemp := flag.Float64("guesser-temp", 0.9, "guesser sampling temperature (raises diversity)")
 	url := flag.String("url", "", "gemot MCP URL; when set, adds a live gemot deliberation arm")
