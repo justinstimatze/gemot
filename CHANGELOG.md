@@ -4,6 +4,10 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Prompt caching for the analysis pipeline
+
+Every `analyze` fans out to ~8–16 LLM calls that share a large, stable instruction + tool-schema prefix and differ only in the user prompt, but none of it was cached — so each deliberation paid full input price on every call. The tools+system prefix is now marked cacheable (`cache_control` ephemeral), turning repeated full-price input into 0.1× cache reads: a cost and latency reduction on every deliberation, paid and free-tier alike. A new `LOG_LEVEL` env (`debug|info|warn|error`, default `info`) surfaces per-call `llm_usage` telemetry (input/output/cache tokens) for cost and cache-effectiveness audits.
+
 ### Fix: trust-edge upsert double-row conflict (SQLSTATE 21000)
 
 `AccumulateTrustEdges` and `ApplyDisputeEdges` expanded parallel arrays into a single `INSERT ... ON CONFLICT` via `unnest`. A batch containing duplicate `(from_agent, to_agent)` pairs — which any 3+ agent deliberation produces — made Postgres reject the statement ("ON CONFLICT DO UPDATE command cannot affect row a second time"), silently failing the reputation update on every such deliberation. Edges are now deduped and their weights summed before the upsert (matching the `DO UPDATE` accumulation). Surfaced during a multi-agent keyed run where 6/6 deliberations warned.
