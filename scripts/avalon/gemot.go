@@ -230,13 +230,15 @@ type seatPosition struct {
 // Degraded > 0 has structured data points that are really chat and must not be
 // trusted as-is.
 type GemotArm struct {
-	g             *Gemot
-	template      string
-	groupBase     string
-	counter       int
-	Deliberations int // aggregation attempts (one per quest that had >=2 positions)
-	Degraded      int // attempts that fell back to chat after a retry
-	journal       *Journal
+	g              *Gemot
+	template       string
+	groupBase      string
+	counter        int
+	Deliberations  int           // aggregation attempts (one per quest that had >=2 positions)
+	Degraded       int           // attempts that fell back to chat after a retry
+	AnalyzeTimeout time.Duration // per-deliberation analysis poll deadline (default 3m if unset)
+	MaxAggregate   time.Duration // slowest single aggregation observed (instrumentation)
+	journal        *Journal
 }
 
 func NewGemotArm(g *Gemot, template, groupBase string, j *Journal) *GemotArm {
@@ -274,21 +276,27 @@ func (gm *GemotArm) discuss(g *Game, players []Player, knows []PlayerKnowledge, 
 	}
 
 	gm.Deliberations++
+	start := time.Now()
 	synth, err := gm.aggregate(ctx, g, poss)
 	if err != nil {
 		// One retry on a fresh connection before giving up.
 		gm.g.Close()
 		synth, err = gm.aggregate(ctx, g, poss)
 	}
+	dur := time.Since(start)
+	if dur > gm.MaxAggregate {
+		gm.MaxAggregate = dur
+	}
 	if err != nil {
 		gm.Degraded++
-		fmt.Fprintf(os.Stderr, "  [structured q%d] DEGRADED to chat (gemot failed twice): %v\n", g.Quest+1, err)
+		fmt.Fprintf(os.Stderr, "  [structured q%d] DEGRADED to chat (gemot failed twice after %s): %v\n", g.Quest+1, dur.Round(time.Second), err)
 		if gm.journal != nil {
 			gm.journal.Record(JournalEntry{Quest: g.Quest + 1, Phase: "structured", Seat: -1,
 				Role: "gemot", Action: "degraded", Private: err.Error()})
 		}
 		return transcript
 	}
+	fmt.Fprintf(os.Stderr, "  [structured q%d] aggregated in %s\n", g.Quest+1, dur.Round(time.Second))
 	if gm.journal != nil {
 		gm.journal.Record(JournalEntry{Quest: g.Quest + 1, Phase: "structured", Seat: -1,
 			Role: "gemot", Action: "synthesis", Choice: synth})
@@ -354,7 +362,11 @@ listing the seats safest to send, most to least trusted.`,
 			_ = gm.g.Vote(ctx, delibID, fmt.Sprintf("seat%d", voter.seat), id, val)
 		}
 	}
-	if err := gm.g.AnalyzeRun(ctx, delibID, 3*time.Minute); err != nil {
+	timeout := gm.AnalyzeTimeout
+	if timeout <= 0 {
+		timeout = 3 * time.Minute
+	}
+	if err := gm.g.AnalyzeRun(ctx, delibID, timeout); err != nil {
 		return "", fmt.Errorf("analyze: %w", err)
 	}
 	synth, err := gm.g.ProposeCompromise(ctx, delibID)

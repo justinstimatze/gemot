@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"os"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -32,6 +33,7 @@ func main() {
 	url := flag.String("url", "http://localhost:8080/mcp", "gemot MCP URL (chat/structured arms)")
 	secret := flag.String("secret", os.Getenv("GEMOT_API_SECRET"), "gemot API secret (chat/structured arms)")
 	template := flag.String("template", "review", "gemot deliberation template (structured arm)")
+	analyzeTimeout := flag.Duration("analyze-timeout", 10*time.Minute, "per-deliberation analysis poll deadline (structured arm)")
 	journalPath := flag.String("journal", "", "path to write the per-game journal (JSONL); default avalon-journal-seed<seed>.jsonl")
 	show := flag.Bool("show", false, "print each game's outcome")
 	flag.Parse()
@@ -76,7 +78,8 @@ func main() {
 			client := NewGemot(*url, *secret)
 			defer client.Close()
 			gm = NewGemotArm(client, *template, fmt.Sprintf("avalon_%d", *seed), journal)
-			fmt.Printf("structured arm via %s (template %q)\n", *url, *template)
+			gm.AnalyzeTimeout = *analyzeTimeout
+			fmt.Printf("structured arm via %s (template %q, analyze-timeout %s)\n", *url, *template, *analyzeTimeout)
 		}
 	}
 
@@ -91,41 +94,92 @@ func main() {
 	}
 	results := map[string]*agg{}
 	order := []string{}
-
 	for _, arm := range arms {
-		a := &agg{}
-		results[arm] = a
+		results[arm] = &agg{}
 		order = append(order, arm)
-		for i := 0; i < *games; i++ {
-			gameSeed := *seed*10000 + int64(i)
+	}
+
+	// Run structured first per seed so a degraded seed is caught before the other
+	// arms spend LLM calls on it. If structured degrades, the whole seed is
+	// discarded for ALL arms (preserving the paired deal) and a fresh seed is
+	// drawn — so a contaminated data point can never reach the final dataset.
+	runOrder := []string{}
+	for _, a := range arms {
+		if a == "structured" {
+			runOrder = append(runOrder, a)
+		}
+	}
+	for _, a := range arms {
+		if a != "structured" {
+			runOrder = append(runOrder, a)
+		}
+	}
+
+	type pending struct {
+		arm string
+		out Outcome
+	}
+	committed, seedOffset, discarded := 0, 0, 0
+	maxDiscards := *games*3 + 10 // fail loudly rather than spin forever if gemot is down
+	for committed < *games {
+		gameSeed := *seed*10000 + int64(seedOffset)
+		seedOffset++
+		jSnap := journal.Len()
+		delibBefore, degBefore := 0, 0
+		if gm != nil {
+			delibBefore, degBefore = gm.Deliberations, gm.Degraded
+		}
+		var pend []pending
+		seedOK := true
+		for _, arm := range runOrder {
 			g, err := NewGame(*n, opts, rand.New(rand.NewSource(gameSeed)))
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "avalon:", err)
 				os.Exit(1)
 			}
-			journal.Begin(arm, i)
+			journal.Begin(arm, committed)
 			players, cfg, err := buildArm(arm, g, sharedLLM, gm, journal, gameSeed)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "avalon:", err)
 				os.Exit(1)
 			}
 			out := RunGame(g, players, cfg)
+			if arm == "structured" && gm != nil && gm.Degraded > degBefore {
+				journal.Truncate(jSnap)
+				gm.Deliberations, gm.Degraded = delibBefore, degBefore
+				discarded++
+				fmt.Fprintf(os.Stderr, "  [seed %d] structured degraded — discarding seed for all arms, redrawing (%d discarded so far)\n", gameSeed, discarded)
+				seedOK = false
+				break
+			}
+			pend = append(pend, pending{arm, out})
+		}
+		if !seedOK {
+			if discarded > maxDiscards {
+				fmt.Fprintf(os.Stderr, "avalon: too many degraded seeds (%d) — is the gemot server healthy? aborting.\n", discarded)
+				os.Exit(1)
+			}
+			continue
+		}
+		for _, p := range pend {
+			a := results[p.arm]
 			a.count++
-			a.proposals += out.Proposals
-			if out.GoodWin {
+			a.proposals += p.out.Proposals
+			if p.out.GoodWin {
 				a.good++
 			}
-			if out.MerlinKilled {
+			if p.out.MerlinKilled {
 				a.merlinKills++
 			}
-			if out.ThreeSuccesses {
+			if p.out.ThreeSuccesses {
 				a.threeSucc++
 			}
 			if *show {
 				fmt.Printf("  [%s] game %d: good=%v 3-successes=%v merlin-killed=%v quests=%v\n",
-					arm, i, out.GoodWin, out.ThreeSuccesses, out.MerlinKilled, out.Results)
+					p.arm, committed, p.out.GoodWin, p.out.ThreeSuccesses, p.out.MerlinKilled, p.out.Results)
 			}
 		}
+		committed++
 	}
 
 	fmt.Printf("\n%-14s %10s %12s %14s %10s\n", "arm", "good-win%", "3-success%", "merlin-kill%", "proposals")
@@ -147,9 +201,14 @@ func main() {
 
 	if gm != nil {
 		if gm.Degraded > 0 {
+			// Should be unreachable: degraded seeds are discarded + rolled back above.
 			fmt.Printf("\nWARNING: structured arm degraded to chat on %d/%d deliberations — those data points are contaminated.\n", gm.Degraded, gm.Deliberations)
 		} else if gm.Deliberations > 0 {
-			fmt.Printf("\nstructured: %d/%d gemot deliberations succeeded (0 degraded).\n", gm.Deliberations, gm.Deliberations)
+			fmt.Printf("\nstructured: %d/%d gemot deliberations succeeded (0 degraded); slowest aggregation %s.\n",
+				gm.Deliberations, gm.Deliberations, gm.MaxAggregate.Round(time.Second))
+		}
+		if discarded > 0 {
+			fmt.Printf("discarded %d contaminated seed(s) and redrew to reach %d clean games/arm.\n", discarded, *games)
 		}
 	}
 	if sharedLLM != nil {

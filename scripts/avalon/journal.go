@@ -53,6 +53,19 @@ func (j *Journal) Record(e JournalEntry) {
 	j.mu.Unlock()
 }
 
+// Truncate drops entries back to length n. Used to discard a seed whose
+// structured arm degraded, so a contaminated game never reaches the journal.
+func (j *Journal) Truncate(n int) {
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	if n >= 0 && n < len(j.entries) {
+		j.entries = j.entries[:n]
+	}
+	j.mu.Unlock()
+}
+
 func (j *Journal) Len() int {
 	if j == nil {
 		return 0
