@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 )
 
 func main() {
+	initLogging()
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: gemot <serve|http|admin|calibration> [args...]\n")
 		os.Exit(1)
@@ -46,6 +49,22 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
 		os.Exit(1)
 	}
+}
+
+// initLogging installs the default slog handler at a level set by LOG_LEVEL
+// (debug|info|warn|error; defaults to info). debug surfaces per-call llm_usage
+// telemetry (input/output/cache tokens) for cost + cache-effectiveness audits.
+func initLogging() {
+	level := slog.LevelInfo
+	switch strings.ToLower(os.Getenv("LOG_LEVEL")) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 // cmdServe starts gemot in stdio (httpMode=false) or HTTP mode. With
