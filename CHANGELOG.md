@@ -4,9 +4,9 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
-### Prompt caching for the analysis pipeline
+### Analysis LLM telemetry + cache-readiness
 
-Every `analyze` fans out to ~8–16 LLM calls that share a large, stable instruction + tool-schema prefix and differ only in the user prompt, but none of it was cached — so each deliberation paid full input price on every call. The tools+system prefix is now marked cacheable (`cache_control` ephemeral), turning repeated full-price input into 0.1× cache reads: a cost and latency reduction on every deliberation, paid and free-tier alike. A new `LOG_LEVEL` env (`debug|info|warn|error`, default `info`) surfaces per-call `llm_usage` telemetry (input/output/cache tokens) for cost and cache-effectiveness audits.
+Added per-call `llm_usage` telemetry (input/output/cache tokens) behind a new `LOG_LEVEL` env (`debug|info|warn|error`, default `info`), and marked the analysis pipeline's tools+system prefix with `cache_control` ephemeral. Note: a calibration run showed the cache breakpoint is currently **inert** — the analyze prompts' stable prefix (~93-token system + ~433-token instruction template, the latter presently in the user message) falls under Anthropic's 1024-token cache minimum, so `cache_control` is silently ignored (`cache_write=0` across 396 measured calls). The marking is harmless and will engage automatically if prompts grow past the floor or are restructured to move the stable instruction block into the cacheable prefix; the telemetry is the immediate value, and it's what surfaced the true cost driver (call volume, ~44 LLM calls/deliberation, not per-call inefficiency).
 
 ### Fix: trust-edge upsert double-row conflict (SQLSTATE 21000)
 
