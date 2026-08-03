@@ -176,22 +176,26 @@ func (g *Gemot) ProposeCompromise(ctx context.Context, delibID string) (string, 
 	return resp.CompromiseProposal, nil
 }
 
-// avoidMarkers flag a line that argues AGAINST guessing words rather than for
-// them, so a word named only as a warning ("avoid SPACE — likely the assassin")
-// is never mistaken for a guess. This was the failure that walked the gemot arm
-// into the assassin on a board where the synthesis correctly warned against it.
+// avoidMarkers flag a CLAUSE that argues AGAINST guessing words rather than for
+// them, so a word named only as a warning ("avoid SPACE -- likely the assassin")
+// is never mistaken for a guess. Kept to strong anti-signals only: bare "risk",
+// "opponent", "not", "never" appear constantly in positive reasoning too, and
+// matching them discarded whole paragraphs.
 var avoidMarkers = []string{
-	"avoid", "assassin", "danger", "risky", "risk", "do not", "don't", "dont",
-	"never", "skip", "opponent", "civilian", "not guess", "steer clear",
-	"stay away", "leave", "exclude",
+	"avoid", "steer clear", "stay away", "skip", "exclude", "leave alone",
+	"do not guess", "don't guess", "dont guess", "not guess", "never guess",
+	"assassin",
 }
 
 // parseGuesses turns the synthesis text into the team's ordered guess list. It
 // prefers an explicit final line ("FINAL: word1, word2, ...") the deliberation
 // is asked to emit; failing that it falls back to appearance order across the
-// lines that are NOT warnings. Words are matched on token boundaries so a board
-// word is never found inside a larger word (ICE inside PRICE). The result is
-// capped at limit (the clue's number) — the guessing fleet's calibrated size.
+// text's CLAUSES, skipping only a clause that explicitly warns against a word.
+// Clause granularity (not whole-text) is essential: the compromise arrives as
+// one paragraph, so matching a warning marker over the whole thing discarded
+// every guess. Words are matched on token boundaries so a board word is never
+// found inside a larger word (ICE inside PRICE). The result is capped at limit
+// (the clue's number) — the fleet's calibrated guess size.
 func parseGuesses(b Board, text string, limit int) []string {
 	if final := parseFinalLine(b, text); len(final) > 0 {
 		return capWords(final, limit)
@@ -203,11 +207,11 @@ func parseGuesses(b Board, text string, limit int) []string {
 	var hits []hit
 	seen := map[string]bool{}
 	offset := 0
-	for _, line := range strings.Split(text, "\n") {
-		ll := strings.ToLower(line)
+	for _, clause := range splitClauses(text) {
+		lc := strings.ToLower(clause)
 		warn := false
 		for _, m := range avoidMarkers {
-			if strings.Contains(ll, m) {
+			if strings.Contains(lc, m) {
 				warn = true
 				break
 			}
@@ -217,13 +221,13 @@ func parseGuesses(b Board, text string, limit int) []string {
 				if seen[w] {
 					continue
 				}
-				if i := indexWord(ll, strings.ToLower(w)); i != -1 {
+				if i := indexWord(lc, strings.ToLower(w)); i != -1 {
 					hits = append(hits, hit{w, offset + i})
 					seen[w] = true
 				}
 			}
 		}
-		offset += len(line) + 1
+		offset += len(clause) + 1
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].idx < hits[j].idx })
 	out := make([]string, len(hits))
@@ -231,6 +235,24 @@ func parseGuesses(b Board, text string, limit int) []string {
 		out[i] = h.word
 	}
 	return capWords(out, limit)
+}
+
+// splitClauses breaks text into clauses on sentence and clause terminators, so a
+// warning in one clause does not suppress guesses named in adjacent clauses.
+func splitClauses(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '.', '\n', ';', '!', '?':
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
 }
 
 // parseFinalLine reads an explicit "FINAL: ..." (or "guesses:"/"answer:") line if
