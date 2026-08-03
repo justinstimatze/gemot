@@ -57,12 +57,25 @@ You will be told your seat, your secret role, your private knowledge, the public
 // agentSystem returns the uniform cached system prompt (identical for all seats).
 func agentSystem(v GameView) string { return avalonSystemPrompt }
 
-func (a *LLMAgent) ask(v GameView, user string, maxTok int, target any) bool {
-	out, err := a.llm.complete(agentSystem(v), user, maxTok)
-	if err != nil {
-		return false
+// ask calls the LLM, parses its JSON reply into target, and checks it with valid.
+// It retries before giving up: transport/API errors are already retried inside
+// complete(), so a retry here targets (a) PARSE failures — most often a JSON
+// object truncated by too small a max_tokens, countered by widening the budget on
+// each retry — and (b) parsed-but-SEMANTICALLY-invalid replies (a duplicate seat,
+// a missing field), which is why valid() is inside the loop rather than checked by
+// the caller after a single attempt. Only after all attempts fail does the caller
+// fall back to the rule-bot, so a single unlucky sample no longer silently injects
+// bot play (see the lopsided solo fallback rate in the n=10 run). valid may be nil.
+func (a *LLMAgent) ask(v GameView, user string, maxTok int, target any, valid func() bool) bool {
+	const attempts = 3
+	for i := 0; i < attempts; i++ {
+		tok := maxTok * (i + 1) // widen on each retry to defeat truncated-JSON parse failures
+		out, err := a.llm.complete(agentSystem(v), user, tok)
+		if err == nil && jsonUnmarshal(out, target) == nil && (valid == nil || valid()) {
+			return true
+		}
 	}
-	return jsonUnmarshal(out, target) == nil
+	return false
 }
 
 func (a *LLMAgent) rec(v GameView, phase, action, choice, private string) {
@@ -81,7 +94,7 @@ func (a *LLMAgent) SelectTeam(v GameView) []int {
 		Team      []int  `json:"team"`
 		Reasoning string `json:"reasoning"`
 	}
-	if a.ask(v, user, 500, &r) && validTeam(r.Team, v.TeamSize, v.NumPlayers) {
+	if a.ask(v, user, 500, &r, func() bool { return validTeam(r.Team, v.TeamSize, v.NumPlayers) }) {
 		a.rec(v, "team_selection", "select_team", "team "+seatList(r.Team), r.Reasoning)
 		return r.Team
 	}
@@ -98,7 +111,7 @@ func (a *LLMAgent) VoteTeam(v GameView) bool {
 		Approve   *bool  `json:"approve"`
 		Reasoning string `json:"reasoning"`
 	}
-	if a.ask(v, user, 400, &r) && r.Approve != nil {
+	if a.ask(v, user, 400, &r, func() bool { return r.Approve != nil }) {
 		a.rec(v, "team_voting", "vote_team", approveStr(*r.Approve), r.Reasoning)
 		return *r.Approve
 	}
@@ -114,7 +127,7 @@ func (a *LLMAgent) VoteQuest(v GameView) bool {
 		Pass      *bool  `json:"pass"`
 		Reasoning string `json:"reasoning"`
 	}
-	if a.ask(v, user, 200, &r) && r.Pass != nil {
+	if a.ask(v, user, 200, &r, func() bool { return r.Pass != nil }) {
 		a.rec(v, "quest_voting", "vote_quest", passStr(*r.Pass), r.Reasoning)
 		return *r.Pass
 	}
@@ -130,7 +143,7 @@ func (a *LLMAgent) Assassinate(v GameView) int {
 		Target    *int   `json:"target"`
 		Reasoning string `json:"reasoning"`
 	}
-	if a.ask(v, user, 400, &r) && r.Target != nil && *r.Target >= 0 && *r.Target < v.NumPlayers {
+	if a.ask(v, user, 400, &r, func() bool { return r.Target != nil && *r.Target >= 0 && *r.Target < v.NumPlayers }) {
 		a.rec(v, "assassination", "assassinate", fmt.Sprintf("target seat %d", *r.Target), r.Reasoning)
 		return *r.Target
 	}
@@ -151,21 +164,20 @@ func (a *LLMAgent) Position(v GameView) (statement string, suspects []int) {
 		Private   string `json:"private_reasoning"`
 		Suspect   []int  `json:"suspect"`
 	}
-	if a.ask(v, user, 600, &r) {
-		if st := strings.TrimSpace(r.Statement); st != "" {
-			var sus []int
-			for _, s := range r.Suspect {
-				if s >= 0 && s < v.NumPlayers && s != v.Seat {
-					sus = append(sus, s)
-				}
+	if a.ask(v, user, 600, &r, func() bool { return strings.TrimSpace(r.Statement) != "" }) {
+		st := strings.TrimSpace(r.Statement)
+		var sus []int
+		for _, s := range r.Suspect {
+			if s >= 0 && s < v.NumPlayers && s != v.Seat {
+				sus = append(sus, s)
 			}
-			priv := r.Private
-			if len(sus) > 0 {
-				priv += " [suspects: " + seatList(sus) + "]"
-			}
-			a.rec(v, "discussion", "position", st, priv)
-			return st, sus
 		}
+		priv := r.Private
+		if len(sus) > 0 {
+			priv += " [suspects: " + seatList(sus) + "]"
+		}
+		a.rec(v, "discussion", "position", st, priv)
+		return st, sus
 	}
 	return "", nil
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -73,6 +74,24 @@ func (j *Journal) Len() int {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return len(j.entries)
+}
+
+// FallbackCounts tallies, per arm, how many decisions fell back to the rule-bot
+// after the LLM failed (recorded as a "(fallback...)" private note). Non-zero
+// means that arm's data is partly rule-bot play — lower is better, 0 is ideal.
+func (j *Journal) FallbackCounts() map[string]int {
+	if j == nil {
+		return nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	m := map[string]int{}
+	for _, e := range j.entries {
+		if strings.HasPrefix(e.Private, "(fallback") {
+			m[e.Arm]++
+		}
+	}
+	return m
 }
 
 // WriteJSONL writes one entry per line, chronological order.

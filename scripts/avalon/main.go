@@ -27,7 +27,7 @@ func main() {
 	n := flag.Int("n", 5, "players per game (5-10)")
 	games := flag.Int("games", 10, "games per arm")
 	seed := flag.Int64("seed", 2026, "base seed (game i uses seed*10000+i, identical across arms)")
-	armsFlag := flag.String("arms", "bot", "comma-separated arms: bot,solo,chat,structured")
+	armsFlag := flag.String("arms", "bot", "comma-separated arms: bot,solo,chat,summary,structured")
 	model := flag.String("model", "claude-sonnet-4-6", "Anthropic model for LLM agents")
 	percival := flag.Bool("percival", true, "include Percival + Morgana (needs >=2 evil seats)")
 	url := flag.String("url", "http://localhost:8080/mcp", "gemot MCP URL (chat/structured arms)")
@@ -211,6 +211,24 @@ func main() {
 			fmt.Printf("discarded %d contaminated seed(s) and redrew to reach %d clean games/arm.\n", discarded, *games)
 		}
 	}
+	if needLLM {
+		fb := journal.FallbackCounts()
+		total := 0
+		for _, arm := range order {
+			total += fb[arm]
+		}
+		if total == 0 {
+			fmt.Println("\nLLM->rule-bot fallbacks: 0 (no arm contaminated by bot play).")
+		} else {
+			fmt.Printf("\nWARNING: LLM->rule-bot fallbacks (parse/API failures inject bot play):")
+			for _, arm := range order {
+				if fb[arm] > 0 {
+					fmt.Printf(" %s=%d", arm, fb[arm])
+				}
+			}
+			fmt.Printf(" (total %d)\n", total)
+		}
+	}
 	if sharedLLM != nil {
 		fmt.Println(sharedLLM.Stats())
 	}
@@ -242,6 +260,9 @@ func buildArm(arm string, g *Game, llm *LLM, gm *GemotArm, journal *Journal, see
 	case "chat":
 		llmAgents()
 		return players, RunConfig{Arm: arm, Discuss: chatDiscuss, Journal: journal}, nil
+	case "summary":
+		llmAgents()
+		return players, RunConfig{Arm: arm, Discuss: NewSummaryArm(llm, journal).discuss, Journal: journal}, nil
 	case "structured":
 		if gm == nil {
 			return nil, RunConfig{}, fmt.Errorf("structured arm needs a gemot client")
@@ -249,7 +270,7 @@ func buildArm(arm string, g *Game, llm *LLM, gm *GemotArm, journal *Journal, see
 		llmAgents()
 		return players, RunConfig{Arm: arm, Discuss: gm.discuss, Journal: journal}, nil
 	default:
-		return nil, RunConfig{}, fmt.Errorf("unknown arm %q (bot, solo, chat, structured)", arm)
+		return nil, RunConfig{}, fmt.Errorf("unknown arm %q (bot, solo, chat, summary, structured)", arm)
 	}
 }
 
