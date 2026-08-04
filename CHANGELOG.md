@@ -14,6 +14,42 @@ Withdrawal also invalidates the departing agent's outstanding commitments, and t
 
 Separately, all these paths now route through `orderAction` like `Commit` already did. The pledge was BFT-ordered while the verdict on it reached only the lightweight audit callback — the one write in the commitment lifecycle that escaped the tamper-evident log, in a product whose audit trail is the point. Nine regression tests added on the memory store so they run without Postgres.
 
+### Verifiable principal delegation
+
+`on_behalf_of` used to be a free-text claim any agent could assert about any principal. A principal can now sign a delegation credential (`internal/principal`) — *"the agent holding key K may speak for me, within scope S, until T"* — bound to a **confirmation key** (RFC 7800 `cnf` / RFC 9449 DPoP, so a captured credential is inert without the private half), to a scope (`delib:`/`group:`, so it cannot travel), and to a mandatory expiry. Presenting a credential requires signing the action with that key, so credentials are safe to export and re-verify offline. New per-deliberation `principal_policy` (`none`|`advisory`|`required`) logs or rejects unbacked claims; a bad credential is rejected under every policy. Principals register keys in the same registry agents use, so revoking a key invalidates every credential it signed. A `Verifier` seam (`LocalVerifier` + `KeyLookup`) is the plug-in point for an external trust root. Enforced over both MCP and A2A. Additive, idempotent schema migration (`principal_credential`/`principal_verified` columns, `principal_policy` defaulting to `none` — no behavior change for existing deliberations). Design boundary: a credential carries a capability, never personal context, because positions land in an append-only BLS-signed log that cannot honor a later revocation — see `docs/hcp-integration.md`.
+
+### Composability interop contract
+
+New `COMPOSING.md` documents how to layer an external identity or delegation issuer on top of gemot without gemot becoming an IdP: the attribution/signing split (`sub`/`act`, already present via `SubmitPositionWithSigningID`), per-agent ed25519 keys + envelope proof-of-possession, bearer + MPP scope, and the verifiable-principal-delegation `Credential` above (with a one-to-one mapping between the RFC 8693 `sub`/`act` dialect and the internal `principal`/`agent`/`cnf` model). `docs/act-claim.schema.json` publishes an RFC 8693/9068-subset act-claim (recursive nested-actor chain, attenuating scope) as the external import shape. A new `/.well-known/oauth-protected-resource` endpoint serves RFC 9728 metadata that **deliberately omits `authorization_servers`** — gemot authenticates with bearer API keys + MPP, not OAuth, so advertising an authorization server would push spec-compliant MCP clients into a DCR flow gemot can't service. The doc separates what ships now (delegation is built and enforced) from the genuinely remaining pieces (a remote trust-root backend behind the existing `Verifier` seam, and JWT act-claim import in the bearer slot).
+
+### Security: bump golang.org/x/net to 0.55.0
+
+Resolves a moderate-severity DoS in the `x/net` HTML parser (Dependabot #4); pulled `x/sync`, `x/sys`, and `x/text` forward as a side effect. Indirect dependency.
+
+### Analysis LLM telemetry + cache-readiness
+
+Added per-call `llm_usage` telemetry (input/output/cache tokens) behind a new `LOG_LEVEL` env (`debug|info|warn|error`, default `info`), and marked the analysis pipeline's tools+system prefix with `cache_control` ephemeral. Note: a calibration run showed the cache breakpoint is currently **inert** — the analyze prompts' stable prefix (~93-token system + ~433-token instruction template, the latter presently in the user message) falls under Anthropic's 1024-token cache minimum, so `cache_control` is silently ignored (`cache_write=0` across 396 measured calls). The marking is harmless and will engage automatically if prompts grow past the floor or are restructured to move the stable instruction block into the cacheable prefix; the telemetry is the immediate value, and it's what surfaced the true cost driver (call volume, ~44 LLM calls/deliberation, not per-call inefficiency).
+
+### Fix: trust-edge upsert double-row conflict (SQLSTATE 21000)
+
+`AccumulateTrustEdges` and `ApplyDisputeEdges` expanded parallel arrays into a single `INSERT ... ON CONFLICT` via `unnest`. A batch containing duplicate `(from_agent, to_agent)` pairs — which any 3+ agent deliberation produces — made Postgres reject the statement ("ON CONFLICT DO UPDATE command cannot affect row a second time"), silently failing the reputation update on every such deliberation. Edges are now deduped and their weights summed before the upsert (matching the `DO UPDATE` accumulation). Surfaced during a multi-agent keyed run where 6/6 deliberations warned.
+
+### Fix: single-node BFT view wedge on post-propose error
+
+`bft.Engine.Submit` marked a view proposed via `replica.Propose` but only advanced the view on the success path. Any failure after `Propose` (self-vote drain, QC check, context cancellation) returned without advancing, leaving the replica "already proposed in this view" — so every subsequent `Submit` failed with `ErrDoublePropose` in perpetuity, a permanent wedge cleared only by restart. Under batch submission one transient error bricks all later writes. `Submit` now advances the view on every exit after a successful `Propose`, so a failed round is abandoned rather than wedging the engine.
+
+### Fix: compromise generation for non-Synthesizer analyzers
+
+`ProposeCompromise` refused when the analysis had zero cruxes, and `main` wired the compromise/reframe generators only via a concrete `*analysis.Synthesizer` type assertion. Together these made any alternative analyzer unable to produce a compromise. Wiring is now by the `CompromiseGenerator`/`Reframer` interfaces, and `ProposeCompromise` refuses only when there are neither cruxes nor positions to work from.
+
+### compromise synthesis commits to a concrete decision
+
+The options-empty compromise prompt asked for a "statement agents could vote on", which on decision-type deliberations produced procedural language rather than a concrete choice. It now commits to a specific option/action when the deliberation calls for one — conditional, so consultation-style deliberations that legitimately produce statements are unaffected.
+
+### freeform template + chat analyzer
+
+New `freeform` governance template (neutral analysis hint, no procedural rules) and a `ChatAnalyzer` (selected with `GEMOT_ANALYZER=chat`) that bypasses claim extraction, clustering, crux detection, and synthesis in favor of a single unstructured pass over the raw positions. Together they provide an unstructured baseline for measuring what the structured pipeline adds.
+
 ## 0.13.1 — 2026-06-17
 
 Close the loop on 0.13.0's private-deployment story: ship the `gemot admin create-api-key` CLI the deployment doc promised.

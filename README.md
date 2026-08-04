@@ -223,6 +223,10 @@ Analysis results include `integrity_warnings` flagging:
 
 **Sybil-aware trust weights.** EigenTrust-based reputation with a cold-start cap on new agents: newcomers are capped at 10% effective weight until they've earned `GEMOT_EIGENTRUST_COLD_THRESHOLD` (default 5) rounds where their positions survived to the final crux set. Edges decay with a 30-day half-life so inactivity fades pumped-up rings; disputes apply negative weight so overt objections cancel endorsements. Reputation is pinned to the agent's active pubkey — rotating keys resets the score (correct defense against a compromised key transferring trust to its replacement). Opt out via `GEMOT_EIGENTRUST_ENABLED=false`.
 
+**Verifiable principal delegation.** `on_behalf_of` used to be a free-text claim any agent could assert about any principal. A principal can now sign a delegation credential — *"the agent holding key K may speak for me, within scope S, until T"* — bound to a **confirmation key** (RFC 7800 `cnf` / DPoP style, so a captured credential is inert without the private half), to a scope (so it cannot travel to another deliberation), and to a mandatory expiry. Presenting a credential requires signing the position with that key, which is why credentials are safe to export and re-verify offline. Set `principal_policy` to `advisory` or `required` on a deliberation to log or reject unbacked claims; a bad credential is rejected under every policy, including `none`. Principals register keys in the same registry agents use, so revoking a principal's key invalidates every credential it ever signed. Credentials carry a capability and never personal context — see [docs/hcp-integration.md](docs/hcp-integration.md) for why that boundary is load-bearing.
+
+**Per-action signature policy.** Set `signature_policy` on a deliberation to `advisory` (log unsigned submissions from agents that have registered a key) or `required` (reject them). Agents with no registered key are unaffected in every mode, so the policy tightens the guarantee for agents that opted into signing rather than locking anyone out. A submission that *does* carry a signature is verified under every policy, including the `none` default.
+
 **Envelope signing + replay protection.** Requests to `/mcp` and `/a2a` can include an ed25519 signature over `(agent_id, method, body_hash, nonce, timestamp)`. Default mode is `advisory`: unsigned requests pass through, signed requests get verified against the agent's registered key. Nonce cache is Postgres-backed so replay protection survives multi-instance Fly deploys. Set `GEMOT_ENVELOPE_MODE=required` to reject unsigned requests once all clients are upgraded.
 
 ### Platform
@@ -272,9 +276,10 @@ gemot/
 │   ├── payments/                    # Stripe billing, credits, rate limiting, MPP
 │   ├── llm/client.go               # Anthropic SDK + global API semaphore
 │   ├── store/                       # Postgres persistence + LLM cache + job queue
+│   ├── principal/                   # Verifiable on_behalf_of delegation credentials
 │   ├── sanitize/                    # PII stripping, prompt injection detection
 │   └── cost/tracker.go             # Per-deliberation model-aware cost tracking
-├── tests/                           # 286 tests
+├── tests/                           # 345 tests
 ├── THREAT_MODEL.md
 ```
 
@@ -285,6 +290,7 @@ gemot/
 - **[Talk to the City](integrations/t3c/)** — Turn published positions into synthetic deliberation agents. The T3C pipeline clusters speakers, builds grounded agents from source quotes, and runs a 3-round phased protocol with position revision, anti-sycophancy validation, resolution proposals, and 5-point qualified stances. Anonymized by default. `go run ./scripts/t3c-import/ report.json --mode structural --rounds 3 --spot-check --report report.md`
 - **[Wasteland](integrations/wasteland/)** — Deliberation for federated agent work. [Stamp mapping](integrations/wasteland/stamp-mapping.md), [A2A examples](integrations/wasteland/a2a-example.sh)
 - **[Hermes Agent](integrations/hermes-agent/README.md)** — Proposal for consensus/voting integration (addresses [NousResearch/hermes-agent#412](https://github.com/NousResearch/hermes-agent/issues/412))
+- **[Human Context Protocol](docs/hcp-integration.md)** — How gemot's delegation credentials relate to HCP (Pentland et al., Stanford Digital Economy Lab / Loyal Agents), and the pluggable seam for an HCP-backed verifier
 - **[Research Lineage](docs/research-lineage.md)** — From Semantic Web (2001) and FIPA to modern agent deliberation
 - **[Agent Decision Tree](docs/agent-decision-tree.md)** — When to use which of the tools
 

@@ -12,7 +12,7 @@ import (
 )
 
 // deliberationColumns is the canonical SELECT column list for deliberation queries.
-const deliberationColumns = `id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), COALESCE(resolution_json, ''), COALESCE(signature_policy, 'none'), deadline_at, created_at`
+const deliberationColumns = `id, topic, description, round_number, status, COALESCE(sub_status, ''), COALESCE(type, ''), COALESCE(visibility, 'open'), COALESCE(creator_key, ''), COALESCE(max_participants, 0), COALESCE(template, ''), COALESCE(rules, '{}'), COALESCE(group_id, ''), COALESCE(resolution_json, ''), COALESCE(signature_policy, 'none'), COALESCE(principal_policy, 'none'), deadline_at, created_at`
 
 // scanner is satisfied by both *sql.Row and *sql.Rows.
 type scanner interface {
@@ -25,7 +25,7 @@ func scanDeliberation(s scanner) (deliberation.Deliberation, error) {
 	var createdAt time.Time
 	var deadlineAt sql.NullTime
 	var rulesJSON, resolutionJSON string
-	if err := s.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &resolutionJSON, &d.SignaturePolicy, &deadlineAt, &createdAt); err != nil {
+	if err := s.Scan(&d.ID, &d.Topic, &d.Description, &d.Round, &d.Status, &d.SubStatus, &d.Type, &d.Visibility, &d.CreatorKey, &d.MaxParticipants, &d.Template, &rulesJSON, &d.GroupID, &resolutionJSON, &d.SignaturePolicy, &d.PrincipalPolicy, &deadlineAt, &createdAt); err != nil {
 		return d, err
 	}
 	d.CreatedAt = createdAt
@@ -61,9 +61,12 @@ func (s *DB) CreateDeliberation(ctx context.Context, d *deliberation.Deliberatio
 	if d.SignaturePolicy == "" {
 		d.SignaturePolicy = "none"
 	}
+	if d.PrincipalPolicy == "" {
+		d.PrincipalPolicy = "none"
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, template, rules, group_id, signature_policy, deadline_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.Template, marshalRules(d.Rules), d.GroupID, d.SignaturePolicy, d.DeadlineAt, d.CreatedAt,
+		`INSERT INTO deliberations (id, topic, description, round_number, status, type, visibility, creator_key, max_participants, template, rules, group_id, signature_policy, principal_policy, deadline_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		d.ID, d.Topic, d.Description, d.Round, d.Status, d.Type, d.Visibility, d.CreatorKey, d.MaxParticipants, d.Template, marshalRules(d.Rules), d.GroupID, d.SignaturePolicy, d.PrincipalPolicy, d.DeadlineAt, d.CreatedAt,
 	)
 	return err
 }
@@ -134,7 +137,7 @@ func (s *DB) ListByGroup(ctx context.Context, groupID string, limit, offset int,
 // ListByAgent returns deliberations where an agent has submitted positions.
 func (s *DB) ListByAgent(ctx context.Context, agentID string, limit, offset int, keyID string) ([]deliberation.Deliberation, error) {
 	limit, offset = normalizePagination(limit, offset)
-	const cols = `d.id, d.topic, d.description, d.round_number, d.status, COALESCE(d.sub_status, ''), COALESCE(d.type, ''), COALESCE(d.visibility, 'open'), COALESCE(d.creator_key, ''), COALESCE(d.max_participants, 0), COALESCE(d.template, ''), COALESCE(d.rules, '{}'), COALESCE(d.group_id, ''), COALESCE(d.resolution_json, ''), COALESCE(d.signature_policy, 'none'), d.deadline_at, d.created_at`
+	const cols = `d.id, d.topic, d.description, d.round_number, d.status, COALESCE(d.sub_status, ''), COALESCE(d.type, ''), COALESCE(d.visibility, 'open'), COALESCE(d.creator_key, ''), COALESCE(d.max_participants, 0), COALESCE(d.template, ''), COALESCE(d.rules, '{}'), COALESCE(d.group_id, ''), COALESCE(d.resolution_json, ''), COALESCE(d.signature_policy, 'none'), COALESCE(d.principal_policy, 'none'), d.deadline_at, d.created_at`
 	query := `SELECT DISTINCT ` + cols + ` FROM deliberations d JOIN positions p ON d.id = p.deliberation_id WHERE p.agent_id = $1 AND d.status != 'deleted'`
 	var args []any
 	if keyID != "" {
@@ -295,8 +298,8 @@ func (s *DB) CreatePosition(ctx context.Context, p *deliberation.Position) error
 		}
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, interests, draft, round_number, created_at, parent_position_id, metadata, signature) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, p.Interests, draft, p.Round, p.CreatedAt, p.ParentPositionID, metadataJSON, p.Signature,
+		`INSERT INTO positions (id, deliberation_id, agent_id, content, model_family, group_name, conviction, reservation, on_behalf_of, interests, draft, round_number, created_at, parent_position_id, metadata, signature, principal_credential, principal_verified) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		p.ID, p.DeliberationID, p.AgentID, p.Content, p.ModelFamily, p.Group, p.Conviction, p.Reservation, p.OnBehalfOf, p.Interests, draft, p.Round, p.CreatedAt, p.ParentPositionID, metadataJSON, p.Signature, p.PrincipalCredential, p.PrincipalVerified,
 	)
 	return err
 }
@@ -305,7 +308,7 @@ func (s *DB) GetPositions(ctx context.Context, deliberationID string, round *int
 	var rows *rowsWrapper
 	if round != nil {
 		r, err := s.db.QueryContext(ctx,
-			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}'), signature FROM positions WHERE deliberation_id = $1 AND round_number = $2 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
+			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}'), signature, principal_credential, COALESCE(principal_verified, false) FROM positions WHERE deliberation_id = $1 AND round_number = $2 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID, *round,
 		)
 		if err != nil {
@@ -314,7 +317,7 @@ func (s *DB) GetPositions(ctx context.Context, deliberationID string, round *int
 		rows = &rowsWrapper{r}
 	} else {
 		r, err := s.db.QueryContext(ctx,
-			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}'), signature FROM positions WHERE deliberation_id = $1 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
+			`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}'), signature, principal_credential, COALESCE(principal_verified, false) FROM positions WHERE deliberation_id = $1 AND COALESCE(draft, 0) = 0 ORDER BY created_at`,
 			deliberationID,
 		)
 		if err != nil {
@@ -330,7 +333,7 @@ func (s *DB) GetPositions(ctx context.Context, deliberationID string, round *int
 		var createdAt time.Time
 		var draftInt int
 		var metadataJSON string
-		if err := rows.Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID, &metadataJSON, &p.Signature); err != nil {
+		if err := rows.Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID, &metadataJSON, &p.Signature, &p.PrincipalCredential, &p.PrincipalVerified); err != nil {
 			return nil, err
 		}
 		p.Draft = draftInt == 1
@@ -349,8 +352,8 @@ func (s *DB) GetPositionByID(ctx context.Context, id string) (*deliberation.Posi
 	var draftInt int
 	var metadataJSON string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}'), signature FROM positions WHERE id = $1`, id,
-	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID, &metadataJSON, &p.Signature)
+		`SELECT id, deliberation_id, agent_id, content, COALESCE(model_family, ''), COALESCE(group_name, ''), COALESCE(conviction, 0.5), COALESCE(reservation, ''), COALESCE(on_behalf_of, ''), COALESCE(interests, ''), COALESCE(draft, 0), round_number, created_at, COALESCE(parent_position_id, ''), COALESCE(metadata, '{}'), signature, principal_credential, COALESCE(principal_verified, false) FROM positions WHERE id = $1`, id,
+	).Scan(&p.ID, &p.DeliberationID, &p.AgentID, &p.Content, &p.ModelFamily, &p.Group, &p.Conviction, &p.Reservation, &p.OnBehalfOf, &p.Interests, &draftInt, &p.Round, &createdAt, &p.ParentPositionID, &metadataJSON, &p.Signature, &p.PrincipalCredential, &p.PrincipalVerified)
 	p.Draft = draftInt == 1
 	if err != nil {
 		return nil, err

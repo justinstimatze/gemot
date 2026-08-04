@@ -261,6 +261,25 @@ ALTER TABLE votes ADD COLUMN IF NOT EXISTS signature BYTEA;
 -- 'advisory' (warn on unsigned when key registered), 'required' (reject unsigned).
 -- CHECK constraint prevents typos from silently falling through to fail-open
 -- behavior in the verification switch.
+-- Delegation attestation backing a position's on_behalf_of claim, plus the
+-- server's record that it verified at submit time. The credential is stored so
+-- the claim can be re-verified offline; the boolean is kept separately because
+-- key rotation and revocation can make a credential that was genuinely valid at
+-- submit time fail to re-verify later.
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS principal_credential BYTEA;
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS principal_verified BOOLEAN DEFAULT FALSE;
+
+-- Per-deliberation principal policy: 'none' (on_behalf_of is an unverified
+-- free-text claim), 'advisory' (unbacked claims audit-logged), 'required'
+-- (on_behalf_of must carry a verified credential). Same CHECK-constraint
+-- rationale as signature_policy: typos must not fall through to fail-open.
+ALTER TABLE deliberations ADD COLUMN IF NOT EXISTS principal_policy TEXT DEFAULT 'none';
+DO $$ BEGIN
+    ALTER TABLE deliberations ADD CONSTRAINT deliberations_principal_policy_check
+        CHECK (principal_policy IN ('none', 'advisory', 'required'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
 ALTER TABLE deliberations ADD COLUMN IF NOT EXISTS signature_policy TEXT DEFAULT 'none';
 DO $$ BEGIN
     ALTER TABLE deliberations ADD CONSTRAINT deliberations_sig_policy_check

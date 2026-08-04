@@ -15,6 +15,7 @@ import (
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/llm"
 	"github.com/justinstimatze/gemot/internal/payments"
+	"github.com/justinstimatze/gemot/internal/principal"
 	"github.com/justinstimatze/gemot/internal/store"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -133,7 +134,7 @@ func newServer(s *server) *sdkmcp.Server {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "deliberation",
 		Description: `Manage deliberations. Actions:
-- create: Create a new deliberation (topic, description, template, group_id, deadline_minutes, rules, visibility, max_participants, type)
+- create: Create a new deliberation (topic, description, template, group_id, deadline_minutes, rules, visibility, max_participants, type, principal_policy, signature_policy)
 - get: Get status/stats of a deliberation (deliberation_id)
 - list: List all deliberations (limit, offset)
 - list_by_group: List deliberations in a group (group_id, limit, offset)
@@ -146,7 +147,7 @@ func newServer(s *server) *sdkmcp.Server {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "participate",
 		Description: `Participate in a deliberation. Actions:
-- submit_position: Submit your position (deliberation_id, agent_id, content; optional: model_family, group, conviction, reservation, on_behalf_of, interests, draft, metadata, signature)
+- submit_position: Submit your position (deliberation_id, agent_id, content; optional: model_family, group, conviction, reservation, on_behalf_of, interests, draft, metadata, signature, principal_credential)
 - publish_position: Publish a draft position (position_id)
 - vote: Vote on a position — value: -2=strongly_disagree, -1=disagree_with_caveats, 0=mixed, 1=agree_with_caveats, 2=strongly_agree (deliberation_id, agent_id, position_id, value; optional: qualifier, caveat, criterion_id, signature)
 - get_positions: Get all positions (deliberation_id; optional: round, exclude_agent_id, group, shuffle)
@@ -221,27 +222,38 @@ type deliberationParams struct {
 	Template        string         `json:"template,omitempty"`
 	Rules           map[string]any `json:"rules,omitempty"`
 	GroupID         string         `json:"group_id,omitempty"`
-	DeadlineMinutes int            `json:"deadline_minutes,omitempty"`
-	DeliberationID  string         `json:"deliberation_id,omitempty"`
-	AgentID         string         `json:"agent_id,omitempty"`
-	Limit           int            `json:"limit,omitempty"`
-	Offset          int            `json:"offset,omitempty"`
+	// PrincipalPolicy governs whether on_behalf_of claims must be backed by a
+	// verified delegation credential: none | advisory | required.
+	PrincipalPolicy string `json:"principal_policy,omitempty"`
+	// SignaturePolicy governs whether agents with a registered key must sign
+	// their positions and votes: none | advisory | required.
+	SignaturePolicy string `json:"signature_policy,omitempty"`
+	DeadlineMinutes int    `json:"deadline_minutes,omitempty"`
+	DeliberationID  string `json:"deliberation_id,omitempty"`
+	AgentID         string `json:"agent_id,omitempty"`
+	Limit           int    `json:"limit,omitempty"`
+	Offset          int    `json:"offset,omitempty"`
 }
 
 type participateParams struct {
-	Action         string         `json:"action"`
-	DeliberationID string         `json:"deliberation_id,omitempty"`
-	AgentID        string         `json:"agent_id,omitempty"`
-	Content        string         `json:"content,omitempty"`
-	ModelFamily    string         `json:"model_family,omitempty"`
-	Group          string         `json:"group,omitempty"`
-	Conviction     float64        `json:"conviction,omitempty"`
-	Reservation    string         `json:"reservation,omitempty"`
-	OnBehalfOf     string         `json:"on_behalf_of,omitempty"`
-	Interests      string         `json:"interests,omitempty"`
-	Draft          bool           `json:"draft,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-	PositionID     string         `json:"position_id,omitempty"`
+	Action         string  `json:"action"`
+	DeliberationID string  `json:"deliberation_id,omitempty"`
+	AgentID        string  `json:"agent_id,omitempty"`
+	Content        string  `json:"content,omitempty"`
+	ModelFamily    string  `json:"model_family,omitempty"`
+	Group          string  `json:"group,omitempty"`
+	Conviction     float64 `json:"conviction,omitempty"`
+	Reservation    string  `json:"reservation,omitempty"`
+	OnBehalfOf     string  `json:"on_behalf_of,omitempty"`
+	Interests      string  `json:"interests,omitempty"`
+	// PrincipalCredential is the signed delegation attestation backing
+	// on_behalf_of. Spelled as an explicit struct rather than a free-form
+	// object so the derived JSON schema is concrete — strict validators
+	// reject the wildcard `{}` an `any`-typed field would produce.
+	PrincipalCredential *principalCredentialParam `json:"principal_credential,omitempty"`
+	Draft               bool                      `json:"draft,omitempty"`
+	Metadata            map[string]any            `json:"metadata,omitempty"`
+	PositionID          string                    `json:"position_id,omitempty"`
 	// Value is intentionally typed `int` so the auto-derived JSON schema
 	// emits {"type":"integer"} and not {} (the wildcard that strict zod
 	// validators — Glama's, for one — reject as `Invalid input`). The A2A
@@ -282,6 +294,10 @@ type analyzeToolParams struct {
 	GroupID    string `json:"group_id,omitempty"`
 	SourceType string `json:"source_type,omitempty"`
 	Depth      string `json:"depth,omitempty"` // "quick" or "thorough" (default: thorough)
+	// forced-choice compromise: when Options is non-empty, propose_compromise
+	// selects exactly one of them instead of synthesizing free text.
+	Options     []string       `json:"options,omitempty"`
+	OptionVotes map[string]int `json:"option_votes,omitempty"`
 }
 
 type decideParams struct {
@@ -346,6 +362,12 @@ func (s *server) handleDeliberation(ctx context.Context, _ *sdkmcp.CallToolReque
 		}
 		if args.GroupID != "" {
 			dopts = append(dopts, deliberation.WithGroupID(args.GroupID))
+		}
+		if args.PrincipalPolicy != "" {
+			dopts = append(dopts, deliberation.WithPrincipalPolicy(args.PrincipalPolicy))
+		}
+		if args.SignaturePolicy != "" {
+			dopts = append(dopts, deliberation.WithSignaturePolicy(args.SignaturePolicy))
 		}
 		if args.DeadlineMinutes > 0 {
 			deadline := time.Now().Add(time.Duration(args.DeadlineMinutes) * time.Minute)
@@ -487,6 +509,13 @@ func (s *server) handleParticipate(ctx context.Context, _ *sdkmcp.CallToolReques
 		}
 		if args.Interests != "" {
 			opts = append(opts, deliberation.WithInterests(args.Interests))
+		}
+		if args.PrincipalCredential != nil {
+			credJSON, err := args.PrincipalCredential.toCredential()
+			if err != nil {
+				return errResult(err)
+			}
+			opts = append(opts, deliberation.WithPrincipalCredential(credJSON))
 		}
 		if args.Draft {
 			opts = append(opts, deliberation.WithDraft())
@@ -832,7 +861,12 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 				return errResult(fmt.Errorf("insufficient credits: have %d, need %d", balance, creditCost))
 			}
 		}
-		proposal, err := s.svc.ProposeCompromise(ctx, args.DeliberationID)
+		var proposal, selected string
+		if len(args.Options) > 0 {
+			proposal, selected, err = s.svc.ProposeCompromiseWithChoiceAndVotes(ctx, args.DeliberationID, args.Options, args.OptionVotes)
+		} else {
+			proposal, err = s.svc.ProposeCompromise(ctx, args.DeliberationID)
+		}
 		if err != nil {
 			if apiKey != "" && creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
@@ -846,6 +880,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		result, _, _ := jsonResult(map[string]string{
 			"deliberation_id":     args.DeliberationID,
 			"compromise_proposal": proposal,
+			"selected_option":     selected,
 		})
 		if mppReceipt != nil {
 			result.Meta = payments.ReceiptMeta(mppReceipt)
@@ -1311,4 +1346,50 @@ func errResult(err error) (*sdkmcp.CallToolResult, any, error) {
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: err.Error()}},
 		IsError: true,
 	}, nil, nil
+}
+
+// principalCredentialParam is the wire form of a delegation attestation
+// (see internal/principal). Timestamps are RFC3339 and the signature is
+// base64 so the whole credential survives JSON transport.
+//
+// Re-encoding this into the canonical signed bytes is safe: the principal
+// signs a fixed-shape length-prefixed record, never the JSON, so field order,
+// whitespace, and Unicode normalization in transit cannot change what verifies.
+type principalCredentialParam struct {
+	Principal string `json:"principal"`
+	Agent     string `json:"agent"`
+	// AgentKey is the base64 ed25519 public key the credential is bound to.
+	// The submitting agent must have this key registered and must sign the
+	// position with it, or the credential is refused.
+	AgentKey  string `json:"agent_key"`
+	Scope     string `json:"scope,omitempty"`
+	Issuer    string `json:"issuer,omitempty"`
+	ExpiresAt string `json:"expires_at"`
+	Signature string `json:"signature"`
+}
+
+// toCredential converts the wire form into a storable credential, returning the
+// JSON encoding the service layer persists and re-verifies against.
+func (p *principalCredentialParam) toCredential() ([]byte, error) {
+	expires, err := time.Parse(time.RFC3339, p.ExpiresAt)
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.expires_at must be RFC3339: %w", err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(p.Signature)
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.signature must be base64-encoded: %w", err)
+	}
+	agentKey, err := base64.StdEncoding.DecodeString(p.AgentKey)
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.agent_key must be base64-encoded: %w", err)
+	}
+	return json.Marshal(principal.Credential{
+		Principal: p.Principal,
+		Agent:     p.Agent,
+		AgentKey:  agentKey,
+		Scope:     p.Scope,
+		Issuer:    p.Issuer,
+		ExpiresAt: expires,
+		Signature: sig,
+	})
 }

@@ -22,6 +22,7 @@ type Deliberation struct {
 	GroupID         string         `json:"group_id,omitempty"`         // links related deliberations
 	Resolution      *Resolution    `json:"resolution,omitempty"`       // set when deliberation reaches threshold
 	SignaturePolicy string         `json:"signature_policy,omitempty"` // none | advisory | required
+	PrincipalPolicy string         `json:"principal_policy,omitempty"` // none | advisory | required
 	DeadlineAt      *time.Time     `json:"deadline_at,omitempty"`
 	CreatedAt       time.Time      `json:"created_at"`
 }
@@ -48,22 +49,31 @@ type VoteTally struct {
 }
 
 type Position struct {
-	ID               string         `json:"position_id"`
-	DeliberationID   string         `json:"deliberation_id"`
-	AgentID          string         `json:"agent_id"`
-	Content          string         `json:"content"`
-	ModelFamily      string         `json:"model_family,omitempty"`
-	Group            string         `json:"group,omitempty"`
-	Conviction       float64        `json:"conviction,omitempty"`
-	Reservation      string         `json:"reservation,omitempty"`
-	OnBehalfOf       string         `json:"on_behalf_of,omitempty"`
-	Interests        string         `json:"interests,omitempty"`
-	Draft            bool           `json:"draft,omitempty"`
-	ParentPositionID string         `json:"parent_position_id,omitempty"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
-	Round            int            `json:"round_number"`
-	Signature        []byte         `json:"signature,omitempty"` // ed25519 signature over auth.PositionPayload
-	CreatedAt        time.Time      `json:"created_at"`
+	ID             string  `json:"position_id"`
+	DeliberationID string  `json:"deliberation_id"`
+	AgentID        string  `json:"agent_id"`
+	Content        string  `json:"content"`
+	ModelFamily    string  `json:"model_family,omitempty"`
+	Group          string  `json:"group,omitempty"`
+	Conviction     float64 `json:"conviction,omitempty"`
+	Reservation    string  `json:"reservation,omitempty"`
+	OnBehalfOf     string  `json:"on_behalf_of,omitempty"`
+	Interests      string  `json:"interests,omitempty"`
+	// PrincipalCredential is the JSON-encoded delegation attestation backing
+	// OnBehalfOf (see internal/principal). Stored so the claim can be
+	// re-verified offline rather than taken on the server's word.
+	PrincipalCredential []byte `json:"principal_credential,omitempty"`
+	// PrincipalVerified records that the server verified the delegation at
+	// submit time. Kept alongside the credential because key rotation and
+	// revocation can make a credential that was genuinely valid at submit
+	// time fail to re-verify later.
+	PrincipalVerified bool           `json:"principal_verified,omitempty"`
+	Draft             bool           `json:"draft,omitempty"`
+	ParentPositionID  string         `json:"parent_position_id,omitempty"`
+	Metadata          map[string]any `json:"metadata,omitempty"`
+	Round             int            `json:"round_number"`
+	Signature         []byte         `json:"signature,omitempty"` // ed25519 signature over auth.PositionPayload
+	CreatedAt         time.Time      `json:"created_at"`
 }
 
 type JoinCode struct {

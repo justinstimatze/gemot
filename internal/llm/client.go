@@ -137,7 +137,12 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 		Model:     model,
 		MaxTokens: 4096,
 		System: []anthropic.TextBlockParam{
-			{Text: system},
+			// Cache the tools+system prefix. The analysis pipeline fires many
+			// StructuredOutput calls that share the same (large) instruction +
+			// tool-schema prefix and vary only in the user prompt, so a cache
+			// breakpoint here turns repeated full-price input into 0.1x cache
+			// reads — a cost + latency win on every deliberation, not just runs.
+			{Text: system, CacheControl: anthropic.CacheControlEphemeralParam{}},
 		},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
@@ -203,6 +208,9 @@ func (c *Client) StructuredOutput(ctx context.Context, system, prompt string, sc
 	if c.OnUsage != nil {
 		c.OnUsage(ctx, int(resp.Usage.InputTokens), int(resp.Usage.OutputTokens))
 	}
+	slog.Debug("llm_usage", "kind", "structured",
+		"input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens,
+		"cache_read", resp.Usage.CacheReadInputTokens, "cache_write", resp.Usage.CacheCreationInputTokens)
 
 	for _, block := range resp.Content {
 		if block.Type == "tool_use" {
@@ -224,7 +232,7 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 		Model:     "claude-haiku-4-5",
 		MaxTokens: 100,
 		System: []anthropic.TextBlockParam{
-			{Text: system},
+			{Text: system, CacheControl: anthropic.CacheControlEphemeralParam{}},
 		},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
@@ -275,6 +283,9 @@ func (c *Client) Classify(ctx context.Context, system, prompt string) (string, e
 	if c.OnUsage != nil {
 		c.OnUsage(ctx, int(resp.Usage.InputTokens), int(resp.Usage.OutputTokens))
 	}
+	slog.Debug("llm_usage", "kind", "classify",
+		"input", resp.Usage.InputTokens, "output", resp.Usage.OutputTokens,
+		"cache_read", resp.Usage.CacheReadInputTokens, "cache_write", resp.Usage.CacheCreationInputTokens)
 
 	for _, block := range resp.Content {
 		if block.Type == "text" {

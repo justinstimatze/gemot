@@ -17,6 +17,7 @@ import (
 
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
+	"github.com/justinstimatze/gemot/internal/principal"
 	"github.com/justinstimatze/gemot/internal/store"
 )
 
@@ -286,7 +287,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 		if auditLog != nil {
 			writeOps := map[string]map[string]bool{
 				"gemot/deliberation": {"create": true, "delete": true, "set_template": true},
-				"gemot/participate":  {"submit_position": true, "vote": true, "withdraw": true},
+				"gemot/participate":  {"submit_position": true, "vote": true, "withdraw": true, "register_key": true, "revoke_key": true},
 				"gemot/analyze":      {"run": true, "propose_compromise": true, "dispute_crux": true, "challenge": true, "expert_panel": true},
 				"gemot/decide":       {"commit": true, "fulfill": true, "break": true},
 				"gemot/coordinate":   {"delegate": true, "invite": true, "generate_join_code": true, "join": true},
@@ -348,6 +349,12 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				}
 				if g := str(s, "group_id"); g != "" {
 					dopts = append(dopts, deliberation.WithGroupID(g))
+				}
+				if pp := str(s, "principal_policy"); pp != "" {
+					dopts = append(dopts, deliberation.WithPrincipalPolicy(pp))
+				}
+				if sp := str(s, "signature_policy"); sp != "" {
+					dopts = append(dopts, deliberation.WithSignaturePolicy(sp))
 				}
 				if dm, ok := s["deadline_minutes"]; ok {
 					if f, ok := dm.(float64); ok && f > 0 {
@@ -563,6 +570,17 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				if interests := str(s, "interests"); interests != "" {
 					popts = append(popts, deliberation.WithInterests(interests))
 				}
+				// A2A accepts on_behalf_of, so it must also accept the
+				// credential backing it — otherwise A2A callers could never
+				// satisfy a deliberation with principal_policy=required.
+				if pc, ok := s["principal_credential"]; ok {
+					raw, err := parseA2ACredential(pc)
+					if err != nil {
+						writeA2AError(w, req.ID, -32602, err.Error())
+						return
+					}
+					popts = append(popts, deliberation.WithPrincipalCredential(raw))
+				}
 				isDraft := false
 				if d, ok := s["draft"]; ok {
 					if b, ok := d.(bool); ok && b {
@@ -691,6 +709,49 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 					return
 				}
 				writeA2AResult(w, req.ID, map[string]string{"status": "agent withdrawn"})
+
+			// Key registration has to exist on this transport, not just on
+			// /mcp. Proof-of-possession means a credentialed submission is only
+			// accepted from an agent whose key is registered, so without these
+			// an A2A-only caller can present a principal_credential it has no
+			// way to ever satisfy. Scoping goes through the same scope() helper
+			// submit_position uses, so the key lands under the identity the
+			// verifier will look up.
+			case "register_key":
+				agentID := scope(str(s, "agent_id"))
+				pubB64 := str(s, "public_key")
+				if agentID == "" || pubB64 == "" {
+					writeA2AError(w, req.ID, -32602, "agent_id and public_key (base64) are required")
+					return
+				}
+				pubBytes, err := base64.StdEncoding.DecodeString(pubB64)
+				if err != nil {
+					writeA2AError(w, req.ID, -32602, fmt.Sprintf("public_key must be base64-encoded: %v", err))
+					return
+				}
+				algo := str(s, "algo")
+				if algo == "" {
+					algo = "ed25519"
+				}
+				if err := svc.RegisterAgentKey(ctx, agentID, pubBytes, algo); err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, map[string]string{
+					"status": "public key registered — future signed positions and votes will be verified against it",
+				})
+
+			case "revoke_key":
+				agentID := scope(str(s, "agent_id"))
+				if agentID == "" {
+					writeA2AError(w, req.ID, -32602, "agent_id is required")
+					return
+				}
+				if err := svc.RevokeAgentKey(ctx, agentID); err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, map[string]string{"status": "signing key revoked"})
 
 			default:
 				writeA2AError(w, req.ID, -32602, fmt.Sprintf("unknown action %q for gemot/participate", action))
@@ -1088,6 +1149,23 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 			case "list_templates":
 				writeA2AResult(w, req.ID, deliberation.ListTemplates())
 
+			// A2A serves get_audit_log, whose tamper_evident_log entries carry
+			// BLS proofs. Without the replica's public key an A2A-only client
+			// can read those proofs but cannot check them, which leaves it
+			// trusting the server's report of its own log — the exact thing the
+			// signed log exists to avoid.
+			case "replica_pubkey":
+				pub, err := svc.ReplicaPublicKey()
+				if err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, map[string]any{
+					"public_key_hex": fmt.Sprintf("%x", pub),
+					"algorithm":      "bls12-381-g2",
+					"usage":          "verify `proof` fields in get_audit_log's tamper_evident_log",
+				})
+
 			case "get_votes":
 				votes, err := CoreGetVotes(ctx, svc, str(s, "deliberation_id"), keyID)
 				if err != nil {
@@ -1134,5 +1212,36 @@ func writeA2AError(w http.ResponseWriter, id any, code int, message string) {
 			"code":    code,
 			"message": message,
 		},
+	})
+}
+
+// parseA2ACredential converts an A2A principal_credential object into the
+// stored credential encoding. Mirrors principalCredentialParam on the MCP side;
+// A2A params arrive as untyped maps, so the fields are pulled out by hand.
+func parseA2ACredential(v any) ([]byte, error) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("principal_credential must be an object")
+	}
+	expires, err := time.Parse(time.RFC3339, str(m, "expires_at"))
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.expires_at must be RFC3339: %w", err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(str(m, "signature"))
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.signature must be base64-encoded: %w", err)
+	}
+	agentKey, err := base64.StdEncoding.DecodeString(str(m, "agent_key"))
+	if err != nil {
+		return nil, fmt.Errorf("principal_credential.agent_key must be base64-encoded: %w", err)
+	}
+	return json.Marshal(principal.Credential{
+		Principal: str(m, "principal"),
+		Agent:     str(m, "agent"),
+		AgentKey:  agentKey,
+		Scope:     str(m, "scope"),
+		Issuer:    str(m, "issuer"),
+		ExpiresAt: expires,
+		Signature: sig,
 	})
 }

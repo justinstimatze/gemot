@@ -37,3 +37,9 @@ integrations/t3c/AI Manifestos-*.json
 # Private notes: session hand-off docs, draft specs, brainstorm artifacts
 # that may or may not graduate into the repo when something ships.
 .notes/
+
+# Avalon testbed local outputs
+/avalon-journal-*.jsonl
+scripts/avalon/avalon-journal-*.jsonl
+/avalon
+/scripts/avalon/avalon

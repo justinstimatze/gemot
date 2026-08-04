@@ -1,8 +1,10 @@
 package deliberation
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/justinstimatze/gemot/internal/auth"
 	"github.com/justinstimatze/gemot/internal/bft"
+	"github.com/justinstimatze/gemot/internal/principal"
 	"github.com/justinstimatze/gemot/internal/sanitize"
 	"github.com/justinstimatze/gemot/types"
 )
@@ -244,6 +247,13 @@ func WithMetadata(m map[string]any) PositionOption {
 	return func(p *Position) { p.Metadata = m }
 }
 
+// WithPrincipalCredential attaches the JSON-encoded delegation attestation
+// backing OnBehalfOf. Verified against the principal's registered key at submit
+// time according to the deliberation's principal_policy.
+func WithPrincipalCredential(raw []byte) PositionOption {
+	return func(p *Position) { p.PrincipalCredential = raw }
+}
+
 // WithSignature attaches an ed25519 signature over auth.PositionPayload.
 // The signature is verified against the agent's registered public key at submit time.
 func WithSignature(sig []byte) PositionOption {
@@ -282,6 +292,11 @@ type Service struct {
 	// Logs all write operations at the service layer so nothing bypasses the audit trail.
 	auditFn func(method, deliberationID, agentID string)
 
+	// Verifier for principal delegation credentials backing on_behalf_of.
+	// Defaults in NewService to a LocalVerifier over the agent-key registry;
+	// SetPrincipalVerifier swaps in an external authority.
+	principalVerifier principal.Verifier
+
 	// Optional BFT engine — when set, position submissions route
 	// through the HotStuff state machine and return a prepared QC
 	// as proof. nil = direct writes (legacy / tests without BFT).
@@ -312,7 +327,35 @@ func NewService(store Store, analyzer Analyzer) *Service {
 		activeAnalyses:  make(map[string]context.CancelFunc),
 		resolutionLocks: make(map[string]*sync.Mutex),
 		bftEngine:       engine,
+		// Principals register keys in the same identity->key registry agents
+		// use, so the default verifier needs no additional wiring and
+		// revocation is whatever RevokeAgentKey already means.
+		principalVerifier: principal.NewLocalVerifier(principalKeyLookup(store)),
 	}
+}
+
+// principalKeyLookup adapts the store's agent-key lookup to the contract
+// principal.KeyLookup expects: a missing key must be reported as
+// principal.ErrNoKey, and everything else must reach the verifier intact so a
+// registry outage is not misreported as an unregistered principal.
+func principalKeyLookup(store Store) principal.KeyLookup {
+	return func(ctx context.Context, identity string) ([]byte, string, error) {
+		pub, algo, err := store.GetActiveAgentKey(ctx, identity)
+		if errors.Is(err, ErrAgentKeyNotFound) {
+			return nil, "", principal.ErrNoKey
+		}
+		return pub, algo, err
+	}
+}
+
+// SetPrincipalVerifier replaces the default local delegation verifier with an
+// external authority — an HCP server or any other issuer that can attest "this
+// agent may speak for this principal". Passing nil restores the local verifier.
+func (s *Service) SetPrincipalVerifier(v principal.Verifier) {
+	if v == nil {
+		v = principal.NewLocalVerifier(principalKeyLookup(s.store))
+	}
+	s.principalVerifier = v
 }
 
 // SetAuditLogger sets a function that logs all service-level write operations.
@@ -504,8 +547,11 @@ func (s *Service) ProposeCompromise(ctx context.Context, deliberationID string) 
 		return "", fmt.Errorf("no analysis results — run analyze first: %w", err)
 	}
 
-	if len(result.Cruxes) == 0 {
-		return "", fmt.Errorf("no cruxes detected — nothing to compromise on")
+	// Unstructured analyzers (ChatAnalyzer) produce no cruxes but preserve the
+	// raw positions as ExtractedClaims; a compromise can still be synthesized
+	// from those. Only refuse when there is genuinely nothing to work with.
+	if len(result.Cruxes) == 0 && len(result.ExtractedClaims) == 0 {
+		return "", fmt.Errorf("nothing to compromise on — analysis has no cruxes or positions")
 	}
 
 	return s.compromiser.GenerateCompromise(ctx, d.Topic, result)
@@ -637,6 +683,30 @@ func WithSignaturePolicy(policy string) DeliberationOption {
 		policy = "none"
 	}
 	return func(del *Deliberation) { del.SignaturePolicy = policy }
+}
+
+// WithPrincipalPolicy sets the per-deliberation policy for delegation
+// credentials backing on_behalf_of:
+//   - "none"     (default): on_behalf_of accepted as an unverified free-text
+//     claim, preserving behaviour for every deliberation that predates
+//     credentials
+//   - "advisory": an unbacked on_behalf_of is accepted but recorded as
+//     UNVERIFIED_PRINCIPAL in the audit log
+//   - "required": on_behalf_of must be backed by a verified credential
+//
+// A credential that *is* supplied is verified in all modes, including "none";
+// a bad credential is always rejected. This mirrors WithSignaturePolicy: policy
+// governs what happens when proof is absent, never whether bad proof passes.
+//
+// Unknown values normalize to "none" for the same fail-closed reason as the
+// signature policy.
+func WithPrincipalPolicy(policy string) DeliberationOption {
+	switch policy {
+	case "none", "advisory", "required":
+	default:
+		policy = "none"
+	}
+	return func(del *Deliberation) { del.PrincipalPolicy = policy }
 }
 
 // ContextKeyTemplate is the context key for passing the template name through analysis.
@@ -988,6 +1058,9 @@ func (s *Service) SubmitPositionWithSigningID(ctx context.Context, deliberationI
 	}
 
 	if err := s.verifyPositionSignature(ctx, d, p, rawContent, signingAgentID); err != nil {
+		return nil, err
+	}
+	if err := s.verifyPrincipalDelegation(ctx, d, p, rawContent, signingAgentID); err != nil {
 		return nil, err
 	}
 	// If sanitization mutated the content, the stored signature no longer verifies
@@ -2747,6 +2820,128 @@ func (s *Service) verifyPositionSignature(ctx context.Context, d *Deliberation, 
 			s.audit("participate:unsigned_position", d.ID, p.AgentID)
 			fmt.Fprintf(os.Stderr, "gemot: UNSIGNED_POSITION from agent %q (key registered, policy=advisory)\n", p.AgentID)
 		}
+	}
+	return nil
+}
+
+// verifyPrincipalDelegation enforces the deliberation's principal_policy
+// against a position's on_behalf_of claim.
+//
+// signingAgentID is the client-facing agent identity — the same one
+// verifyPositionSignature reconstructs payloads with, and the name a principal
+// would have known when it minted the credential. Binding the credential to
+// that identity is what makes a captured credential useless to another agent.
+//
+// The two axes are independent: whether a credential is *supplied* is governed
+// by policy, whether a supplied credential is *good* is not. A bad credential
+// is rejected under every policy including "none".
+func (s *Service) verifyPrincipalDelegation(ctx context.Context, d *Deliberation, p *Position, signingContent, signingAgentID string) error {
+	policy := d.PrincipalPolicy
+	if policy == "" {
+		policy = "none"
+	}
+
+	if len(p.PrincipalCredential) == 0 {
+		if p.OnBehalfOf == "" {
+			// Nothing claimed, nothing to prove.
+			return nil
+		}
+		switch policy {
+		case "required":
+			return fmt.Errorf("principal credential required: position claims on_behalf_of %q but carries no delegation credential", p.OnBehalfOf)
+		case "advisory":
+			s.audit("participate:unverified_principal", d.ID, p.AgentID)
+			fmt.Fprintf(os.Stderr, "gemot: UNVERIFIED_PRINCIPAL in %s from agent %q — on_behalf_of %q is an unbacked claim (policy=advisory)\n", d.ID, p.AgentID, p.OnBehalfOf)
+		}
+		return nil
+	}
+
+	if s.principalVerifier == nil {
+		return errors.New("principal credential supplied but no verifier is configured")
+	}
+
+	var cred principal.Credential
+	if err := json.Unmarshal(p.PrincipalCredential, &cred); err != nil {
+		return fmt.Errorf("principal_credential must be a JSON delegation attestation: %w", err)
+	}
+
+	switch {
+	case p.OnBehalfOf == "":
+		// A verified credential is stronger evidence than the free-text field,
+		// so it may fill an empty one.
+		p.OnBehalfOf = cred.Principal
+	case cred.Principal != p.OnBehalfOf:
+		return fmt.Errorf("PRINCIPAL_VERIFY_FAIL: %w: credential is for %q, on_behalf_of claims %q",
+			principal.ErrPrincipalMismatch, cred.Principal, p.OnBehalfOf)
+	}
+
+	target := principal.Target{DeliberationID: p.DeliberationID, GroupID: d.GroupID}
+	res, err := s.principalVerifier.Verify(ctx, &cred, signingAgentID, target)
+	if err != nil {
+		s.audit("participate:principal_verify_fail", d.ID, p.AgentID)
+		return fmt.Errorf("PRINCIPAL_VERIFY_FAIL: %w", err)
+	}
+
+	if err := s.provePossession(ctx, res, p, signingContent, signingAgentID); err != nil {
+		s.audit("participate:principal_verify_fail", d.ID, p.AgentID)
+		return fmt.Errorf("PRINCIPAL_VERIFY_FAIL: %w", err)
+	}
+
+	p.PrincipalVerified = true
+	s.audit("participate:principal_verified", d.ID, p.AgentID)
+	return nil
+}
+
+// provePossession checks that the agent presenting a credential actually
+// controls the confirmation key the credential commits to.
+//
+// Without this, a credential is a bearer token. The credential names an agent,
+// but the presenter chooses what to call itself: an attacker who obtains a
+// credential — from an export, from get_positions, from any log — can submit
+// under the same agent_id and inherit the delegation. Hosted-mode namespacing
+// does not help, because the name the credential binds is the portable
+// unscoped one. Neither does signature_policy: the attacker's scoped identity
+// has no registered key, so the "required" branch treats it as an agent that
+// never opted into signing and exempts it.
+//
+// The fix is proof-of-possession, the same move RFC 7800 `cnf`, RFC 9449 DPoP,
+// and W3C VC holder binding all make. Two checks:
+//
+//  1. the key registered for this agent's *stored* identity — the namespaced
+//     one, so a different tenant's registration cannot satisfy it — must be
+//     exactly the credential's confirmation key; and
+//  2. the position must carry a signature that verifies under that key.
+//
+// The signature is re-verified here rather than inherited from
+// verifyPositionSignature. That function runs first and would have rejected a
+// bad signature already, but relying on call ordering for a security property
+// is how the gap above appeared in the first place. Re-verifying costs one
+// ed25519 operation and makes this function true on its own.
+//
+// This lives outside Verifier on purpose: whether the presenter holds the key
+// is a local fact about this request, and must not become waivable by
+// installing a permissive external verifier.
+func (s *Service) provePossession(ctx context.Context, res *principal.Result, p *Position, signingContent, signingAgentID string) error {
+	if res == nil || len(res.AgentKey) == 0 {
+		return fmt.Errorf("%w: verifier returned no confirmation key", principal.ErrMalformed)
+	}
+	if len(p.Signature) == 0 {
+		return errors.New("presenting a principal credential requires a signed position: no signature supplied")
+	}
+
+	pubkey, algo, err := s.store.GetActiveAgentKey(ctx, p.AgentID)
+	if errors.Is(err, ErrAgentKeyNotFound) {
+		return fmt.Errorf("presenting a principal credential requires a registered key for agent %q", p.AgentID)
+	}
+	if err != nil {
+		return fmt.Errorf("agent key lookup: %w", err)
+	}
+	if !bytes.Equal(pubkey, res.AgentKey) {
+		return fmt.Errorf("credential is bound to a different key than the one registered for agent %q", p.AgentID)
+	}
+	msg := auth.PositionPayload(signingAgentID, p.DeliberationID, p.Round, signingContent)
+	if err := auth.Verify(algo, pubkey, msg, p.Signature); err != nil {
+		return fmt.Errorf("position signature does not prove control of the credential's key: %w", err)
 	}
 	return nil
 }

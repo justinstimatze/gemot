@@ -27,6 +27,9 @@ const (
 	DomainPosition = "gemot/v1/position"
 	DomainVote     = "gemot/v1/vote"
 	DomainEnvelope = "gemot/v1/envelope"
+	// DomainPrincipal separates principal-delegation credentials (see
+	// PrincipalDelegationPayload) from every other signed payload shape.
+	DomainPrincipal = "gemot/v1/principal-delegation"
 
 	AlgoEd25519 = "ed25519"
 )
@@ -143,4 +146,44 @@ func ValidatePublicKey(algo string, pubkey []byte) error {
 	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedAlgo, algo)
 	}
+}
+
+// PrincipalDelegationPayload returns the canonical bytes a principal signs to
+// authorize an agent to speak on its behalf.
+//
+// This is the delegation attestation behind Position.OnBehalfOf. Without it,
+// `on_behalf_of` is an unverified free-text claim: any agent can assert it
+// represents any principal, which is an impersonation hole in exactly the field
+// an audit is most likely to trust. The signed payload binds four things:
+//
+//   - principal: the identity delegating authority (the human or org)
+//   - agent:     the portable name of the authorized agent
+//   - agentKey:  the ed25519 public key that agent must prove control of. This
+//     is the confirmation key, in the sense of RFC 7800 `cnf` and
+//     RFC 9449 DPoP: binding the *name* alone is worthless, because
+//     a name is a string the presenter chooses. Binding the key means
+//     a captured credential is inert without the matching private
+//     half, which in turn makes the credential safe to disclose.
+//   - scope:     "" for all deliberations, or a deliberation ID, or "group:<id>";
+//     binding this prevents a credential minted for one deliberation
+//     from being presented in another
+//   - expiresAt: mandatory Unix-seconds expiry, so a delegation lapses on its own
+//     even if the verifier cannot reach the key registry to see a revocation
+//
+// issuer is a provenance label ("local", "hcp", ...) identifying which authority
+// minted the credential. It is signed so a credential cannot be relabelled as
+// coming from a more trusted issuer than the one the principal actually used.
+//
+// The domain tag keeps these bytes disjoint from position, vote, and envelope
+// payloads: a delegation signature can never be replayed as any of the three.
+func PrincipalDelegationPayload(principal, agent string, agentKey []byte, scope, issuer string, expiresAt int64) []byte {
+	buf := make([]byte, 0, 128+len(principal)+len(agent)+len(scope)+len(issuer))
+	buf = writeLenPrefixed(buf, []byte(DomainPrincipal))
+	buf = writeLenPrefixed(buf, []byte(principal))
+	buf = writeLenPrefixed(buf, []byte(agent))
+	buf = writeLenPrefixed(buf, agentKey)
+	buf = writeLenPrefixed(buf, []byte(scope))
+	buf = writeLenPrefixed(buf, []byte(issuer))
+	buf = writeInt64(buf, expiresAt)
+	return buf
 }
