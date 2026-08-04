@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gemot.dev/schemas/act-claim.schema.json",
+  "title": "gemot act-claim",
+  "description": "Asserts that an actor is authorized to act on behalf of a principal within a scope, optionally through a nested delegation chain. A strict subset of the RFC 8693 (token exchange) and RFC 9068 (JWT access token) vocabulary, so it can be carried inside a JWT `act` claim, a verifiable credential, or a capability token without translation. gemot maps `sub` to the recorded attribution identity (agent_id) and the innermost `act` to the signing identity (signingAgentID). See COMPOSING.md.",
+  "type": "object",
+  "required": ["sub", "act"],
+  "additionalProperties": false,
+  "properties": {
+    "sub": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The principal the action is performed FOR. Maps to gemot's recorded agent_id — the identity reputation and analysis key off. For a human represented by an agent, this is the human's stable principal id."
+    },
+    "act": {
+      "$ref": "#/$defs/actor",
+      "description": "The actor actually performing the action. The innermost actor is the signing identity whose key must verify the action signature. Nest `act` within `act` to express a multi-hop delegation chain (human -> agent -> agent); each level is the actor for the level above it."
+    },
+    "scope": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "description": "What the actor may do, as space-free scope tokens. Convention: `<tool>:<action>` (e.g. `participate:submit_position`, `analyze:run`) matching gemot's grouped tool surface, and/or `deliberation:<id>` to bind authority to a single deliberation. Across a delegation chain, scope MUST attenuate (narrow), never widen."
+    },
+    "aud": {
+      "type": "string",
+      "description": "Intended audience — the resource this claim is valid at (e.g. \"https://gemot.dev\"). A verifier rejects claims whose audience is not itself."
+    },
+    "iss": {
+      "type": "string",
+      "description": "The issuer that minted this claim (the composer's identity/delegation layer). gemot does not mint act-claims; it consumes them. Trusting a given `iss` is an explicit deployment decision, not a default."
+    },
+    "iat": {
+      "type": "integer",
+      "description": "Issued-at, Unix seconds."
+    },
+    "exp": {
+      "type": "integer",
+      "description": "Expiry, Unix seconds. A verifier rejects expired claims. Delegated authority SHOULD be short-lived."
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional pointer to external evidence that the delegation is authorized — a verifiable credential, a signed capability token, or a reference a trust root can resolve. gemot records this reference alongside the action; verifying it is the composer's or the (not-yet-wired) trust root's responsibility.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "The attestation format, e.g. \"jwt\", \"vc+jwt\", \"biscuit\", \"macaroon\"."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The attestation itself or a resolvable reference to it (URI, content hash, or inline token)."
+        }
+      },
+      "required": ["type", "ref"]
+    }
+  },
+  "$defs": {
+    "actor": {
+      "type": "object",
+      "required": ["sub"],
+      "additionalProperties": false,
+      "description": "An actor in the delegation chain, per RFC 8693 §4.1.",
+      "properties": {
+        "sub": {
+          "type": "string",
+          "minLength": 1,
+          "description": "This actor's stable identity. At the innermost level, the key registered with gemot (register_key) whose signature must verify the action bytes."
+        },
+        "act": {
+          "$ref": "#/$defs/actor",
+          "description": "The next actor down the chain — the one this actor is, in turn, acting for. Absence terminates the chain."
+        }
+      }
+    }
+  }
+}
