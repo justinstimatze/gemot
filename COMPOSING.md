@@ -214,7 +214,8 @@ alongside the old). See `docs/remote-trust-root.md` §4.6. Tuning:
 `GEMOT_JWKS_ALLOW_PRIVATE` (default off) and `GEMOT_JWKS_CACHE_TTL_SECONDS`
 (default 300).
 
-Still open (Phase 3): importing an external JWT act-claim (below).
+Still open (Phase 3): importing an external JWT act-claim (below) — now fully
+designed in `docs/remote-trust-root.md` §12, not yet built.
 
 ---
 
@@ -241,10 +242,22 @@ The delegation primitive is built and enforced; these are the genuinely
 remaining pieces. Deferred on purpose — build them when a concrete integration
 needs them, not speculatively.
 
-- **JWT act-claim import in the bearer slot.** gemot accepts a `Credential` over
-  its own surfaces (A2A / `_meta`), but does not parse an external JWT out of the
-  `Authorization` header, extract `sub`/`act`/`scope`, and translate it into a
-  `Credential`. The mapping (above) is defined; the extraction is not written.
+- **JWT act-claim import (designed, not yet built).** gemot accepts a `Credential`
+  over its own surfaces (A2A / `_meta`), but does not yet parse an external RFC 8693
+  act-claim JWT, verify the issuer's JWS against the trust root, and translate the
+  claims into a `Credential`. The mapping (above) is defined and the full design —
+  verification pipeline, claim minimization, and the security/privacy controls — is
+  in `docs/remote-trust-root.md` §12. Two design points worth stating here, because
+  an earlier draft of this file got them wrong:
+  - The act-claim travels in a **dedicated `act_claim` request field** (sibling to
+    `principal_credential`), **not** the `Authorization` header. That header carries
+    session auth (the bearer API key); delegation is an orthogonal axis and must not
+    overload it. Making the JWT double as session auth would turn gemot into an OAuth
+    resource server — a deliberate non-goal, see the Discovery note above.
+  - Import **requires a `cnf` confirmation key** in the token (RFC 7800), mapped to
+    `AgentKey`, so an imported delegation is sender-constrained exactly like a native
+    one — never a bearer token. This also needs a `cnf` member added to
+    `docs/act-claim.schema.json`, which ships with the implementation.
 - **Preference-cooperative surface + verified interests.** `Position.Interests`
   is still self-reported; sourcing it from a signed, revocable context lookup is
   the natural next step — and the one that runs straight into the
