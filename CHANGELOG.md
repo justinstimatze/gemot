@@ -4,6 +4,14 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Composability interop contract
+
+New `COMPOSING.md` documents how to layer an external identity or delegation issuer on top of gemot without gemot becoming an IdP: the attribution/signing split (`sub`/`act`, already present via `SubmitPositionWithSigningID`), per-agent ed25519 keys + envelope proof-of-possession, and bearer + MPP scope. `docs/act-claim.schema.json` publishes an RFC 8693/9068-subset act-claim (recursive nested-actor chain, attenuating scope). A new `/.well-known/oauth-protected-resource` endpoint serves RFC 9728 metadata that **deliberately omits `authorization_servers`** — gemot authenticates with bearer API keys + MPP, not OAuth, so advertising an authorization server would push spec-compliant MCP clients into a DCR flow gemot can't service. The doc separates what exists today from three unwired extension points (external trust root, JWT-in-bearer, end-to-end act-claim enforcement).
+
+### Security: bump golang.org/x/net to 0.55.0
+
+Resolves a moderate-severity DoS in the `x/net` HTML parser (Dependabot #4); pulled `x/sync`, `x/sys`, and `x/text` forward as a side effect. Indirect dependency.
+
 ### Analysis LLM telemetry + cache-readiness
 
 Added per-call `llm_usage` telemetry (input/output/cache tokens) behind a new `LOG_LEVEL` env (`debug|info|warn|error`, default `info`), and marked the analysis pipeline's tools+system prefix with `cache_control` ephemeral. Note: a calibration run showed the cache breakpoint is currently **inert** — the analyze prompts' stable prefix (~93-token system + ~433-token instruction template, the latter presently in the user message) falls under Anthropic's 1024-token cache minimum, so `cache_control` is silently ignored (`cache_write=0` across 396 measured calls). The marking is harmless and will engage automatically if prompts grow past the floor or are restructured to move the stable instruction block into the cacheable prefix; the telemetry is the immediate value, and it's what surfaced the true cost driver (call volume, ~44 LLM calls/deliberation, not per-call inefficiency).

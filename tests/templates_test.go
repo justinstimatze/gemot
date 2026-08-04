@@ -10,8 +10,8 @@ import (
 
 func TestListTemplates(t *testing.T) {
 	templates := deliberation.ListTemplates()
-	if len(templates) != 8 {
-		t.Fatalf("expected 8 templates, got %d", len(templates))
+	if len(templates) != 9 {
+		t.Fatalf("expected 9 templates, got %d", len(templates))
 	}
 	// Verify sorted alphabetically
 	for i := 1; i < len(templates); i++ {
