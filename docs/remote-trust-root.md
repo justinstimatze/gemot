@@ -1,7 +1,8 @@
 # Remote trust root — design & security plan
 
 Status: **Phases 1 & 2 implemented** (`internal/principal/remote.go` + `jwks.go`, wired in
-`main.go` via `GEMOT_TRUSTED_ISSUERS`); Phase 3 proposed. This document specs the second
+`main.go` via `GEMOT_TRUSTED_ISSUERS`); **Phase 3 designed** (§5.3 + §12, this document —
+not yet built). This document specs the second
 `principal.Verifier` backend: verifying delegation credentials minted by an **external
 issuer** whose keys gemot does not hold. It is written security-first because this feature,
 unlike everything else in `internal/principal`, deliberately **transfers trust to a third
@@ -95,7 +96,12 @@ wire format, or `provePossession` needs to change to add a backend.
 | T8 | **Replay of a captured credential by another agent** | `provePossession` (unchanged) — cnf-key + position signature; leaked credential is inert |
 | T9 | **Clock skew** accepting expired / not-yet-valid creds | `exp` enforced (existing); small fixed leeway; `nbf`/`iat` checked in JWT phase |
 | T10 | **Downgrade** — remote cred masquerading as `local`, or vice-versa | Issuer label is signed; router dispatches deterministically; a `local`-labelled cred never reaches a remote key and vice-versa (§4.3) |
-| T11 | **Confused-deputy via `aud`** — credential minted for another resource replayed at gemot | Verify `aud` names this gemot deployment when present (JWT phase); native creds are gemot-shaped already |
+| T11 | **Confused-deputy via `aud`** — credential minted for another resource replayed at gemot | Verify `aud` names this gemot deployment; **mandatory** on the JWT path (§4.7); native creds are gemot-shaped already |
+| T12 | **cnf-stripping / bearer downgrade** — an imported JWT with no confirmation key would make the delegation a bearer token, undoing `provePossession` | JWT import **rejects any act-claim lacking a `cnf` key** (§4.8, §12.2); the mapped `Credential.Validate` also hard-requires `AgentKey`. No cnf ⇒ no import, ever |
+| T13 | **PII exfiltration into the append-only log** — a JWT carries `email`/`name`/custom claims that would land, unrevocable, in the BLS-signed position log | Only the capability claims (`sub`/`act`/`cnf`/`scope`/`aud`/`iss`/`exp`/`nbf`/`iat`/`jti`) are read; the raw token and all other claims are **never persisted or logged**; import stores the translated `Credential`, which has no free-form claim bag (§4.9, §12.3) |
+| T14 | **Unverified delegation chain / scope widening** — multi-hop `act` chain or attenuation gemot cannot itself check | gemot verifies the **issuer's** signature over the whole token and trusts the issuer for chain integrity + attenuation (its documented job); only the **innermost** `act.sub` is PoP-checked; the chain is recorded for audit, never re-derived as authority (§12.2) |
+| T15 | **JWS-vs-native signature confusion** — a JWS-verified token treated as a native `Credential`, or vice-versa, skipping one signature check | The two paths verify different bytes (JWS signing-input vs `SigningPayload()`); the imported `Credential` carries no native signature and is **never routed through native-signature verification** — it is produced already-verified and only re-shares the non-signature checks (§12.4) |
+| T16 | **Algorithm confusion on the JWT path** (`alg:none`, RS/HS swap, header-named key) — realizing T3/T3b | EdDSA-only decode; explicit method allowlist (`jwt.WithValidMethods`); `alg:none` rejected; `jku`/`jwk`/`x5u`/`x5c` header key-source params ignored; key chosen only by `(iss, kid)` against configured trust (§4.4, §12.2) |
 
 ## 4. Non-negotiable security controls
 
@@ -177,12 +183,65 @@ rotation for free — an issuer publishes the new key alongside the old before c
 keeps the wire format unchanged. Per-`kid` cache keying (§4.6 as originally drafted) becomes
 relevant only in the JWT phase (Phase 3), where tokens carry a `kid` header.
 
-### 4.7 Audience restriction (JWT phase)
-Per RFC 9700 and OWASP, when a credential/token carries `aud`, verify it names *this* gemot
-deployment and reject otherwise — this stops a token minted for another resource from being
-replayed at gemot (confused deputy, T11). Single audience preferred over a list. Native
-Phase-1 credentials are already gemot-shaped (verified against a gemot `Target`), so this
-control is specific to the external-JWT path.
+### 4.7 Audience restriction (JWT phase) — *mandatory*
+Per RFC 9700 and OWASP, verify `aud` names *this* gemot deployment and reject otherwise —
+this stops a token minted for another resource from being replayed at gemot (confused deputy,
+T11). On the external-JWT path `aud` is **mandatory, not "when present"**: a JWT is a portable,
+self-contained artifact, so a missing audience is an open replay window, not a convenience.
+The expected value is operator-configured (`GEMOT_JWT_AUDIENCE`, e.g. `https://gemot.dev`);
+if JWT import is enabled without an audience configured, the importer fails closed rather than
+accepting unaudienced tokens. Single audience preferred; a token whose `aud` is a list is
+accepted only if this deployment's identifier is a member. Native Phase-1/2 credentials are
+already gemot-shaped (verified against a gemot `Target`) and carry no `aud`, so this control is
+specific to the external-JWT path.
+
+### 4.8 Confirmation-key binding survives import — *the Phase 3 control* (T12)
+This is to Phase 3 what namespace binding (§4.2) is to Phase 1: the one control that, if
+missed, silently collapses the whole security model. Everything already shipped is
+sender-constrained — a captured credential is inert because `provePossession` requires the
+agent to sign the action with the private half of the `cnf` key (§2, T8). An imported JWT
+**must carry that same `cnf` key**, or the delegation it produces would be a plain bearer
+token: anyone holding the JWT could submit under it.
+
+Therefore JWT import **rejects any act-claim without a confirmation key.** The `cnf` claim
+(RFC 7800, `{"cnf":{"jwk":{"kty":"OKP","crv":"Ed25519","x":"…"}}}`) maps to the credential's
+`AgentKey`; the innermost `act.sub` names the agent that must hold it. Two independent gates
+enforce this and both must pass: the importer refuses a token with no usable `cnf`, and the
+mapped `Credential.Validate()` already hard-requires `AgentKey` ("a credential bound only to
+an agent name is a bearer token", `credential.go:217`). After import, the unchanged
+service-layer `provePossession` still checks the agent controls that key against its
+**locally-registered** key — so, exactly as on the native path, the *agent* still registers a
+gemot key; only the *principal* is federated. This also requires a `cnf` member to be added to
+`docs/act-claim.schema.json` (§12.6) — the schema is `additionalProperties: false`, so today a
+`cnf` would be *rejected*, which is itself a signal that the external vocabulary was never
+finished for a proof-of-possession import.
+
+### 4.9 Claim minimization & no raw-token persistence — *the privacy control* (T13)
+A `Credential` is deliberately a capability, never personal context: positions land in an
+append-only BLS-signed log that cannot honor a later revocation, so anything persisted there
+is effectively permanent (`credential.go` package doc). JWTs routinely carry PII — `email`,
+`name`, group memberships, arbitrary custom claims. Importing one therefore runs straight into
+that constraint, and the rule is strict:
+
+- **Read only the capability claims** — `iss`, `sub`, `act` (chain), `cnf`, `scope`, `aud`,
+  `exp`, `nbf`, `iat`, `jti`. Every other claim is ignored.
+- **Never persist the raw token.** The append-only record stores the *translated*
+  `Credential` (which has no free-form claim bag), never the JWT bytes. A JWT with an `email`
+  claim must leave no `email` anywhere durable.
+- **Never log claim values.** Diagnostics log `(iss, kid, aud-ok, decision)` and at most a
+  short hash/prefix of `sub` — never the token, never `sub`/`act` in the clear at info level.
+  This extends the existing "never log secret values" house rule to PII.
+- **Treat `sub`/`act.sub` as opaque strings.** gemot does not parse them for structure and
+  does not need to; issuers SHOULD mint opaque/pairwise subject identifiers rather than
+  emails. This is a documented expectation of a composing issuer, not something gemot can
+  enforce — but because gemot never persists anything *but* the identifier it was handed, an
+  issuer that uses an email is exposing its own users, not widening gemot's storage.
+- **Ignore `attestation` entirely in v1.** The schema's `attestation.ref` may be a URL;
+  gemot does **not** fetch it (SSRF, §4.6) and does not persist it. Chain evidence is the
+  composer's to hold.
+- **Reject unknown claims** rather than silently dropping them, mirroring the schema's
+  `additionalProperties: false`: an unexpected claim means the token is not the shape gemot
+  agreed to consume, and surfacing that is safer than quietly ingesting it.
 
 ## 5. Phased design
 
@@ -218,10 +277,26 @@ network-hygiene controls in §4.6. Everything else from Phase 1 — namespace bi
 issuer-signs-not-principal, `provePossession`, the wire format — is unchanged.
 
 ### Phase 3 — External JWT act-claim import
-Accept standard RFC 8693 `act`-claim JWTs (per `docs/act-claim.schema.json`) in the bearer
-slot, mapping `sub`→principal, innermost `act.sub`→signing agent, `scope`, `iss`, `exp` into
-a `Result`. This is full external-format interop and the largest surface (JWT parsing, `aud`
-checks, per-issuer alg pinning). Deferred until Phases 1–2 are in production.
+Accept standard RFC 8693 `act`-claim JWTs (per `docs/act-claim.schema.json`), verify the
+**issuer's** JWS with the trust root Phases 1–2 already built, and translate the verified
+claims into an internal `Credential`/`Result` that flows through the *unchanged* submit path
+and `provePossession`. This is full external-format interop and the largest new surface (JWT
+parsing, `aud`/`cnf` checks, alg pinning, PII discipline). **The full design is §12.** The
+one-paragraph shape:
+
+- **Reuses the trust root, does not rebuild it.** The verified `iss` selects an entry in
+  `GEMOT_TRUSTED_ISSUERS`; the issuer's key is resolved by the *same* pinned-or-JWKS
+  `keySource` from Phases 1–2; `sub` is subject to the *same* namespace binding (§4.2) and
+  local-shadow rejection (T1). Phase 3 adds a decoder and a translator, not a second trust
+  model.
+- **Verifies a different signature.** The JWT path verifies the issuer's **JWS** over the
+  compact token's signing input — not a native `SigningPayload()` signature. The translated
+  `Credential` is therefore produced *already-verified* and must never be re-routed through
+  native-signature verification (T15).
+- **cnf and aud are mandatory** (§4.8, §4.7); PII never lands in the append-only log (§4.9).
+- **Gated behind its own switch.** Trusting an issuer for native credentials does not
+  auto-enable consuming that issuer's JWTs; Phase 3 requires `GEMOT_ACCEPT_ACT_CLAIM_JWT=true`
+  **and** `GEMOT_JWT_AUDIENCE` set (§7).
 
 ## 6. Implementation surface
 
@@ -289,6 +364,18 @@ Companion env vars (JWKS only):
 - `GEMOT_JWKS_CACHE_TTL_SECONDS` (default `300`) — key cache TTL; also the fetch rate-limit
   window.
 
+Companion env vars (Phase 3, external-JWT import only — off by default):
+- `GEMOT_ACCEPT_ACT_CLAIM_JWT` (default `false`) — master switch for consuming external
+  act-claim JWTs. Deliberately separate from `GEMOT_TRUSTED_ISSUERS`: trusting an issuer for
+  native credentials does not imply consuming its JWTs, which is a larger surface. Both the
+  trusted-issuer set and this switch must be set for import to run.
+- `GEMOT_JWT_AUDIENCE` (no default) — the canonical resource identifier this deployment
+  answers to (e.g. `https://gemot.dev`), checked against every imported token's `aud` (§4.7).
+  If `GEMOT_ACCEPT_ACT_CLAIM_JWT=true` but this is unset, startup fails closed — an
+  unaudienced JWT importer is a replay hole.
+- `GEMOT_JWT_LEEWAY_SECONDS` (default `60`) — symmetric clock-skew leeway for `exp`/`nbf`/`iat`
+  (T9); capped small.
+
 Validation at load (all fail-closed, aborting startup): non-empty name; name not the reserved
 `local`; ≥1 namespace; namespaces pairwise-disjoint across all issuers; exactly one of
 `public_key`/`jwks_url`; pinned keys valid via `auth.ValidatePublicKey`; `jwks_url` a valid
@@ -320,7 +407,20 @@ Integration (`tests/`, adversarial suite):
 - **Relaxing `provePossession`** to accept an unregistered cnf key on the issuer's word
   (true issuer-asserted holder binding). Weakens tenant isolation; only revisit with a
   concrete federation partner and its own threat review.
-- **JWKS (Phase 2)** and **JWT import (Phase 3)** — sequenced above, not v1.
+- **JWKS (Phase 2)** — shipped. **JWT import (Phase 3)** — designed (§12), not yet built.
+- **JWT-as-session-auth / full OAuth resource-server mode.** Phase 3 carries the act-claim in
+  a dedicated request field, *not* the `Authorization` header, and does **not** turn gemot into
+  an OAuth resource server (§12.1). Making the delegation JWT double as session auth would
+  require gemot to advertise `authorization_servers`, implement DCR, and abandon the
+  deliberate honesty of `/.well-known/oauth-protected-resource` (Move 1). A separate, larger
+  decision — not this phase.
+- **Per-hop verification of a multi-hop `act` chain.** gemot verifies the issuer's signature
+  over the whole token and trusts the issuer for chain integrity and per-hop attenuation
+  (T14); it does not independently verify that each actor signed the next. Revisit only with a
+  concrete multi-hop partner.
+- **Algorithms beyond EdDSA** (ES256, etc.). The importer is EdDSA-only, matching the native
+  `Credential` and minimizing the JOSE attack surface (§12.2). Add per-issuer alg pinning for
+  a second algorithm only when a partner needs it.
 - **Issuer revocation lists / OAuth introspection** — expiry + kill-switch suffice for v1.
 - **Preference/context resolution** for a federated principal — stays out of the signed
   payload permanently (the append-only-log constraint in `credential.go`); resolve at read
@@ -354,3 +454,217 @@ Sources: SPIFFE/SPIRE trust-domain & federation docs and the 2026 WIT-SVID PoP u
 RFC 9700 (OAuth 2.0 Security BCP, 2025); RFC 9449 (DPoP); OWASP JWT guidance on algorithm
 allowlisting and header key-injection; RFC 8693 (`act`-claim vocabulary, already reflected in
 `docs/act-claim.schema.json`); and the 2026 AIP verifiable-delegation paper.
+
+---
+
+## 12. Phase 3 design — external JWT act-claim import
+
+Phase 3 lets a composer present a standard RFC 8693 act-claim **JWT** instead of a
+gemot-native `Credential`, and have gemot honor it. The whole of Phases 1–2 was building the
+trust root this consumes; Phase 3 adds a decoder, a claim validator, and a translator — and
+runs the result through the existing, unchanged submit path. The design goal is that *nothing
+downstream of translation can tell a JWT-sourced delegation from a native one* — same
+`Result`, same `provePossession`, same storage, same audit record.
+
+### 12.1 Transport placement — correcting the "bearer slot"
+
+Earlier notes (and `COMPOSING.md`) called this "JWT act-claim import **in the bearer slot**."
+That phrasing is imprecise and, taken literally, would be a design mistake. gemot's
+`Authorization: Bearer …` slot already carries the **session API key** (`gmt_…`) or the admin
+secret — the coarse "may this caller reach the server and who pays" gate
+(`a2a.go:119`, `http.go:461+`). A delegation act-claim answers an orthogonal question — "on
+whose behalf is *this* position" — and must not evict or overload session auth.
+
+**Decision: the act-claim JWT travels in a dedicated request field, not the `Authorization`
+header.** Concretely, an `act_claim` string field, sibling to the existing
+`principal_credential`, on both surfaces:
+
+- MCP: a new `submit_position` arg / `_meta` entry (`server.go:249`, alongside
+  `PrincipalCredential`).
+- A2A: a new `act_claim` param (`a2a.go:576`, alongside `principal_credential`).
+
+A caller presents **exactly one** of `principal_credential` (native) or `act_claim` (JWT);
+presenting both is a request error. This keeps the two authentication axes cleanly separate,
+preserves the deliberate honesty of `/.well-known/oauth-protected-resource` (gemot advertises
+that it is **not** an OAuth deployment — Move 1), and means Phase 3 requires no change to
+session auth or the middleware.
+
+> The alternative — accept the delegation JWT *as* the `Authorization` bearer, making gemot an
+> OAuth resource server — is a genuinely different and larger product commitment (DCR,
+> `authorization_servers` metadata, protected-resource semantics). It is recorded as
+> out-of-scope in §9, to be decided deliberately if a partner ever needs gemot to be their
+> resource server, not backed into via a header-parsing convenience.
+
+### 12.2 Verification pipeline (fail-closed at every step)
+
+Given `act_claim` (a compact JWS `header.payload.signature`) and the presenting `agentID` +
+`Target`, in order — each step rejects on failure, none is skipped:
+
+1. **Structural decode**, size-capped (reuse a bound analogous to `maxJWKSBytes`). Reject
+   anything that is not a well-formed compact JWS with exactly three segments.
+2. **Algorithm allowlist.** Decode the header `alg`; accept **only `EdDSA`**. Reject
+   `alg:none` and every other value. This is enforced by construction, not inference — see the
+   library note (§12.5). (T3/T16)
+3. **Ignore header key-source params.** `jku`, `jwk`, `x5u`, `x5c` are never read; the
+   verifying key is chosen only from configured trust. (T3b/T16)
+4. **Issuer trust + key selection.** Read the **payload** `iss`; require it to name an entry
+   in `GEMOT_TRUSTED_ISSUERS` (fail closed on unknown — T2). Resolve that issuer's Ed25519
+   key(s) via the *same* `keySource` Phases 1–2 use (pinned or JWKS-cached, SSRF-guarded). If
+   the header carries a `kid`, prefer the matching key; absent a `kid`, try all published keys
+   (rotation-tolerant, as on the native path).
+5. **JWS signature verification** over the token's signing input, against the issuer key(s).
+   This is the crypto root of trust for the whole token. (Distinct from native-signature
+   verification — T15.)
+6. **Audience.** `aud` is **mandatory** and must contain `GEMOT_JWT_AUDIENCE`. (T11, §4.7)
+7. **Temporal.** `exp` mandatory and in the future; `nbf`/`iat` if present must be consistent;
+   `GEMOT_JWT_LEEWAY_SECONDS` symmetric leeway. (T9)
+8. **Confirmation key.** Extract `cnf` → an Ed25519 public key; **reject if absent or
+   unusable** (T12, §4.8). This becomes `AgentKey`.
+9. **Subject / actor.** `sub` → principal; the **innermost** `act.sub` → agent, which must
+   equal the presenting `agentID` (agent-mismatch = replay of another's delegation). The
+   chain, if multi-hop, is recorded for audit but only the innermost is PoP-checked (T14).
+10. **Scope.** Map the `scope` array to the native scope (§12.3); reject a token that names a
+    different deliberation than the `Target`.
+11. **Namespace binding + local-shadow** on `sub`, reusing the *exact* Phase 1 checks (§4.2,
+    T1): the issuer must be authorized for `sub`'s namespace, and `sub` must not have a local
+    key.
+12. **Claim minimization** throughout: only the claims listed in §4.9 are ever read; unknown
+    claims are rejected; nothing but the translated `Credential` is persisted or logged.
+
+Only if all pass is a `Result` produced — identical in shape to the native path — and handed
+to the unchanged service layer, where `provePossession` still requires the agent to sign the
+action with the `cnf` private key against its locally-registered key.
+
+### 12.3 Claim → `Credential` mapping
+
+| act-claim JWT (RFC 8693/9068 + RFC 7800) | internal `Credential` | notes |
+|---|---|---|
+| `iss` | `Issuer` | must be a trusted issuer; selects the verifying key |
+| `sub` | `Principal` | opaque string; namespace-bound; local-shadow-checked |
+| innermost `act.sub` | `Agent` | must equal presenting `agentID`; PoP target |
+| `cnf` (Ed25519 JWK) | `AgentKey` | **mandatory** (§4.8); the whole PoP hinge |
+| `scope` (array) → the `deliberation:<id>` token | `Scope` (`delib:<id>`) | see below |
+| `exp` | `ExpiresAt` | mandatory |
+| *(JWS over signing input)* | *(already-verified; no native `Signature`)* | T15 |
+| `aud`, `nbf`, `iat`, `jti` | *(checked, not stored)* | temporal + audience gates |
+| `email`, `name`, any other claim | *(rejected / never stored)* | §4.9, T13 |
+
+**Scope mapping is intentionally narrow and must not fail open.** The act-claim `scope` is an
+array of `<tool>:<action>` and/or `deliberation:<id>` tokens; the native `Credential.Scope` is
+a single `""` | `delib:<id>` | `group:<id>` string. The importer maps the `deliberation:<id>`
+(or a group token) to the native scope and binds the credential to that deliberation. The
+`<tool>:<action>` tokens are a *different axis* — gemot's credential authorizes "this agent
+may speak for this principal within this deliberation," it is **not** the tool-authorization
+mechanism (that is the API key + MPP payment scope). So dropping `<tool>:<action>` tokens does
+not widen what the credential grants. This is a real semantic boundary, stated so no composer
+assumes gemot enforces tool-level attenuation through the delegation layer: **if a token's
+`scope` names a deliberation, gemot binds to it; tool/action scoping is honored by the
+payment/session layer, not the credential.** A token whose scope cannot be represented (e.g.
+two conflicting `deliberation:` tokens) is rejected, not silently coerced.
+
+### 12.4 Code seam
+
+Keep all JOSE/crypto inside `internal/principal`, next to the trust root it reuses:
+
+- **New `internal/principal/jwt.go`** with an `ActClaimImporter`:
+  ```
+  type ActClaimImporter struct {
+      issuers  map[string]issuerEntry // shared with IssuerVerifier (same keySource)
+      audience string
+      leeway   time.Duration
+      localLookup KeyLookup            // shared local-shadow check
+      now      func() time.Time
+  }
+  func (i *ActClaimImporter) Import(ctx, tokenString, agentID string, t Target) (*Result, error)
+  ```
+- **Factor the shared post-signature checks** — issuer `covers` (namespace), `CoversTarget`,
+  expiry, agent-match, local-shadow — into a helper used by *both* `IssuerVerifier.Verify`
+  (native signature) and `ActClaimImporter.Import` (JWS signature). Only the signature step
+  differs; everything else is identical, which is what keeps the two paths from drifting.
+- **Do not route the imported `Credential` back through native-signature verification** (T15).
+  `Import` returns a `*Result` directly. The cleanest service-layer shape mirrors how a
+  verified native credential flows today: the transport, on seeing `act_claim`, calls
+  `Import`, and the service threads the resulting `*Result` into the same slot a `Verifier`
+  would have produced — then `provePossession` runs unchanged. (Concretely: a small
+  service-layer branch "if act-claim present, import; else verify credential", both yielding a
+  `*Result` before the identical PoP + persistence tail.)
+- **Wiring** (`main.go`): build the `ActClaimImporter` from the same `[]RemoteIssuer` +
+  options already parsed for the `RoutingVerifier`, only when `GEMOT_ACCEPT_ACT_CLAIM_JWT` is
+  set; require `GEMOT_JWT_AUDIENCE` (fail-closed startup otherwise). Share the JWKS cache
+  instances so a JWKS issuer isn't fetched twice.
+
+### 12.5 Library decision
+
+`github.com/golang-jwt/jwt/v5 v5.3.1` is **already in the module graph** (transitively), so
+Phase 3 needs no new heavyweight dependency — promote it to a direct require. It supports the
+two controls that matter: an explicit method allowlist via `jwt.WithValidMethods([]string{"EdDSA"})`
+(so `alg:none` and RS/HS confusion are impossible), and a custom `Keyfunc` that selects the key
+purely from `(iss, kid)` against configured trust while ignoring header key-source params. Use
+`WithExpirationRequired()`, `WithAudience(GEMOT_JWT_AUDIENCE)`, and `WithLeeway(…)`.
+
+The considered alternative — a minimal in-house EdDSA-only compact-JWS verifier — has an even
+smaller attack surface (the parser literally cannot do anything but EdDSA), and remains the
+fallback if the dependency ever proves troublesome. Given golang-jwt/v5 is already present,
+actively maintained, and its allowlist API makes the EdDSA-only stance explicit and testable,
+reuse wins for v1. Either way the property is the same: **exactly one algorithm, chosen by
+us, never inferred from the token.**
+
+### 12.6 Required change to `docs/act-claim.schema.json`
+
+The external vocabulary is currently missing the one field a proof-of-possession import cannot
+work without. Add a `cnf` member (and, because the schema is `additionalProperties: false`,
+without this a compliant `cnf`-bearing token would be *rejected*):
+
+```json
+"cnf": {
+  "type": "object",
+  "description": "RFC 7800 confirmation. Binds the act-claim to a key the innermost actor must prove control of, making the token sender-constrained rather than bearer. REQUIRED for gemot import.",
+  "properties": {
+    "jwk": {
+      "type": "object",
+      "description": "The actor's public key as a JWK. gemot accepts kty=OKP, crv=Ed25519."
+    }
+  },
+  "required": ["jwk"],
+  "additionalProperties": false
+}
+```
+
+This is a schema/doc change, not code, and is the natural companion to the §4.8 control. It
+should ship *with* Phase 3 so the published contract and the importer agree.
+
+### 12.7 Test plan (adversarial-heavy — as with Phases 1–2)
+
+Unit (`internal/principal/jwt_test.go`):
+- **Happy path**: EdDSA JWT from a trusted issuer with `cnf`/`aud`/`exp`/`sub`/`act` → a
+  `Result` equal to the native path's for the same delegation.
+- **Algorithm attacks**: `alg:none` → reject; RS256/HS256 token (incl. the classic "public key
+  as HMAC secret") → reject; unknown `alg` → reject. (T16)
+- **Header key-injection**: `jku`/`jwk`/`x5u`/`x5c` pointing at an attacker key → ignored,
+  verification still uses configured trust → reject. (T16)
+- **cnf**: token with no `cnf` → reject; `cnf` with a non-Ed25519 / malformed key → reject;
+  `cnf` present but `act.sub` ≠ presenting agent → reject. (T12)
+- **aud**: missing `aud` → reject; wrong `aud` → reject; list `aud` including us → accept. (T11)
+- **Temporal**: expired → reject; `nbf` in the future → reject; within-leeway skew → accept. (T9)
+- **Trust root reuse**: untrusted `iss` → reject (T2); `sub` outside issuer namespace → reject;
+  `sub` with a local key → reject (T1); issuer key resolved via JWKS (pinned test client) → OK.
+- **Privacy**: token with an `email`/custom claim → rejected as an unknown claim; and for the
+  accepted happy-path token, assert the persisted `Credential` and all log output contain no
+  PII and no raw token bytes. (T13)
+- **JWS-vs-native**: a valid native `Credential` presented in the `act_claim` slot → reject;
+  an imported result never carries a native signature. (T15)
+
+Integration (`tests/`): end-to-end `submit_position` with `act_claim` + a matching
+locally-registered agent key → `PrincipalVerified` true, indistinguishable from native;
+leaked-token replay by a second agent → rejected by `provePossession` (T8); `act_claim` +
+`principal_credential` both present → request error (§12.1).
+
+Config: `GEMOT_ACCEPT_ACT_CLAIM_JWT=true` without `GEMOT_JWT_AUDIENCE` → startup fails closed;
+switch off → `act_claim` rejected as unsupported.
+
+### 12.8 Effort
+
+~2–3 days. The trust root, key resolution, namespace binding, shadow check, and PoP are all
+reused unchanged; the genuinely new work is the JOSE decode + strict claim validation + the
+mapping + the (large) adversarial test matrix, plus the two transport fields and the schema
+`cnf` addition.
