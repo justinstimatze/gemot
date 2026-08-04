@@ -319,28 +319,49 @@ func (r *Weigher) UpdateFromRound(
 	cruxes []types.Crux,
 	positionAuthors map[string]string,
 	disputes []types.Dispute,
+	principalOf map[string]string,
 ) error {
-	// Collect every symbolic agent_id that appears in this round so we
+	// Reputation rollup to principal (Move 5): a position submitted under a
+	// *verified* delegation credits its on_behalf_of principal, not the
+	// ephemeral agent that carried it — so a human-org's standing accrues
+	// across the throwaway agents that act for it. principalOf maps an
+	// agent_id to its verified principal for this round; the service builds
+	// it from PrincipalVerified positions only, so an unverified
+	// on_behalf_of claim can never redirect another party's reputation.
+	// subject() is applied uniformly to authors, agreers, and disputers so
+	// two agents acting for the same principal collapse to one vertex —
+	// which is exactly what makes the self-edge and dedup checks below hold
+	// at the principal level, not just the agent level.
+	subject := func(agentID string) string {
+		if p, ok := principalOf[agentID]; ok && p != "" {
+			return p
+		}
+		return agentID
+	}
+
+	// Collect every symbolic identity that appears in this round so we
 	// can pin each one to its current vertex in a single batched lookup.
 	// Emitted edges + survived_count increments + dispute edges all use
 	// the vertex form so that a later key rotation doesn't retroactively
 	// reassign attribution of edges written under the pre-rotation key.
+	// Rolled-up principals resolve through ResolveVertices too, so a
+	// principal that holds its own local key gets the key: form.
 	allAgents := map[string]struct{}{}
 	for _, c := range cruxes {
 		for _, pid := range c.SourcePositionIDs {
 			if author, ok := positionAuthors[pid]; ok && author != "" {
-				allAgents[author] = struct{}{}
+				allAgents[subject(author)] = struct{}{}
 			}
 		}
 		for _, agreer := range c.AgreeAgents {
 			if agreer != "" {
-				allAgents[agreer] = struct{}{}
+				allAgents[subject(agreer)] = struct{}{}
 			}
 		}
 	}
 	for _, d := range disputes {
 		if d.AgentID != "" {
-			allAgents[d.AgentID] = struct{}{}
+			allAgents[subject(d.AgentID)] = struct{}{}
 		}
 	}
 	names := make([]string, 0, len(allAgents))
@@ -374,7 +395,7 @@ func (r *Weigher) UpdateFromRound(
 		authors := map[string]struct{}{}
 		for _, pid := range c.SourcePositionIDs {
 			if author, ok := positionAuthors[pid]; ok && author != "" {
-				authors[vertex(author)] = struct{}{}
+				authors[vertex(subject(author))] = struct{}{}
 			}
 		}
 		if c.Claim != "" {
@@ -382,7 +403,7 @@ func (r *Weigher) UpdateFromRound(
 		}
 		seenAgreers := map[string]struct{}{}
 		for _, agreer := range c.AgreeAgents {
-			agreerV := vertex(agreer)
+			agreerV := vertex(subject(agreer))
 			if _, dup := seenAgreers[agreerV]; dup {
 				continue
 			}
@@ -410,7 +431,7 @@ func (r *Weigher) UpdateFromRound(
 		if !ok {
 			continue
 		}
-		disputerV := vertex(d.AgentID)
+		disputerV := vertex(subject(d.AgentID))
 		for authorV := range authors {
 			if authorV == disputerV {
 				continue

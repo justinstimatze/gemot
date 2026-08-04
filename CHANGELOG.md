@@ -4,6 +4,12 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Reputation follows the principal, not the agent — 2026-08-04
+
+Reputation used to accrue to whichever `agent_id` carried a position. Under the delegation model that agent is often ephemeral — a throwaway fielded by a human-org principal — so standing earned on behalf of that principal evaporated when the agent rotated. A round now credits the **verified delegation principal** (`on_behalf_of`) instead of the agent: trust edges, `survived_count`, and the EigenTrust eigenvector all attribute to the principal vertex, so a principal's reputation persists across the agents it fields and consolidates the work of several agents acting for it.
+
+The load-bearing invariant is that **only `PrincipalVerified` positions roll up** — an unverified `on_behalf_of` claim is an unproven assertion, and honoring it would let any agent redirect a round's standing onto a principal it doesn't speak for. The rollup is a pure function of the round's positions (`buildPrincipalRollup`), consuming the flag that `internal/principal` already set at submit time. The remap is applied uniformly to authors, agreers, and disputers, so two agents acting for one principal collapse to a single vertex — their mutual agreement becomes a self-endorsement and is dropped, closing what would otherwise be a graduation shortcut. Ambiguity is dropped rather than guessed: an agent that authored under two different verified principals in the same round credits itself. Rolled-up principals resolve through the same key-binding vertex layer, so a principal holding its own local key gets the `key:` form. Unit tests pin the verified-only guard and the ambiguity/conflict handling; weigher tests confirm edges land on the principal vertex and same-principal agreement collapses.
+
 ### Remote trust root (Phase 2): JWKS key resolution — 2026-08-04
 
 Phase 1 pinned each trusted issuer's key directly in `GEMOT_TRUSTED_ISSUERS`, so a key rotation meant a gemot config change. An issuer entry may now instead carry a `jwks_url`, and gemot resolves that issuer's Ed25519 signing keys from its JWKS endpoint — picking up rotation automatically (issuers publish the new key alongside the old, and every currently-published key is tried, so credentials from either verify during the overlap). Each issuer sets **exactly one** of `public_key` or `jwks_url`; everything else from Phase 1 — namespace binding, deterministic routing, issuer-signs-not-principal, proof-of-possession, the wire format — is unchanged.

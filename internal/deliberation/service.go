@@ -266,7 +266,7 @@ func WithSignature(sig []byte) PositionOption {
 // the reputation package) to avoid a deliberation → reputation →
 // analysis → deliberation import cycle.
 type RoundReputationUpdater interface {
-	UpdateFromRound(ctx context.Context, delibID string, isPrivate bool, cruxes []types.Crux, positionAuthors map[string]string, disputes []types.Dispute) error
+	UpdateFromRound(ctx context.Context, delibID string, isPrivate bool, cruxes []types.Crux, positionAuthors map[string]string, disputes []types.Dispute, principalOf map[string]string) error
 }
 
 type Service struct {
@@ -492,6 +492,42 @@ func (s *Service) resolutionLock(deliberationID string) *sync.Mutex {
 // SetContentClassifier sets the LLM content screening function.
 func (s *Service) SetContentClassifier(c sanitize.Classifier) {
 	s.contentClassifier = c
+}
+
+// buildPrincipalRollup maps each agent_id to the delegation principal its
+// reputation should accrue to this round (Move 5: reputation follows the
+// human-org principal, not the ephemeral agent that carried the position).
+//
+// Security invariant: only PrincipalVerified positions contribute. An
+// unverified on_behalf_of claim is an unproven assertion, and honoring it
+// would let any agent redirect its round's standing onto a principal it
+// does not speak for — reputation hijacking. The verification already
+// happened at submit time (Position.PrincipalVerified); this is the
+// consumer of that flag.
+//
+// Ambiguity is dropped, not guessed: if one agent authored positions under
+// two different verified principals in the same round (distinct subtopics),
+// there is no single correct subject, so the agent credits itself. A
+// conflicted agent stays dropped even if a later position would agree —
+// otherwise ordering would decide attribution.
+func buildPrincipalRollup(positions []types.Position) map[string]string {
+	principalOf := make(map[string]string)
+	conflicted := make(map[string]struct{})
+	for _, p := range positions {
+		if !p.PrincipalVerified || p.OnBehalfOf == "" {
+			continue
+		}
+		if _, bad := conflicted[p.AgentID]; bad {
+			continue
+		}
+		if existing, ok := principalOf[p.AgentID]; ok && existing != p.OnBehalfOf {
+			conflicted[p.AgentID] = struct{}{}
+			delete(principalOf, p.AgentID)
+			continue
+		}
+		principalOf[p.AgentID] = p.OnBehalfOf
+	}
+	return principalOf
 }
 
 // SetReputationUpdater wires the persistent EigenTrust + cold-start
@@ -1585,11 +1621,12 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		for _, p := range positions {
 			positionAuthors[p.ID] = p.AgentID
 		}
+		principalOf := buildPrincipalRollup(positions)
 		unprocessed, dErr := s.store.GetUnprocessedDisputes(ctx, deliberationID)
 		if dErr != nil {
 			slog.Warn("fetch unprocessed disputes failed", "deliberation", deliberationID, "err", dErr)
 		}
-		if err := s.reputation.UpdateFromRound(ctx, deliberationID, isPrivate, result.Cruxes, positionAuthors, unprocessed); err != nil {
+		if err := s.reputation.UpdateFromRound(ctx, deliberationID, isPrivate, result.Cruxes, positionAuthors, unprocessed, principalOf); err != nil {
 			slog.Warn("reputation update failed", "deliberation", deliberationID, "err", err)
 		} else if len(unprocessed) > 0 {
 			ids := make([]string, len(unprocessed))

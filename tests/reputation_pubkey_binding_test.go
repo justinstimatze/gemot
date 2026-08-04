@@ -287,7 +287,7 @@ func TestUpdateFromRoundEmitsKeyedVertexEdges(t *testing.T) {
 		AgreeAgents:       []string{"bob", "carol"},
 	}}
 	authors := map[string]string{"p-alice": "alice"}
-	if err := w.UpdateFromRound(ctx, "", false, cruxes, authors, nil); err != nil {
+	if err := w.UpdateFromRound(ctx, "", false, cruxes, authors, nil, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 

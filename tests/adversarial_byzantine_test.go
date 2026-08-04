@@ -82,7 +82,7 @@ func (h *byzantineHarness) runRound(
 	for _, p := range positions {
 		authors[p.ID] = p.AgentID
 	}
-	if err := h.weigher.UpdateFromRound(ctx, "", false, result.Cruxes, authors, nil); err != nil {
+	if err := h.weigher.UpdateFromRound(ctx, "", false, result.Cruxes, authors, nil, nil); err != nil {
 		h.t.Fatalf("UpdateFromRound: %v", err)
 	}
 	return result
@@ -635,7 +635,7 @@ func TestByzantineGraduationCliff(t *testing.T) {
 	authorsR1 := map[string]string{
 		"p-S1-r1": "S1", "p-S2-r1": "S2", "p-S3-r1": "S3",
 	}
-	if err := h.weigher.UpdateFromRound(ctx, "", false, cruxesR1, authorsR1, nil); err != nil {
+	if err := h.weigher.UpdateFromRound(ctx, "", false, cruxesR1, authorsR1, nil, nil); err != nil {
 		t.Fatalf("ring round 1: %v", err)
 	}
 	cruxesR2 := []deliberation.Crux{
@@ -646,7 +646,7 @@ func TestByzantineGraduationCliff(t *testing.T) {
 	authorsR2 := map[string]string{
 		"p-S1-r2": "S1", "p-S2-r2": "S2", "p-S3-r2": "S3",
 	}
-	if err := h.weigher.UpdateFromRound(ctx, "", false, cruxesR2, authorsR2, nil); err != nil {
+	if err := h.weigher.UpdateFromRound(ctx, "", false, cruxesR2, authorsR2, nil, nil); err != nil {
 		t.Fatalf("ring round 2: %v", err)
 	}
 

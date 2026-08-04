@@ -280,7 +280,7 @@ func TestUpdateFromRoundAccumulatesEdgesAndSurvived(t *testing.T) {
 		"p-alice": "alice",
 	}
 
-	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 
@@ -318,7 +318,7 @@ func TestUpdateFromRoundDedupAgreers(t *testing.T) {
 	}
 	authors := map[string]string{"p-alice": "alice"}
 
-	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 	if fs.edges[edgeKey(idV("bob"), idV("alice"))] != 1 {
@@ -345,7 +345,7 @@ func TestUpdateFromRoundBlocksSybilPair(t *testing.T) {
 	}
 	authors := map[string]string{"p-A": "A", "p-B": "B"}
 
-	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil); err != nil {
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil, nil); err != nil {
 		t.Fatalf("UpdateFromRound: %v", err)
 	}
 	if fs.reps[idV("A")].SurvivedCount != 0 {
@@ -355,6 +355,75 @@ func TestUpdateFromRoundBlocksSybilPair(t *testing.T) {
 	if fs.reps[idV("B")].SurvivedCount != 0 {
 		t.Fatalf("Sybil B must not graduate on a pair ring; survived_count=%d",
 			fs.reps[idV("B")].SurvivedCount)
+	}
+}
+
+// TestUpdateFromRoundRollsUpToPrincipal: a position carried by an ephemeral
+// agent under a verified delegation credits the *principal* vertex, not the
+// agent (Move 5). Edges point at the principal, survived_count accrues to
+// the principal, and the throwaway agent vertex stays absent — so a
+// human-org's standing follows it across the agents it fields.
+func TestUpdateFromRoundRollsUpToPrincipal(t *testing.T) {
+	fs := newFakeRepStore()
+	w := reputation.NewWeigher(fs, reputation.Config{
+		Enabled: true, ColdCap: 0.1, ColdThreshold: 5, Iterations: 50,
+	})
+	cruxes := []types.Crux{
+		{
+			SourcePositionIDs: []string{"p-1"},
+			AgreeAgents:       []string{"bob", "carol"},
+		},
+	}
+	authors := map[string]string{"p-1": "acme-agent"}
+	principalOf := map[string]string{"acme-agent": "acme:alice"}
+
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil, principalOf); err != nil {
+		t.Fatalf("UpdateFromRound: %v", err)
+	}
+
+	// Credit landed on the principal.
+	if fs.reps[idV("acme:alice")].SurvivedCount != 1 {
+		t.Fatalf("principal survived_count=%d, want 1", fs.reps[idV("acme:alice")].SurvivedCount)
+	}
+	if fs.edges[edgeKey(idV("bob"), idV("acme:alice"))] != 1 {
+		t.Fatalf("expected bob→principal edge weight 1, got %f", fs.edges[edgeKey(idV("bob"), idV("acme:alice"))])
+	}
+	// Nothing landed on the ephemeral agent.
+	if _, ok := fs.reps[idV("acme-agent")]; ok {
+		t.Fatalf("ephemeral agent vertex should carry no reputation after rollup")
+	}
+	if _, ok := fs.edges[edgeKey(idV("bob"), idV("acme-agent"))]; ok {
+		t.Fatalf("no edge should point at the ephemeral agent after rollup")
+	}
+}
+
+// TestUpdateFromRoundSamePrincipalCollapses: two distinct agents acting for
+// the SAME verified principal, agreeing with each other, must not graduate
+// the principal — after rollup both endpoints are one vertex, so the mutual
+// agreement is a self-endorsement and is dropped. Without uniform rollup of
+// agreers (not just authors) this would look like two distinct agreers and
+// spuriously cross minDistinctAgreers.
+func TestUpdateFromRoundSamePrincipalCollapses(t *testing.T) {
+	fs := newFakeRepStore()
+	w := reputation.NewWeigher(fs, reputation.Config{
+		Enabled: true, ColdCap: 0.1, ColdThreshold: 5, Iterations: 50,
+	})
+	cruxes := []types.Crux{
+		{SourcePositionIDs: []string{"p-1"}, AgreeAgents: []string{"agent-2"}},
+		{SourcePositionIDs: []string{"p-2"}, AgreeAgents: []string{"agent-1"}},
+	}
+	authors := map[string]string{"p-1": "agent-1", "p-2": "agent-2"}
+	principalOf := map[string]string{"agent-1": "acme:alice", "agent-2": "acme:alice"}
+
+	if err := w.UpdateFromRound(context.Background(), "", false, cruxes, authors, nil, principalOf); err != nil {
+		t.Fatalf("UpdateFromRound: %v", err)
+	}
+	if _, ok := fs.edges[edgeKey(idV("acme:alice"), idV("acme:alice"))]; ok {
+		t.Fatalf("self-endorsement edge from same-principal agreement must be dropped")
+	}
+	if fs.reps[idV("acme:alice")].SurvivedCount != 0 {
+		t.Fatalf("principal must not graduate off its own agents agreeing; survived_count=%d",
+			fs.reps[idV("acme:alice")].SurvivedCount)
 	}
 }
 

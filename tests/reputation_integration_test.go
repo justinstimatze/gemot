@@ -127,7 +127,7 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 		{SourcePositionIDs: []string{"p-alice-r1"}, AgreeAgents: []string{"bob", "carol"}},
 	}
 	authors1 := map[string]string{"p-alice-r1": "alice"}
-	if err := w.UpdateFromRound(ctx, "", false, round1, authors1, nil); err != nil {
+	if err := w.UpdateFromRound(ctx, "", false, round1, authors1, nil, nil); err != nil {
 		t.Fatalf("round 1 UpdateFromRound: %v", err)
 	}
 
@@ -150,7 +150,7 @@ func TestReputationEndToEndRoundFlow(t *testing.T) {
 		{SourcePositionIDs: []string{"p-alice-r2"}, AgreeAgents: []string{"bob", "carol"}},
 	}
 	authors2 := map[string]string{"p-alice-r2": "alice"}
-	if err := w.UpdateFromRound(ctx, "", false, round2, authors2, nil); err != nil {
+	if err := w.UpdateFromRound(ctx, "", false, round2, authors2, nil, nil); err != nil {
 		t.Fatalf("round 2 UpdateFromRound: %v", err)
 	}
 
