@@ -139,8 +139,11 @@ Its properties are the load-bearing ones:
 - **Policy modes.** `principal_policy` on a deliberation is `none` | `advisory`
   | `required` — ignore, log, or reject unbacked `on_behalf_of` claims. A *bad*
   credential is rejected under every policy, including `none`.
-- **A verifier seam.** The `Verifier` interface (`LocalVerifier` + a `KeyLookup`)
-  is where an external trust root plugs in — see the extension point below.
+- **A verifier seam, with two backends.** The `Verifier` interface has a
+  `LocalVerifier` (principal self-signs, key in gemot's registry) and, as of
+  Phase 1 of the remote trust root, an `IssuerVerifier` behind a `RoutingVerifier`
+  that also honors credentials minted by trusted **external issuers** — see the
+  federation section below.
 - **Capability, never context.** A credential carries authority, never personal
   data: positions land in an append-only BLS-signed log that cannot honor a later
   revocation, so personal context must be resolved at read time and kept out of
@@ -165,6 +168,39 @@ internal `Credential` one-to-one:
 The act-claim schema is the *import* shape; the `Credential` is what gemot
 stores and verifies. Importing an external JWT act-claim and mapping it to a
 `Credential` is the open interop piece (below).
+
+### Federation: trusting an external issuer
+
+By default, a `Credential` is *self-signed* — the principal itself signs the
+delegation and its key lives in gemot's registry (`LocalVerifier`). That means
+every principal must have a gemot key. **Phase 1 of the remote trust root**
+lifts that: set `GEMOT_TRUSTED_ISSUERS` and gemot will also honor credentials
+signed by an external **issuer** key you trust, so a principal needs no gemot
+key — only the issuer does.
+
+The trust model is different in kind and the difference is the whole risk
+surface: gemot is now trusting the issuer to have authenticated the principal.
+Two controls contain it (see `docs/remote-trust-root.md` for the full threat
+model and mid-2026 best-practice alignment):
+
+- **Namespace binding** (a SPIFFE trust domain, in effect): each issuer may only
+  vouch for principals under a prefix it declares; prefixes are pairwise-disjoint
+  across issuers, and an issuer can never speak for a principal that has a local
+  key of its own. Overlapping config fails startup rather than failing open.
+- **Proof-of-possession is unchanged.** The agent still proves control of the
+  `cnf` key against its locally-registered key, so a leaked or bad-issuer
+  credential is inert. Federation removes the *principal's* need for a gemot key,
+  not the *agent's*.
+
+Config is one JSON array; the issuer key is pinned (no network on the
+verification path in Phase 1):
+
+```
+GEMOT_TRUSTED_ISSUERS='[{"name":"https://acme.example","namespaces":["acme:"],"public_key":"<base64-ed25519>","algo":"ed25519"}]'
+```
+
+Still open (Phase 2/3): JWKS key discovery/rotation, and importing an external
+JWT act-claim (below).
 
 ---
 
@@ -191,12 +227,11 @@ The delegation primitive is built and enforced; these are the genuinely
 remaining pieces. Deferred on purpose — build them when a concrete integration
 needs them, not speculatively.
 
-- **A remote trust root.** The `Verifier` seam exists (`internal/principal`), but
-  the only backend today is `LocalVerifier`, which trusts keys registered
-  directly with gemot. There is no `GEMOT_TRUSTED_ISSUERS` / JWKS fetch that
-  would let gemot verify credentials minted by an external issuer it was merely
-  told to trust. That remote backend is the real functional unlock for
-  cross-issuer delegation — and it is a drop-in behind the existing interface.
+- **JWKS key discovery (remote trust root, Phase 2).** Phase 1 pins issuer keys
+  in `GEMOT_TRUSTED_ISSUERS` config (see the federation section above). Resolving
+  issuer keys dynamically via a JWKS endpoint — with rotation, caching, and the
+  attendant SSRF/fetch-DoS hardening — is the next step; the `Verifier` routing
+  already accommodates it.
 - **JWT act-claim import in the bearer slot.** gemot accepts a `Credential` over
   its own surfaces (A2A / `_meta`), but does not parse an external JWT out of the
   `Authorization` header, extract `sub`/`act`/`scope`, and translate it into a

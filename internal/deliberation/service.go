@@ -358,6 +358,13 @@ func (s *Service) SetPrincipalVerifier(v principal.Verifier) {
 	s.principalVerifier = v
 }
 
+// PrincipalVerifier returns the currently installed delegation verifier. Wiring
+// uses it to wrap the default LocalVerifier in a RoutingVerifier without
+// reconstructing the store-backed key lookup.
+func (s *Service) PrincipalVerifier() principal.Verifier {
+	return s.principalVerifier
+}
+
 // SetAuditLogger sets a function that logs all service-level write operations.
 func (s *Service) SetAuditLogger(fn func(method, deliberationID, agentID string)) {
 	s.auditFn = fn

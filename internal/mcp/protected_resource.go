@@ -52,8 +52,9 @@ func ProtectedResourceMetadata(baseURL string) map[string]any {
 			"session_bearer": "API key (gmt_...) in Authorization; enforced when GEMOT_REQUIRE_AUTH is set. Obtain keys at " + baseURL + "/pricing.",
 			"per_action_payment": "Paid actions issue Machine Payments Protocol (MPP) challenges bound to (tool, action, model, deliberation_id). See " +
 				baseURL + "/pricing and mpp.dev.",
-			"action_signing":  "Optional per-action ed25519 signatures (positions/votes) plus an envelope proof-of-possession layer (nonce + timestamp), gated by GEMOT_ENVELOPE_MODE. See COMPOSING.md.",
-			"composition_doc": baseURL + "/docs (COMPOSING.md)",
+			"action_signing":       "Optional per-action ed25519 signatures (positions/votes) plus an envelope proof-of-possession layer (nonce + timestamp), gated by GEMOT_ENVELOPE_MODE. See COMPOSING.md.",
+			"principal_delegation": "on_behalf_of claims may be backed by a signed, cnf-bound delegation Credential (RFC 7800). Credentials are self-signed by the principal, or — where the deployment trusts an external issuer — signed by that issuer. See COMPOSING.md and docs/remote-trust-root.md.",
+			"composition_doc":      baseURL + "/docs (COMPOSING.md)",
 		},
 	}
 }

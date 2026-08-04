@@ -72,6 +72,14 @@ type Config struct {
 	ConsistencyModel   string
 	ConsistencyKey     string
 	ConsistencySampleK int // default 5
+
+	// TrustedIssuers is the raw GEMOT_TRUSTED_ISSUERS JSON (a RemoteIssuer
+	// array) describing external delegation issuers this deployment trusts.
+	// Empty disables federation and leaves only the local principal verifier.
+	// Parsing and fail-closed validation happen at startup wiring
+	// (principal.ParseIssuers + NewRoutingVerifier) so a malformed value aborts
+	// the process rather than silently disabling federation.
+	TrustedIssuers string
 }
 
 // Load reads configuration from environment variables (and optional .env file).
@@ -102,6 +110,7 @@ func Load() *Config {
 		ConsistencyModel:            os.Getenv("GEMOT_CONSISTENCY_MODEL"),
 		ConsistencyKey:              envOr("GEMOT_CONSISTENCY_KEY", os.Getenv("GEMINI_API_KEY")),
 		ConsistencySampleK:          envInt("GEMOT_CONSISTENCY_SAMPLE_K", 5),
+		TrustedIssuers:              os.Getenv("GEMOT_TRUSTED_ISSUERS"),
 	}
 
 	// Validate model is in known set

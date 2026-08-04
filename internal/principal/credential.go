@@ -104,6 +104,17 @@ var (
 	// ErrVerifyFailed means the signature did not verify against the
 	// principal's registered key.
 	ErrVerifyFailed = errors.New("principal: delegation signature verification failed")
+
+	// ErrIssuerUnknown means the credential names an issuer that is not in the
+	// configured trust set. Fail closed: an unrecognized issuer is never
+	// defaulted to the local verifier.
+	ErrIssuerUnknown = errors.New("principal: credential issuer is not trusted")
+
+	// ErrIssuerNamespace means a trusted external issuer vouched for a principal
+	// outside the namespace it is authorized for, or for a principal that is
+	// locally registered (and therefore self-sovereign). Either way the issuer
+	// is attempting to speak for a principal it does not own.
+	ErrIssuerNamespace = errors.New("principal: issuer is not authorized for this principal")
 )
 
 // Credential is a signed delegation attestation.

@@ -21,6 +21,7 @@ import (
 	"github.com/justinstimatze/gemot/internal/llm"
 	"github.com/justinstimatze/gemot/internal/mcp"
 	"github.com/justinstimatze/gemot/internal/payments"
+	"github.com/justinstimatze/gemot/internal/principal"
 	"github.com/justinstimatze/gemot/internal/reputation"
 	"github.com/justinstimatze/gemot/internal/store"
 )
@@ -205,6 +206,29 @@ func cmdServe(httpMode bool, addr string) {
 	if cfg.AnthropicKey != "" {
 		screeningClient := llm.NewClient(cfg.AnthropicKey, "claude-haiku-4-5")
 		svc.SetContentClassifier(screeningClient.Classify)
+	}
+
+	// External delegation issuers (GEMOT_TRUSTED_ISSUERS). When configured, wrap
+	// the default local principal verifier in a routing verifier that also
+	// honors credentials minted by trusted external issuers. A malformed value
+	// or an unsafe issuer set aborts startup — federation must never fail open
+	// into "silently off".
+	if issuers, err := principal.ParseIssuers(cfg.TrustedIssuers); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing GEMOT_TRUSTED_ISSUERS: %v\n", err)
+		os.Exit(1)
+	} else if len(issuers) > 0 {
+		rv, err := principal.NewRoutingVerifier(svc.PrincipalVerifier(), issuers)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error configuring GEMOT_TRUSTED_ISSUERS: %v\n", err)
+			os.Exit(1)
+		}
+		svc.SetPrincipalVerifier(rv)
+		names := make([]string, 0, len(issuers))
+		for _, is := range issuers {
+			names = append(names, is.Name)
+		}
+		fmt.Fprintf(os.Stderr, "gemot: remote delegation trust enabled for %d issuer(s): %s\n",
+			len(issuers), strings.Join(names, ", "))
 	}
 
 	// Signal-aware context for graceful shutdown
