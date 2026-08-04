@@ -26,6 +26,10 @@ New `COMPOSING.md` documents how to layer an external identity or delegation iss
 
 Resolves a moderate-severity DoS in the `x/net` HTML parser (Dependabot #4); pulled `x/sync`, `x/sys`, and `x/text` forward as a side effect. Indirect dependency.
 
+### Dependencies: anthropic-sdk-go 1.61.0, mcp go-sdk 1.7.0
+
+Bumped `github.com/anthropics/anthropic-sdk-go` 1.50.1 → 1.61.0 (Dependabot #24; adds claude-opus-5, `model_context_window_exceeded` stop reason, apijson unmarshaling fixes) and `github.com/modelcontextprotocol/go-sdk` 1.6.1 → 1.7.0. Both are v1.x minor bumps — no API drift against gemot's usage (build + vet + full suite green).
+
 ### Analysis LLM telemetry + cache-readiness
 
 Added per-call `llm_usage` telemetry (input/output/cache tokens) behind a new `LOG_LEVEL` env (`debug|info|warn|error`, default `info`), and marked the analysis pipeline's tools+system prefix with `cache_control` ephemeral. Note: a calibration run showed the cache breakpoint is currently **inert** — the analyze prompts' stable prefix (~93-token system + ~433-token instruction template, the latter presently in the user message) falls under Anthropic's 1024-token cache minimum, so `cache_control` is silently ignored (`cache_write=0` across 396 measured calls). The marking is harmless and will engage automatically if prompts grow past the floor or are restructured to move the stable instruction block into the cacheable prefix; the telemetry is the immediate value, and it's what surfaced the true cost driver (call volume, ~44 LLM calls/deliberation, not per-call inefficiency).
