@@ -119,18 +119,52 @@ division of responsibility.
 
 ---
 
-## The act-claim shape
+## Verifiable principal delegation (implemented)
 
-`docs/act-claim.schema.json` is the concrete JSON Schema (draft 2020-12) for an
-act-claim: the object a composer produces to assert that an actor is authorized
-to act for a principal, within a scope, with an optional nested delegation
-chain. It is a strict subset of the RFC 8693 / RFC 9068 vocabulary so it can be
-carried inside a JWT `act` claim, a verifiable credential, or a capability token
-without translation.
+The delegation seam above is not just a contract — it is implemented and
+enforced. `internal/principal` defines a `Credential`: a principal signs
+*"the agent holding key K may speak for me, within scope S, until T"*, over a
+domain-separated payload (`auth.DomainPrincipal = "gemot/v1/principal-delegation"`).
+Its properties are the load-bearing ones:
 
-It is published as a **contract**, not as something gemot's write path enforces
-end-to-end today. The `sub`/`act` split it maps onto is real and in use; the
-external verification of the claim itself is the extension point below.
+- **Confirmation-key binding (RFC 7800 `cnf` / RFC 9449 DPoP).** The credential
+  names the agent's ed25519 public key, and presenting it *requires signing the
+  action with that key*. A captured credential is inert without the private half
+  — so credentials are safe to export and re-verify offline.
+- **Mandatory expiry + scope.** A delegation lapses on its own and cannot travel
+  to another deliberation (`delib:<id>` / `group:<id>`).
+- **Revocation via the key registry.** Principals register keys in the same
+  registry agents use; revoking a principal's key invalidates every credential
+  it ever signed.
+- **Policy modes.** `principal_policy` on a deliberation is `none` | `advisory`
+  | `required` — ignore, log, or reject unbacked `on_behalf_of` claims. A *bad*
+  credential is rejected under every policy, including `none`.
+- **A verifier seam.** The `Verifier` interface (`LocalVerifier` + a `KeyLookup`)
+  is where an external trust root plugs in — see the extension point below.
+- **Capability, never context.** A credential carries authority, never personal
+  data: positions land in an append-only BLS-signed log that cannot honor a later
+  revocation, so personal context must be resolved at read time and kept out of
+  the signed payload. See `docs/hcp-integration.md`.
+
+### External interop: the act-claim dialect
+
+`docs/act-claim.schema.json` is the RFC 8693 / RFC 9068 `sub`/`act` view of the
+same thing, for composers who speak the OAuth/JWT dialect. It maps onto the
+internal `Credential` one-to-one:
+
+| act-claim (RFC 8693, external) | `Credential` (internal, RFC 7800) |
+| --- | --- |
+| `sub` (principal) | `Principal` |
+| `act.sub` (actor) | `Agent` |
+| *(proof-of-possession)* | `AgentKey` — the `cnf` confirmation key |
+| `scope` | `Scope` |
+| `iss` | `Issuer` |
+| `exp` | `ExpiresAt` |
+| *(the attestation)* | the signed `Credential` itself |
+
+The act-claim schema is the *import* shape; the `Credential` is what gemot
+stores and verifies. Importing an external JWT act-claim and mapping it to a
+`Credential` is the open interop piece (below).
 
 ---
 
@@ -153,20 +187,24 @@ DCR/authorization-code flow.
 
 ## What is *not* wired yet (the extension points)
 
-These are the honest gaps. They are deferred on purpose — none should be built
-speculatively, only when a concrete integration needs them.
+The delegation primitive is built and enforced; these are the genuinely
+remaining pieces. Deferred on purpose — build them when a concrete integration
+needs them, not speculatively.
 
-- **External trust root.** There is no `GEMOT_TRUSTED_ISSUERS` / JWKS fetch
-  today. gemot verifies keys registered directly with it, not keys minted by an
-  issuer it was merely told to trust. This is the real functional unlock for
-  full delegation and is the first thing to add when a concrete composer exists.
-- **JWT/act-claim in the bearer slot.** gemot does not currently parse a JWT out
-  of the `Authorization` header, extract `sub`/`act`/`scope`, and map it to a
-  service identity. The seam (the `sub`/`act` split) is ready for it; the
-  extraction is not written.
-- **End-to-end act-claim enforcement.** The schema is published and the storage
-  split exists, but the write path does not yet *require* a verified act-claim to
-  accept a delegated action. It records the chain; it does not gate on it.
+- **A remote trust root.** The `Verifier` seam exists (`internal/principal`), but
+  the only backend today is `LocalVerifier`, which trusts keys registered
+  directly with gemot. There is no `GEMOT_TRUSTED_ISSUERS` / JWKS fetch that
+  would let gemot verify credentials minted by an external issuer it was merely
+  told to trust. That remote backend is the real functional unlock for
+  cross-issuer delegation — and it is a drop-in behind the existing interface.
+- **JWT act-claim import in the bearer slot.** gemot accepts a `Credential` over
+  its own surfaces (A2A / `_meta`), but does not parse an external JWT out of the
+  `Authorization` header, extract `sub`/`act`/`scope`, and translate it into a
+  `Credential`. The mapping (above) is defined; the extraction is not written.
+- **Preference-cooperative surface + verified interests.** `Position.Interests`
+  is still self-reported; sourcing it from a signed, revocable context lookup is
+  the natural next step — and the one that runs straight into the
+  capability-never-context constraint. See `docs/hcp-integration.md`.
 
 If you are building one of these, that is exactly the conversation worth having
 before either side writes code — getting the primitive right beats papering over

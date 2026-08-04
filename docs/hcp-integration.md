@@ -1,7 +1,14 @@
-# Human Context Protocol integration
+# Verifiable principal delegation, and the Human Context Protocol
 
-Where gemot sits relative to the Human Context Protocol (HCP), what gemot has
-built toward it, and what it deliberately has not.
+What gemot built — **verifiable principal delegation**, a self-contained
+primitive — where that sits relative to the Human Context Protocol (HCP), and
+what it deliberately has not built.
+
+**On HCP's status:** HCP is an aspiration, not a fixed target — there is no
+normative wire spec today (see "Deliberately not done"). gemot's delegation
+credential stands on its own as a generic primitive; HCP is one integration it
+is *shaped to accept*, not a dependency it is built around. Read the delegation
+sections for what ships now; read the HCP sections for where it could go.
 
 ## What HCP is
 
