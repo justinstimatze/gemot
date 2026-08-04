@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -50,11 +51,18 @@ type RemoteIssuer struct {
 	// rejected at construction.
 	Namespaces []string `json:"namespaces"`
 
-	// PublicKey is the issuer's ed25519 signing key. The issuer — not the
-	// principal — signs Credential.SigningPayload() with it.
-	PublicKey []byte `json:"public_key"`
+	// PublicKey is the issuer's ed25519 signing key, pinned in config (Phase 1).
+	// The issuer — not the principal — signs Credential.SigningPayload() with it.
+	// Exactly one of PublicKey or JWKSURL must be set per issuer.
+	PublicKey []byte `json:"public_key,omitempty"`
 
-	// Algo is the signature algorithm. Empty means ed25519; Phase 1 accepts only
+	// JWKSURL is an https endpoint publishing the issuer's Ed25519 signing keys
+	// as a JWKS (Phase 2). When set, keys are resolved and cached from it instead
+	// of pinned in config, which is what lets an issuer rotate keys without a
+	// gemot config change. Exactly one of PublicKey or JWKSURL must be set.
+	JWKSURL string `json:"jwks_url,omitempty"`
+
+	// Algo is the signature algorithm. Empty means ed25519; Phase 1/2 accept only
 	// ed25519.
 	Algo string `json:"algo,omitempty"`
 }
@@ -91,12 +99,19 @@ func ParseIssuers(raw string) ([]RemoteIssuer, error) {
 	return issuers, nil
 }
 
+// issuerEntry pairs an issuer's static metadata (name, namespaces, algo) with
+// its runtime key source (a pinned key, or a JWKS cache).
+type issuerEntry struct {
+	meta   RemoteIssuer
+	source keySource
+}
+
 // IssuerVerifier verifies credentials signed by a configured RemoteIssuer. It
 // implements Verifier. It looks up the ISSUER's key (not the principal's),
 // enforces namespace binding and local-shadow rejection, and otherwise reuses
 // the exact checks LocalVerifier applies.
 type IssuerVerifier struct {
-	issuers map[string]RemoteIssuer
+	issuers map[string]issuerEntry
 
 	// localLookup resolves a principal to its local key, used only to detect a
 	// remote issuer trying to shadow a locally-registered principal. nil skips
@@ -130,12 +145,13 @@ func (v *IssuerVerifier) Verify(ctx context.Context, cred *Credential, agentID s
 	if err := cred.Validate(); err != nil {
 		return nil, err
 	}
-	iss, ok := v.issuers[cred.Issuer]
+	entry, ok := v.issuers[cred.Issuer]
 	if !ok {
 		// A "local"/empty issuer must never reach here — routing sends those to
 		// LocalVerifier. Reaching here with an untrusted label is fail-closed.
 		return nil, fmt.Errorf("%w: %q", ErrIssuerUnknown, cred.Issuer)
 	}
+	iss := entry.meta
 	if cred.Agent != agentID {
 		return nil, fmt.Errorf("%w: credential authorizes %q, presented by %q",
 			ErrAgentMismatch, cred.Agent, agentID)
@@ -152,11 +168,23 @@ func (v *IssuerVerifier) Verify(ctx context.Context, cred *Credential, agentID s
 			ErrIssuerNamespace, cred.Issuer, cred.Principal)
 	}
 
-	// Signature verifies against the ISSUER's key, over the same canonical bytes
-	// LocalVerifier reconstructs. The issuer label is part of those bytes, so a
-	// credential cannot be relabelled onto a different (more trusted) issuer.
-	if err := auth.Verify(iss.algoOrDefault(), iss.PublicKey, cred.SigningPayload(), cred.Signature); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrVerifyFailed, err)
+	// Resolve the issuer's current signing key(s). For a pinned issuer this is
+	// the one config key and never fails; for a JWKS issuer it is the cached
+	// keyset (fetched over the SSRF-guarded client, fail-closed to ErrKeyLookup).
+	// Key resolution runs only after every cheap in-memory check has passed, so a
+	// malformed or out-of-scope credential can never drive a network fetch.
+	candidates, err := entry.source.keys(ctx)
+	if err != nil {
+		return nil, err // already ErrKeyLookup-wrapped
+	}
+
+	// Signature verifies against the ISSUER's key(s), over the same canonical
+	// bytes LocalVerifier reconstructs. The issuer label is part of those bytes,
+	// so a credential cannot be relabelled onto a different (more trusted) issuer.
+	// Trying every published key is how key rotation is tolerated: during a
+	// rotation the issuer publishes old and new keys together.
+	if !anyKeyVerifies(iss.algoOrDefault(), candidates, cred) {
+		return nil, fmt.Errorf("%w: no trusted key for issuer %q verifies this credential", ErrVerifyFailed, cred.Issuer)
 	}
 
 	// Local-shadow rejection: a principal that holds a local key is
@@ -186,6 +214,64 @@ func (v *IssuerVerifier) Verify(ctx context.Context, cred *Credential, agentID s
 	}, nil
 }
 
+// anyKeyVerifies reports whether cred's signature verifies under any of the
+// candidate keys. It is constant in structure (no early information leak matters
+// here — a failing signature is a failing signature) and short-circuits on the
+// first match.
+func anyKeyVerifies(algo string, candidates [][]byte, cred *Credential) bool {
+	payload := cred.SigningPayload()
+	for _, pk := range candidates {
+		if auth.Verify(algo, pk, payload, cred.Signature) == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteOptions configures the network behavior of JWKS-backed issuers. Defaults
+// are production-safe: private addresses blocked, a 5-minute cache TTL, real
+// clock, and a fresh SSRF-guarded client.
+type remoteOptions struct {
+	httpClient   *http.Client
+	allowPrivate bool
+	cacheTTL     time.Duration
+	now          func() time.Time
+}
+
+// Option customizes NewRoutingVerifier. All options are only meaningful when at
+// least one issuer uses a jwks_url.
+type Option func(*remoteOptions)
+
+// WithJWKSAllowPrivate permits JWKS fetches to non-public (loopback/private/
+// link-local) addresses. Off by default; intended for local testing or an
+// internal issuer on a private network. https is still required regardless.
+func WithJWKSAllowPrivate(allow bool) Option {
+	return func(o *remoteOptions) { o.allowPrivate = allow }
+}
+
+// WithJWKSCacheTTL sets how long fetched issuer keys are cached before a refresh
+// is attempted. Non-positive values are ignored (the default is kept).
+func WithJWKSCacheTTL(ttl time.Duration) Option {
+	return func(o *remoteOptions) {
+		if ttl > 0 {
+			o.cacheTTL = ttl
+		}
+	}
+}
+
+// WithJWKSHTTPClient overrides the HTTP client used for JWKS fetches. Intended
+// for tests (pointing at a TLS test server); production uses the built-in
+// SSRF-guarded client and should not set this.
+func WithJWKSHTTPClient(c *http.Client) Option {
+	return func(o *remoteOptions) { o.httpClient = c }
+}
+
+// WithClock overrides the time source used for credential-expiry checks and JWKS
+// cache staleness. For tests.
+func WithClock(now func() time.Time) Option {
+	return func(o *remoteOptions) { o.now = now }
+}
+
 // RoutingVerifier dispatches on the (signed) issuer label: "" or "local" to the
 // local verifier, a trusted issuer name to the remote verifier, and anything
 // else to a fail-closed rejection. It implements Verifier and is what
@@ -210,9 +296,13 @@ func (r *RoutingVerifier) Verify(ctx context.Context, cred *Credential, agentID 
 // NewRoutingVerifier wraps a local verifier with a set of trusted external
 // issuers. It validates the issuer set and returns an error — intended to abort
 // startup — if the set is unsafe: a duplicate or reserved issuer name, a missing
-// or match-all namespace, namespaces that overlap across different issuers, or
-// an invalid key. An empty issuer set yields a router that behaves exactly like
-// the local verifier alone.
+// or match-all namespace, namespaces that overlap across different issuers, an
+// issuer that sets neither or both of public_key/jwks_url, or an invalid key or
+// JWKS URL. An empty issuer set yields a router that behaves exactly like the
+// local verifier alone.
+//
+// Options tune JWKS behavior (cache TTL, private-address policy, HTTP client,
+// clock); they are only meaningful when some issuer uses a jwks_url.
 //
 // If local is a *LocalVerifier, its key lookup is reused for the local-shadow
 // check so a remote issuer cannot override a locally-registered principal.
@@ -223,7 +313,7 @@ func (r *RoutingVerifier) Verify(ctx context.Context, cred *Credential, agentID 
 // trusting external issuers, that control is silently absent — pass a
 // *LocalVerifier, or extend this to require an explicit KeyLookup, rather than
 // relying on a non-LocalVerifier local backend.
-func NewRoutingVerifier(local Verifier, issuers []RemoteIssuer) (*RoutingVerifier, error) {
+func NewRoutingVerifier(local Verifier, issuers []RemoteIssuer, opts ...Option) (*RoutingVerifier, error) {
 	if local == nil {
 		return nil, errors.New("principal: NewRoutingVerifier requires a local verifier")
 	}
@@ -231,7 +321,19 @@ func NewRoutingVerifier(local Verifier, issuers []RemoteIssuer) (*RoutingVerifie
 		return &RoutingVerifier{local: local}, nil
 	}
 
-	byName := make(map[string]RemoteIssuer, len(issuers))
+	o := remoteOptions{cacheTTL: defaultJWKSCacheTTL, now: time.Now}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.now == nil {
+		o.now = time.Now
+	}
+	httpClient := o.httpClient
+	if httpClient == nil {
+		httpClient = newSSRFGuardedClient(o.allowPrivate)
+	}
+
+	byName := make(map[string]issuerEntry, len(issuers))
 	for _, iss := range issuers {
 		switch {
 		case iss.Name == "":
@@ -253,12 +355,34 @@ func NewRoutingVerifier(local Verifier, issuers []RemoteIssuer) (*RoutingVerifie
 			}
 		}
 		if iss.algoOrDefault() != auth.AlgoEd25519 {
-			return nil, fmt.Errorf("%w: issuer %q uses unsupported algo %q (Phase 1 is ed25519-only)", ErrMalformed, iss.Name, iss.Algo)
+			return nil, fmt.Errorf("%w: issuer %q uses unsupported algo %q (Phase 1/2 is ed25519-only)", ErrMalformed, iss.Name, iss.Algo)
 		}
-		if err := auth.ValidatePublicKey(auth.AlgoEd25519, iss.PublicKey); err != nil {
-			return nil, fmt.Errorf("%w: issuer %q public_key: %v", ErrMalformed, iss.Name, err)
+
+		// Exactly one key source: a pinned key (Phase 1) or a JWKS URL (Phase 2).
+		// Neither is unusable; both is ambiguous — reject both, fail-closed.
+		hasKey := len(iss.PublicKey) > 0
+		hasJWKS := strings.TrimSpace(iss.JWKSURL) != ""
+		switch {
+		case hasKey && hasJWKS:
+			return nil, fmt.Errorf("%w: issuer %q sets both public_key and jwks_url; use exactly one", ErrMalformed, iss.Name)
+		case !hasKey && !hasJWKS:
+			return nil, fmt.Errorf("%w: issuer %q sets neither public_key nor jwks_url", ErrMalformed, iss.Name)
+		case hasKey:
+			if err := auth.ValidatePublicKey(auth.AlgoEd25519, iss.PublicKey); err != nil {
+				return nil, fmt.Errorf("%w: issuer %q public_key: %v", ErrMalformed, iss.Name, err)
+			}
+			byName[iss.Name] = issuerEntry{meta: iss, source: staticKeySource{key: iss.PublicKey}}
+		default: // hasJWKS
+			if err := validateJWKSURL(iss.JWKSURL); err != nil {
+				return nil, fmt.Errorf("%w: issuer %q jwks_url: %v", ErrMalformed, iss.Name, err)
+			}
+			byName[iss.Name] = issuerEntry{meta: iss, source: &jwksKeySource{
+				url:    strings.TrimSpace(iss.JWKSURL),
+				client: httpClient,
+				ttl:    o.cacheTTL,
+				now:    o.now,
+			}}
 		}
-		byName[iss.Name] = iss
 	}
 
 	// Namespaces must be disjoint across different issuers: if one issuer's
@@ -280,9 +404,32 @@ func NewRoutingVerifier(local Verifier, issuers []RemoteIssuer) (*RoutingVerifie
 		}
 	}
 
-	iv := &IssuerVerifier{issuers: byName}
+	iv := &IssuerVerifier{issuers: byName, Now: o.now}
 	if lv, ok := local.(*LocalVerifier); ok {
 		iv.localLookup = lv.Lookup
 	}
 	return &RoutingVerifier{local: local, remote: iv}, nil
+}
+
+// Prewarm fetches every JWKS-backed issuer's keys once, so the first credential
+// on the hot path finds a warm cache instead of paying a synchronous fetch. It
+// returns one error per issuer that could not be pre-warmed; callers should log
+// these but need not abort — a JWKS endpoint that is transiently down at startup
+// will be retried on first use and, until then, its credentials fail closed.
+// Issuers with pinned keys are skipped (nothing to fetch).
+func (r *RoutingVerifier) Prewarm(ctx context.Context) []error {
+	if r.remote == nil {
+		return nil
+	}
+	var errs []error
+	for name, entry := range r.remote.issuers {
+		js, ok := entry.source.(*jwksKeySource)
+		if !ok {
+			continue
+		}
+		if _, err := js.keys(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("issuer %q: %w", name, err))
+		}
+	}
+	return errs
 }

@@ -192,15 +192,29 @@ model and mid-2026 best-practice alignment):
   credential is inert. Federation removes the *principal's* need for a gemot key,
   not the *agent's*.
 
-Config is one JSON array; the issuer key is pinned (no network on the
-verification path in Phase 1):
+Config is one JSON array. Each issuer sets **exactly one** of `public_key` (the
+key pinned directly, no network on the verification path) or `jwks_url` (the key
+resolved from the issuer's JWKS endpoint, so it can rotate without a gemot config
+change):
 
 ```
-GEMOT_TRUSTED_ISSUERS='[{"name":"https://acme.example","namespaces":["acme:"],"public_key":"<base64-ed25519>","algo":"ed25519"}]'
+GEMOT_TRUSTED_ISSUERS='[
+  {"name":"https://acme.example","namespaces":["acme:"],"public_key":"<base64-ed25519>","algo":"ed25519"},
+  {"name":"https://beta.example","namespaces":["beta:"],"jwks_url":"https://beta.example/.well-known/jwks.json","algo":"ed25519"}
+]'
 ```
 
-Still open (Phase 2/3): JWKS key discovery/rotation, and importing an external
-JWT act-claim (below).
+**Phase 2 (JWKS key discovery/rotation) is implemented.** A `jwks_url` issuer's
+keys are fetched over an SSRF-guarded client (TLS required; connections to
+loopback/link-local/private/metadata addresses refused at dial time, so a URL
+that resolves or redirects to an internal address is blocked; response size- and
+count-capped), cached with a rate-limited, fail-closed refresh, and pre-warmed at
+startup. Rotation is picked up automatically (issuers publish the new key
+alongside the old). See `docs/remote-trust-root.md` §4.6. Tuning:
+`GEMOT_JWKS_ALLOW_PRIVATE` (default off) and `GEMOT_JWKS_CACHE_TTL_SECONDS`
+(default 300).
+
+Still open (Phase 3): importing an external JWT act-claim (below).
 
 ---
 
@@ -227,11 +241,6 @@ The delegation primitive is built and enforced; these are the genuinely
 remaining pieces. Deferred on purpose — build them when a concrete integration
 needs them, not speculatively.
 
-- **JWKS key discovery (remote trust root, Phase 2).** Phase 1 pins issuer keys
-  in `GEMOT_TRUSTED_ISSUERS` config (see the federation section above). Resolving
-  issuer keys dynamically via a JWKS endpoint — with rotation, caching, and the
-  attendant SSRF/fetch-DoS hardening — is the next step; the `Verifier` routing
-  already accommodates it.
 - **JWT act-claim import in the bearer slot.** gemot accepts a `Credential` over
   its own surfaces (A2A / `_meta`), but does not parse an external JWT out of the
   `Authorization` header, extract `sub`/`act`/`scope`, and translate it into a

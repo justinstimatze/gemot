@@ -217,7 +217,13 @@ func cmdServe(httpMode bool, addr string) {
 		fmt.Fprintf(os.Stderr, "Error parsing GEMOT_TRUSTED_ISSUERS: %v\n", err)
 		os.Exit(1)
 	} else if len(issuers) > 0 {
-		rv, err := principal.NewRoutingVerifier(svc.PrincipalVerifier(), issuers)
+		opts := []principal.Option{
+			principal.WithJWKSAllowPrivate(cfg.JWKSAllowPrivate),
+		}
+		if cfg.JWKSCacheTTLSeconds > 0 {
+			opts = append(opts, principal.WithJWKSCacheTTL(time.Duration(cfg.JWKSCacheTTLSeconds)*time.Second))
+		}
+		rv, err := principal.NewRoutingVerifier(svc.PrincipalVerifier(), issuers, opts...)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error configuring GEMOT_TRUSTED_ISSUERS: %v\n", err)
 			os.Exit(1)
@@ -229,6 +235,17 @@ func cmdServe(httpMode bool, addr string) {
 		}
 		fmt.Fprintf(os.Stderr, "gemot: remote delegation trust enabled for %d issuer(s): %s\n",
 			len(issuers), strings.Join(names, ", "))
+		if cfg.JWKSAllowPrivate {
+			fmt.Fprintf(os.Stderr, "gemot: WARNING: GEMOT_JWKS_ALLOW_PRIVATE is set — JWKS fetches to private/loopback addresses are permitted (SSRF guard relaxed)\n")
+		}
+		// Pre-warm JWKS-backed issuers so the first credential doesn't pay a
+		// synchronous fetch. A JWKS endpoint that is down at startup is not fatal:
+		// its credentials fail closed until it recovers, and it is retried on use.
+		warmCtx, cancelWarm := context.WithTimeout(context.Background(), 15*time.Second)
+		for _, werr := range rv.Prewarm(warmCtx) {
+			fmt.Fprintf(os.Stderr, "gemot: WARNING: could not pre-warm JWKS keys: %v\n", werr)
+		}
+		cancelWarm()
 	}
 
 	// Signal-aware context for graceful shutdown

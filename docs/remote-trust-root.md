@@ -1,13 +1,14 @@
 # Remote trust root — design & security plan
 
-Status: **Phase 1 implemented** (`internal/principal/remote.go`, wired in `main.go` via
-`GEMOT_TRUSTED_ISSUERS`); Phases 2–3 proposed. This document specs the second
+Status: **Phases 1 & 2 implemented** (`internal/principal/remote.go` + `jwks.go`, wired in
+`main.go` via `GEMOT_TRUSTED_ISSUERS`); Phase 3 proposed. This document specs the second
 `principal.Verifier` backend: verifying delegation credentials minted by an **external
 issuer** whose keys gemot does not hold. It is written security-first because this feature,
 unlike everything else in `internal/principal`, deliberately **transfers trust to a third
 party**.
 
-See also: `internal/principal/remote.go` + `remote_test.go` (Phase 1 implementation),
+See also: `internal/principal/remote.go` + `remote_test.go` (Phase 1),
+`internal/principal/jwks.go` + `jwks_test.go` (Phase 2 JWKS resolution + SSRF guard),
 `internal/principal/credential.go` (the seam), `tests/remote_trust_test.go` (end-to-end),
 `COMPOSING.md` (interop contract), `docs/act-claim.schema.json` (the external act-claim
 vocabulary this ultimately consumes).
@@ -148,15 +149,33 @@ twin of the SSRF rule in §4.6.
   and purges any cached keys. This is the operator's emergency stop.
 - JWKS phase *may* add optional issuer revocation-list / status checks; not required for v1.
 
-### 4.6 Network hygiene (Phase 2+ only)
-- JWKS URLs originate **only** from operator config; never fetched from a URL named in a
-  credential/token.
-- Resolve and refuse link-local (`169.254.0.0/16`, incl. `169.254.169.254`), loopback, and
-  private ranges unless explicitly opted in for local testing.
-- TLS required; cache keyed by `(iss, kid)` with a capped TTL; refresh-on-unknown-kid is
-  rate-limited so a `kid`-flood cannot drive unbounded fetches; fetch has a tight timeout
-  and fails **closed** (`ErrKeyLookup`, reject) rather than hanging the submit path.
-- Pre-warm on startup so the hot path is cache-only in the common case.
+### 4.6 Network hygiene (Phase 2) — *implemented*
+All of this lives in `internal/principal/jwks.go`:
+- JWKS URLs originate **only** from operator config (`GEMOT_TRUSTED_ISSUERS`); never fetched
+  from a URL named in a credential/token.
+- The HTTP client's `net.Dialer.Control` hook refuses to connect to any non-public address —
+  loopback, link-local (`169.254.0.0/16`, incl. the `169.254.169.254` metadata IP), private
+  ranges, CGNAT, and the documentation/benchmarking reservations. Because the check runs on
+  the **resolved connect address**, it defends against DNS rebinding and redirect-to-internal,
+  not just literal private URLs. Redirects are not followed at all. Relaxed only by the
+  explicit `GEMOT_JWKS_ALLOW_PRIVATE` opt-in (internal-issuer / local testing).
+- **TLS required** (config rejects any non-`https` `jwks_url`, and this is *not* relaxed by
+  `GEMOT_JWKS_ALLOW_PRIVATE` — key material always travels over TLS). Response body is
+  size-capped (1 MiB) and the keyset count is capped (32).
+- Cache with a capped TTL (default 5 min, `GEMOT_JWKS_CACHE_TTL_SECONDS`). Fetches are
+  single-flighted (mutex-held) and **rate-limited to at most one attempt per TTL**, so a
+  flood of unverifiable credentials cannot amplify into a flood of outbound fetches. A
+  transient outage serves the last-good keys; a never-reachable endpoint fails **closed**
+  (`ErrKeyLookup`, reject) rather than hanging the submit path.
+- Pre-warmed on startup (`RoutingVerifier.Prewarm`) so the hot path is cache-only in the
+  common case; a startup fetch failure is logged, not fatal.
+
+**Key selection without `kid`.** Native gemot credentials carry no JWT header, so there is no
+`kid` to select on. The verifier tries every currently-published Ed25519 key for the issuer;
+a signature either matches one of the issuer's real keys or it does not. This tolerates
+rotation for free — an issuer publishes the new key alongside the old before cutting over — and
+keeps the wire format unchanged. Per-`kid` cache keying (§4.6 as originally drafted) becomes
+relevant only in the JWT phase (Phase 3), where tokens carry a `kid` header.
 
 ### 4.7 Audience restriction (JWT phase)
 Per RFC 9700 and OWASP, when a credential/token carries `aud`, verify it names *this* gemot
@@ -184,10 +203,19 @@ binding + issuer-signs-not-principal + routing) correct in isolation.
 Reuses `SigningPayload`, `Validate`, `CoversTarget`, `Result` verbatim. The only new logic:
 resolve the signing key from the issuer (not the principal) and enforce namespace binding.
 
-### Phase 2 — JWKS key resolution
-Replace config-pinned issuer keys with a JWKS endpoint per issuer: dynamic key discovery and
-rotation. Adds the network-hygiene controls in §4.6. Everything else from Phase 1 is
-unchanged.
+### Phase 2 — JWKS key resolution ✅ *implemented*
+Shipped in `internal/principal/jwks.go` (`jwksKeySource`, `fetchJWKS`, `parseJWKS`, the
+SSRF-guarded client + `isBlockedIP`/`blockPrivateDial`, `validateJWKSURL`), with the routing
+options (`WithJWKSAllowPrivate`, `WithJWKSCacheTTL`, `WithJWKSHTTPClient`, `WithClock`) and
+`RoutingVerifier.Prewarm` in `remote.go`. Covered by `jwks_test.go` (parse, SSRF table,
+cache, rotation, fail-closed, rate-limit, prewarm) and `tests/remote_trust_test.go`
+(`TestRemoteTrust_JWKSBackedCredentialAccepted`).
+
+Each issuer sets **exactly one** of `public_key` (Phase 1, pinned) or `jwks_url` (Phase 2,
+resolved). A `jwks_url` issuer's keys are fetched over the SSRF-guarded client and cached;
+rotation is picked up on the next post-TTL refresh with no config change. Adds the
+network-hygiene controls in §4.6. Everything else from Phase 1 — namespace binding, routing,
+issuer-signs-not-principal, `provePossession`, the wire format — is unchanged.
 
 ### Phase 3 — External JWT act-claim import
 Accept standard RFC 8693 `act`-claim JWTs (per `docs/act-claim.schema.json`) in the bearer
@@ -233,24 +261,38 @@ Wiring:
 - `internal/mcp/protected_resource.go` / `COMPOSING.md` — document the federation surface
   once shipped (which issuers a deployment trusts is operator-visible metadata).
 
-## 7. Config schema (Phase 1)
+## 7. Config schema
 
-`GEMOT_TRUSTED_ISSUERS` as JSON (mirrors how richer config already travels), e.g.:
+`GEMOT_TRUSTED_ISSUERS` as JSON (mirrors how richer config already travels). Each issuer sets
+**exactly one** of `public_key` (Phase 1, pinned) or `jwks_url` (Phase 2, resolved):
 
 ```json
 [
   {
     "name": "https://acme.example",
     "namespaces": ["acme:", "did:web:acme.example:"],
-    "public_key": "base64-ed25519-spki-or-raw",
+    "public_key": "base64-ed25519-raw",
+    "algo": "ed25519"
+  },
+  {
+    "name": "https://beta.example",
+    "namespaces": ["beta:"],
+    "jwks_url": "https://beta.example/.well-known/jwks.json",
     "algo": "ed25519"
   }
 ]
 ```
 
-Validation at load: non-empty name; ≥1 namespace; namespaces pairwise-disjoint across all
-issuers **and** disjoint from the reserved `local` space; valid key via
-`auth.ValidatePublicKey`. Any failure aborts startup.
+Companion env vars (JWKS only):
+- `GEMOT_JWKS_ALLOW_PRIVATE` (default `false`) — permit fetches to non-public addresses
+  (internal issuer / local testing). `https` is still required regardless.
+- `GEMOT_JWKS_CACHE_TTL_SECONDS` (default `300`) — key cache TTL; also the fetch rate-limit
+  window.
+
+Validation at load (all fail-closed, aborting startup): non-empty name; name not the reserved
+`local`; ≥1 namespace; namespaces pairwise-disjoint across all issuers; exactly one of
+`public_key`/`jwks_url`; pinned keys valid via `auth.ValidatePublicKey`; `jwks_url` a valid
+`https` URL with a host.
 
 ## 8. Test plan (adversarial-heavy — this is the point)
 
@@ -288,7 +330,7 @@ Integration (`tests/`, adversarial suite):
 
 - Phase 1: ~1 day. New types + config parse + wiring + adversarial tests. No hot-path
   network, no schema change, no changes to `provePossession` or the submit path.
-- Phase 2 (JWKS): ~1–2 days, dominated by the network-hygiene controls and their tests.
+- Phase 2 (JWKS): implemented; dominated by the network-hygiene controls and their tests.
 - Phase 3 (JWT import): ~2–3 days; separate design pass on `aud`/alg pinning before starting.
 
 ## 11. Alignment with current best practice (mid-2026)

@@ -80,6 +80,17 @@ type Config struct {
 	// (principal.ParseIssuers + NewRoutingVerifier) so a malformed value aborts
 	// the process rather than silently disabling federation.
 	TrustedIssuers string
+
+	// JWKSAllowPrivate permits JWKS fetches (Phase 2 of the remote trust root)
+	// to reach non-public addresses — loopback, link-local, and private ranges.
+	// Off by default: the SSRF guard blocks them. Enable only for local testing
+	// or an internal issuer on a private network. https is still required.
+	JWKSAllowPrivate bool
+
+	// JWKSCacheTTLSeconds is how long a JWKS-backed issuer's keys are cached
+	// before a refresh is attempted. 0 uses the built-in default (300s). It also
+	// rate-limits fetch attempts, bounding outbound requests under load.
+	JWKSCacheTTLSeconds int
 }
 
 // Load reads configuration from environment variables (and optional .env file).
@@ -111,6 +122,8 @@ func Load() *Config {
 		ConsistencyKey:              envOr("GEMOT_CONSISTENCY_KEY", os.Getenv("GEMINI_API_KEY")),
 		ConsistencySampleK:          envInt("GEMOT_CONSISTENCY_SAMPLE_K", 5),
 		TrustedIssuers:              os.Getenv("GEMOT_TRUSTED_ISSUERS"),
+		JWKSAllowPrivate:            envBool("GEMOT_JWKS_ALLOW_PRIVATE", false),
+		JWKSCacheTTLSeconds:         envInt("GEMOT_JWKS_CACHE_TTL_SECONDS", 0),
 	}
 
 	// Validate model is in known set

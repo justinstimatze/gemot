@@ -3,6 +3,10 @@ package tests
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -86,6 +90,66 @@ func TestRemoteTrust_FederatedCredentialAccepted(t *testing.T) {
 	}
 	if len(positions) != 1 || !positions[0].PrincipalVerified {
 		t.Fatalf("federated verification did not persist: %+v", positions)
+	}
+}
+
+// Phase 2, end-to-end: the issuer's key is resolved from a JWKS endpoint rather
+// than pinned in config, and a credential it signs verifies through the full
+// submit path — proving key rotation via JWKS composes with proof-of-possession.
+func TestRemoteTrust_JWKSBackedCredentialAccepted(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	// A TLS JWKS endpoint publishing the issuer's Ed25519 signing key.
+	issuerPub, issuerPriv := newKeypair(t)
+	jwks := fmt.Sprintf(`{"keys":[{"kty":"OKP","crv":"Ed25519","use":"sig","x":%q}]}`,
+		base64.RawURLEncoding.EncodeToString(issuerPub))
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(jwks))
+	}))
+	defer ts.Close()
+
+	iss := principal.RemoteIssuer{
+		Name:       remoteIssuer,
+		Namespaces: []string{remoteNamespace},
+		JWKSURL:    ts.URL,
+		Algo:       "ed25519",
+	}
+	rv, err := principal.NewRoutingVerifier(svc.PrincipalVerifier(),
+		[]principal.RemoteIssuer{iss}, principal.WithJWKSHTTPClient(ts.Client()))
+	if err != nil {
+		t.Fatalf("NewRoutingVerifier: %v", err)
+	}
+	svc.SetPrincipalVerifier(rv)
+
+	// The agent still proves possession against a locally-registered key.
+	agentPub, agentPriv := newKeypair(t)
+	if err := svc.RegisterAgentKey(ctx, remoteAgent, agentPub, "ed25519"); err != nil {
+		t.Fatalf("register agent key: %v", err)
+	}
+
+	cred := mintCredential(t, issuerPriv, principal.Credential{
+		Principal: remotePrincipal,
+		Agent:     remoteAgent,
+		AgentKey:  agentPub,
+		Issuer:    remoteIssuer,
+	})
+
+	d, err := svc.CreateDeliberation(ctx, "JWKS federated", "", deliberation.WithPrincipalPolicy("required"))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	const content = "delegated via a JWKS-resolved issuer key"
+	p, err := svc.SubmitPosition(ctx, d.ID, remoteAgent, content,
+		deliberation.WithOnBehalfOf(remotePrincipal),
+		deliberation.WithPrincipalCredential(cred),
+		deliberation.WithSignature(signPosition(t, agentPriv, remoteAgent, d.ID, d.Round, content)))
+	if err != nil {
+		t.Fatalf("submit JWKS-backed credential: %v", err)
+	}
+	if !p.PrincipalVerified {
+		t.Error("PrincipalVerified = false for a valid JWKS-backed credential, want true")
 	}
 }
 
