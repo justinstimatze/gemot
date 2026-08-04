@@ -494,9 +494,13 @@ func (s *Service) SetContentClassifier(c sanitize.Classifier) {
 	s.contentClassifier = c
 }
 
-// buildPrincipalRollup maps each agent_id to the delegation principal its
+// PrincipalRollup maps each agent_id to the delegation principal its
 // reputation should accrue to this round (Move 5: reputation follows the
 // human-org principal, not the ephemeral agent that carried the position).
+// Both the reputation write path (UpdateFromRound attribution) and the
+// read path (WeightsFor weighting) build their subject map from this one
+// function, so the security invariant below is enforced identically on
+// both sides and cannot drift.
 //
 // Security invariant: only PrincipalVerified positions contribute. An
 // unverified on_behalf_of claim is an unproven assertion, and honoring it
@@ -510,7 +514,7 @@ func (s *Service) SetContentClassifier(c sanitize.Classifier) {
 // there is no single correct subject, so the agent credits itself. A
 // conflicted agent stays dropped even if a later position would agree —
 // otherwise ordering would decide attribution.
-func buildPrincipalRollup(positions []types.Position) map[string]string {
+func PrincipalRollup(positions []types.Position) map[string]string {
 	principalOf := make(map[string]string)
 	conflicted := make(map[string]struct{})
 	for _, p := range positions {
@@ -1621,7 +1625,7 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 		for _, p := range positions {
 			positionAuthors[p.ID] = p.AgentID
 		}
-		principalOf := buildPrincipalRollup(positions)
+		principalOf := PrincipalRollup(positions)
 		unprocessed, dErr := s.store.GetUnprocessedDisputes(ctx, deliberationID)
 		if dErr != nil {
 			slog.Warn("fetch unprocessed disputes failed", "deliberation", deliberationID, "err", dErr)

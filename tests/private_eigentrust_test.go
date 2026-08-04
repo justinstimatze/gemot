@@ -237,7 +237,7 @@ func TestPrivateDelibInheritsGlobalReputation(t *testing.T) {
 	})
 
 	privCtx := types.WithDelibContext(ctx, "private-ring-delib", true)
-	weights, err := w.WeightsFor(privCtx, []string{"seasoned", "fresh"})
+	weights, err := w.WeightsFor(privCtx, []string{"seasoned", "fresh"}, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor: %v", err)
 	}

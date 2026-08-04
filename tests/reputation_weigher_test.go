@@ -209,7 +209,7 @@ func TestColdStartCapClampsNewAgents(t *testing.T) {
 		ColdThreshold: 5,
 		Iterations:    50,
 	})
-	weights, err := w.WeightsFor(context.Background(), []string{"seasoned", "newcomer"})
+	weights, err := w.WeightsFor(context.Background(), []string{"seasoned", "newcomer"}, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestGraduationIsMonotonicWithinCohort(t *testing.T) {
 		ColdThreshold: 5,
 		Iterations:    50,
 	})
-	weights, err := w.WeightsFor(context.Background(), []string{"pre", "post"})
+	weights, err := w.WeightsFor(context.Background(), []string{"pre", "post"}, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor: %v", err)
 	}
@@ -427,6 +427,73 @@ func TestUpdateFromRoundSamePrincipalCollapses(t *testing.T) {
 	}
 }
 
+// TestWeightsForConservesPrincipalWeight is the read-side control (Move 5):
+// a delegated position is weighted by its verified principal's reputation,
+// but a principal's TOTAL weight is conserved across the agents it fields.
+// Fielding three agents must not multiply a principal's influence — the
+// three weights sum to exactly what one agent for the same principal would
+// receive. This is the Sybil-safety property of the equal-split design.
+func TestWeightsForConservesPrincipalWeight(t *testing.T) {
+	fs := newFakeRepStore()
+	// One seasoned principal; the agents that carry its positions have no
+	// standing of their own (they're ephemeral).
+	fs.reps[idV("acme:alice")] = store.Reputation{AgentID: idV("acme:alice"), Score: 0.5, SurvivedCount: 10}
+	w := reputation.NewWeigher(fs, reputation.Config{
+		Enabled: true, ColdCap: 0.1, ColdThreshold: 5, Iterations: 50,
+	})
+
+	// One agent for the principal: gets the principal's full weight.
+	single, err := w.WeightsFor(context.Background(), []string{"a1"},
+		map[string]string{"a1": "acme:alice"})
+	if err != nil {
+		t.Fatalf("WeightsFor single: %v", err)
+	}
+	solo := single["a1"]
+	if solo <= 0.1 {
+		t.Fatalf("lone agent for seasoned principal should exceed cold cap, got %f", solo)
+	}
+
+	// Three agents for the SAME principal: each gets a third, summing to
+	// the same total — no amplification.
+	trio, err := w.WeightsFor(context.Background(), []string{"a1", "a2", "a3"},
+		map[string]string{"a1": "acme:alice", "a2": "acme:alice", "a3": "acme:alice"})
+	if err != nil {
+		t.Fatalf("WeightsFor trio: %v", err)
+	}
+	sum := trio["a1"] + trio["a2"] + trio["a3"]
+	if diff := sum - solo; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("principal weight not conserved: 3-agent sum=%f, 1-agent=%f", sum, solo)
+	}
+	for _, a := range []string{"a1", "a2", "a3"} {
+		if diff := trio[a] - solo/3.0; diff > 1e-9 || diff < -1e-9 {
+			t.Fatalf("agent %s weight=%f, want equal split %f", a, trio[a], solo/3.0)
+		}
+	}
+}
+
+// TestWeightsForFreshPrincipalStillCapped: rollup does not let a fresh
+// principal (no survived history) escape the cold-start cap by fielding
+// agents — each agent is cold-capped and then split, so a brand-new
+// principal cannot manufacture influence through multiplicity either.
+func TestWeightsForFreshPrincipalStillCapped(t *testing.T) {
+	fs := newFakeRepStore()
+	fs.reps[idV("fresh:org")] = store.Reputation{AgentID: idV("fresh:org"), Score: 0.9, SurvivedCount: 0}
+	w := reputation.NewWeigher(fs, reputation.Config{
+		Enabled: true, ColdCap: 0.1, ColdThreshold: 5, Iterations: 50,
+	})
+	weights, err := w.WeightsFor(context.Background(), []string{"a1", "a2"},
+		map[string]string{"a1": "fresh:org", "a2": "fresh:org"})
+	if err != nil {
+		t.Fatalf("WeightsFor: %v", err)
+	}
+	// cold cap (0.1) split across two agents = 0.05 each; total 0.1.
+	for _, a := range []string{"a1", "a2"} {
+		if diff := weights[a] - 0.05; diff > 1e-9 || diff < -1e-9 {
+			t.Fatalf("fresh-principal agent %s weight=%f, want 0.05 (capped then split)", a, weights[a])
+		}
+	}
+}
+
 // TestSybilRingStarvedByColdCap: the cold-start cap is the primary
 // defense against Sybils. A fresh 3-agent Sybil ring (zero survived
 // validations) all clamps to ColdCap regardless of whatever score
@@ -450,7 +517,7 @@ func TestSybilRingStarvedByColdCap(t *testing.T) {
 		ColdThreshold: 5,
 		Iterations:    50,
 	})
-	weights, err := w.WeightsFor(context.Background(), []string{"S1", "S2", "S3", "legit"})
+	weights, err := w.WeightsFor(context.Background(), []string{"S1", "S2", "S3", "legit"}, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor: %v", err)
 	}
@@ -510,7 +577,7 @@ func TestWeightsForFailsClosedOnDBError(t *testing.T) {
 		DBFail:        reputation.DBFailClosed,
 	})
 
-	weights, err := w.WeightsFor(context.Background(), []string{"alice", "bob"})
+	weights, err := w.WeightsFor(context.Background(), []string{"alice", "bob"}, nil)
 	if err == nil {
 		t.Fatalf("DBFail=closed must propagate store error, got weights=%v err=nil", weights)
 	}
@@ -541,7 +608,7 @@ func TestWeightsForFailsOpenOnDBError(t *testing.T) {
 	})
 
 	agents := []string{"alice", "bob"}
-	weights, err := w.WeightsFor(context.Background(), agents)
+	weights, err := w.WeightsFor(context.Background(), agents, nil)
 	if err != nil {
 		t.Fatalf("DBFail=open must swallow store error, got %v", err)
 	}

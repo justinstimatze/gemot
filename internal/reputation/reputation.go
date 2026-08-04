@@ -136,12 +136,37 @@ func NewWeigher(s Store, cfg Config) *Weigher {
 // read fails. Under the default fail-open mode, a store error is
 // logged and the result is unit weights — preserves availability at
 // the cost of stripping the cold-start cap during DB outages.
-func (r *Weigher) WeightsFor(ctx context.Context, agents []string) (map[string]float64, error) {
+func (r *Weigher) WeightsFor(ctx context.Context, agents []string, principalOf map[string]string) (map[string]float64, error) {
 	out := make(map[string]float64, len(agents))
 	if len(agents) == 0 {
 		return out, nil
 	}
-	reps, err := r.store.LoadReputation(ctx, agents)
+
+	// Resolve each agent to the *subject* whose reputation it is weighted
+	// by (Move 5 read side): its verified delegation principal, or itself.
+	// cohortSize counts how many of this cohort's agents share a subject
+	// so the subject's weight can be conserved (equal split) rather than
+	// replicated — a principal fielding N agents must not get N× its
+	// influence. subjectList is the deduped set actually loaded from the
+	// store.
+	subjectOf := make(map[string]string, len(agents))
+	cohortSize := make(map[string]int, len(agents))
+	subjectSet := make(map[string]struct{}, len(agents))
+	for _, a := range agents {
+		s := a
+		if p, ok := principalOf[a]; ok && p != "" {
+			s = p
+		}
+		subjectOf[a] = s
+		cohortSize[s]++
+		subjectSet[s] = struct{}{}
+	}
+	subjectList := make([]string, 0, len(subjectSet))
+	for s := range subjectSet {
+		subjectList = append(subjectList, s)
+	}
+
+	reps, err := r.store.LoadReputation(ctx, subjectList)
 	if err != nil {
 		if r.cfg.DBFail == DBFailClosed {
 			// Fail closed: abort the round rather than silently strip
@@ -152,10 +177,11 @@ func (r *Weigher) WeightsFor(ctx context.Context, agents []string) (map[string]f
 		// Fail open: unit weights keep the deliberation running. This
 		// is the wrong default for a Byzantine-context attacker who can
 		// DoS the DB to strip cold-start — hence the DBFail="closed"
-		// toggle above.
+		// toggle above. The per-subject split still applies so an outage
+		// can't be used to amplify a many-agent principal past unit total.
 		slog.Warn("reputation load failed — falling back to unit weights", "err", err)
 		for _, a := range agents {
-			out[a] = 1.0
+			out[a] = 1.0 / float64(cohortSize[subjectOf[a]])
 		}
 		return out, nil
 	}
@@ -172,28 +198,29 @@ func (r *Weigher) WeightsFor(ctx context.Context, agents []string) (map[string]f
 	// cap is designed to defeat.
 	dc := types.DelibFromContext(ctx)
 	if dc.IsPrivate && dc.ID != "" {
-		return r.weightsForPrivateDelib(ctx, agents, reps, dc.ID)
+		return r.weightsForPrivateDelib(ctx, agents, subjectOf, cohortSize, subjectList, reps, dc.ID)
 	}
 
 	var maxScore float64
-	for _, a := range agents {
-		if reps[a].Score > maxScore {
-			maxScore = reps[a].Score
+	for _, s := range subjectList {
+		if reps[s].Score > maxScore {
+			maxScore = reps[s].Score
 		}
 	}
 
 	for _, a := range agents {
-		rep := reps[a]
-		if rep.SurvivedCount < r.cfg.ColdThreshold {
-			out[a] = r.cfg.ColdCap
-			continue
+		s := subjectOf[a]
+		rep := reps[s]
+		var w float64
+		switch {
+		case rep.SurvivedCount < r.cfg.ColdThreshold:
+			w = r.cfg.ColdCap
+		case maxScore <= 0:
+			w = 1.0
+		default:
+			w = r.cfg.ColdCap + (rep.Score/maxScore)*(1.0-r.cfg.ColdCap)
 		}
-		if maxScore <= 0 {
-			out[a] = 1.0
-			continue
-		}
-		normalized := rep.Score / maxScore
-		out[a] = r.cfg.ColdCap + normalized*(1.0-r.cfg.ColdCap)
+		out[a] = w / float64(cohortSize[s])
 	}
 	return out, nil
 }
@@ -214,27 +241,32 @@ func (r *Weigher) WeightsFor(ctx context.Context, agents []string) (map[string]f
 func (r *Weigher) weightsForPrivateDelib(
 	ctx context.Context,
 	agents []string,
+	subjectOf map[string]string,
+	cohortSize map[string]int,
+	subjectList []string,
 	reps map[string]store.Reputation,
 	delibID string,
 ) (map[string]float64, error) {
 	out := make(map[string]float64, len(agents))
-	// Resolve symbolic agents to their current vertex form so the
-	// EigenTrust score lookup matches the key-bound identity used in
-	// edge storage. Resolve BEFORE loading edges so we can scope the
-	// edge load to the cohort's vertices.
-	vertices, err := r.store.ResolveVertices(ctx, agents)
+	// Resolve the *subjects* (verified principals or self) to their
+	// current vertex form so the EigenTrust score lookup matches the
+	// key-bound identity that edges were written under — the write path
+	// emits edges on the subject vertex, so the read path must score the
+	// subject vertex too. Resolve BEFORE loading edges so we can scope
+	// the edge load to the cohort's vertices.
+	subjectVertex, err := r.store.ResolveVertices(ctx, subjectList)
 	if err != nil {
 		if r.cfg.DBFail == DBFailClosed {
 			return nil, fmt.Errorf("resolve vertices (fail-closed): %w", err)
 		}
 		slog.Warn("resolve vertices failed — falling back to unit weights", "err", err)
 		for _, a := range agents {
-			out[a] = 1.0
+			out[a] = 1.0 / float64(cohortSize[subjectOf[a]])
 		}
 		return out, nil
 	}
-	cohortVertices := make([]string, 0, len(vertices))
-	for _, v := range vertices {
+	cohortVertices := make([]string, 0, len(subjectVertex))
+	for _, v := range subjectVertex {
 		if v != "" {
 			cohortVertices = append(cohortVertices, v)
 		}
@@ -250,7 +282,7 @@ func (r *Weigher) weightsForPrivateDelib(
 		}
 		slog.Warn("private delib edges load failed — falling back to unit weights", "err", err)
 		for _, a := range agents {
-			out[a] = 1.0
+			out[a] = 1.0 / float64(cohortSize[subjectOf[a]])
 		}
 		return out, nil
 	}
@@ -258,23 +290,24 @@ func (r *Weigher) weightsForPrivateDelib(
 	scores := analysis.EigenTrust(edges, nil, cfg)
 
 	var maxScore float64
-	for _, a := range agents {
-		if s := scores[vertices[a]]; s > maxScore {
-			maxScore = s
+	for _, s := range subjectList {
+		if sc := scores[subjectVertex[s]]; sc > maxScore {
+			maxScore = sc
 		}
 	}
 	for _, a := range agents {
-		rep := reps[a]
-		if rep.SurvivedCount < r.cfg.ColdThreshold {
-			out[a] = r.cfg.ColdCap
-			continue
+		s := subjectOf[a]
+		rep := reps[s]
+		var w float64
+		switch {
+		case rep.SurvivedCount < r.cfg.ColdThreshold:
+			w = r.cfg.ColdCap
+		case maxScore <= 0:
+			w = 1.0
+		default:
+			w = r.cfg.ColdCap + (scores[subjectVertex[s]]/maxScore)*(1.0-r.cfg.ColdCap)
 		}
-		if maxScore <= 0 {
-			out[a] = 1.0
-			continue
-		}
-		normalized := scores[vertices[a]] / maxScore
-		out[a] = r.cfg.ColdCap + normalized*(1.0-r.cfg.ColdCap)
+		out[a] = w / float64(cohortSize[s])
 	}
 	return out, nil
 }

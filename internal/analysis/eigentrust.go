@@ -20,7 +20,14 @@ type ReputationWeigher interface {
 	// signals the implementation is in fail-closed mode and the
 	// backing store was unreachable — callers must abort the analysis
 	// rather than proceed with neutralized reputation.
-	WeightsFor(ctx context.Context, agents []string) (map[string]float64, error)
+	//
+	// principalOf maps an agent_id to the verified delegation principal
+	// whose reputation it should be weighted by this round (Move 5).
+	// Reputation is looked up by that principal, and a principal's total
+	// weight is conserved across the agents it fields in the cohort
+	// (equal split), so fielding N agents does not multiply its influence.
+	// A nil/empty map weights every agent by its own standing.
+	WeightsFor(ctx context.Context, agents []string, principalOf map[string]string) (map[string]float64, error)
 }
 
 // EigenTrust implements the global trust-eigenvector computation of

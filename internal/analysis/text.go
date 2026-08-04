@@ -882,7 +882,13 @@ func (a *TextAnalyzer) Analyze(ctx context.Context, positions []deliberation.Pos
 	correlationWeightsEarly := CorrelationDiscountedWeights(votes, agents)
 	var reputationWeights map[string]float64
 	if a.Reputation != nil {
-		rw, err := a.Reputation.WeightsFor(ctx, agents)
+		// Weight delegated positions by their verified principal's
+		// reputation, conserving each principal's total weight across the
+		// agents it fields (Move 5 read side). Same verified-only rollup
+		// the write path uses, so attribution and weighting agree on who
+		// a position's subject is.
+		principalOf := deliberation.PrincipalRollup(positions)
+		rw, err := a.Reputation.WeightsFor(ctx, agents, principalOf)
 		if err != nil {
 			return nil, fmt.Errorf("reputation weights: %w", err)
 		}

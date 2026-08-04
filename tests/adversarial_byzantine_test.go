@@ -487,7 +487,7 @@ func TestByzantineColdStartFlooding(t *testing.T) {
 	// 1.0. Other factors (trust, correlation, conviction, time) in the
 	// effective-weight chain can scale this up or down, but the
 	// reputation lever is the one we're measuring.
-	reps, err := h.weigher.WeightsFor(ctx, agents)
+	reps, err := h.weigher.WeightsFor(ctx, agents, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor: %v", err)
 	}
@@ -600,7 +600,7 @@ func TestByzantineCruxPoisoning(t *testing.T) {
 	// this does NOT retroactively sanitize the already-warned cruxes.
 	// The cap only multiplies into the effective-weight chain at the
 	// consensus/bridging stage.
-	weights, err := h.weigher.WeightsFor(context.Background(), agents)
+	weights, err := h.weigher.WeightsFor(context.Background(), agents, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor: %v", err)
 	}
@@ -661,7 +661,7 @@ func TestByzantineGraduationCliff(t *testing.T) {
 		}
 	}
 
-	weights, err := h.weigher.WeightsFor(ctx, sybils)
+	weights, err := h.weigher.WeightsFor(ctx, sybils, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor: %v", err)
 	}
@@ -720,7 +720,7 @@ func TestByzantineReframingAttack(t *testing.T) {
 			}
 		}
 	}
-	weights, err := h.weigher.WeightsFor(context.Background(), agents)
+	weights, err := h.weigher.WeightsFor(context.Background(), agents, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor: %v", err)
 	}

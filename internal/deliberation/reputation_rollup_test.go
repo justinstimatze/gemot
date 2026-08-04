@@ -6,12 +6,12 @@ import (
 	"github.com/justinstimatze/gemot/types"
 )
 
-// buildPrincipalRollup is the consumer of Position.PrincipalVerified that
+// PrincipalRollup is the consumer of Position.PrincipalVerified that
 // decides whose reputation a round credits (Move 5). Its security invariant
 // — only verified delegations roll up — is what stops an agent from
 // redirecting standing onto a principal it doesn't speak for, so it's worth
 // pinning directly rather than only through the LLM-gated analysis path.
-func TestBuildPrincipalRollup(t *testing.T) {
+func TestPrincipalRollup(t *testing.T) {
 	cases := []struct {
 		name      string
 		positions []types.Position
@@ -83,7 +83,7 @@ func TestBuildPrincipalRollup(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildPrincipalRollup(tc.positions)
+			got := PrincipalRollup(tc.positions)
 			if len(got) != len(tc.want) {
 				t.Fatalf("rollup = %v, want %v", got, tc.want)
 			}

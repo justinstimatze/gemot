@@ -101,7 +101,7 @@ func TestRenameAttackFailsToTransferReputation(t *testing.T) {
 		ColdThreshold: 5,
 		Iterations:    50,
 	})
-	weights, err := w.WeightsFor(ctx, []string{"alice"})
+	weights, err := w.WeightsFor(ctx, []string{"alice"}, nil)
 	if err != nil {
 		t.Fatalf("WeightsFor after rotation: %v", err)
 	}
