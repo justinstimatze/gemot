@@ -151,17 +151,7 @@ func (s *DB) AccumulateTrustEdges(ctx context.Context, edges []analysis.Edge, ca
 	if len(edges) == 0 {
 		return nil
 	}
-	froms := make([]string, 0, len(edges))
-	tos := make([]string, 0, len(edges))
-	weights := make([]float64, 0, len(edges))
-	for _, e := range edges {
-		if e.Weight <= 0 {
-			continue
-		}
-		froms = append(froms, e.From)
-		tos = append(tos, e.To)
-		weights = append(weights, e.Weight)
-	}
+	froms, tos, weights := aggregateEdges(edges)
 	if len(froms) == 0 {
 		return nil
 	}
@@ -293,17 +283,7 @@ func (s *DB) ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge, delib
 	if len(edges) == 0 {
 		return nil
 	}
-	froms := make([]string, 0, len(edges))
-	tos := make([]string, 0, len(edges))
-	weights := make([]float64, 0, len(edges))
-	for _, e := range edges {
-		if e.Weight <= 0 {
-			continue
-		}
-		froms = append(froms, e.From)
-		tos = append(tos, e.To)
-		weights = append(weights, e.Weight)
-	}
+	froms, tos, weights := aggregateEdges(edges)
 	if len(froms) == 0 {
 		return nil
 	}
@@ -323,6 +303,35 @@ func (s *DB) ApplyDisputeEdges(ctx context.Context, edges []analysis.Edge, delib
 		return fmt.Errorf("apply dispute edges: %w", err)
 	}
 	return nil
+}
+
+// aggregateEdges sums duplicate (from, to) pairs and drops non-positive weights,
+// returning parallel arrays for unnest. Deduping is required: unnest expands
+// these into individual rows in a single INSERT, and Postgres rejects an
+// ON CONFLICT that would affect the same row twice (SQLSTATE 21000). Summing
+// here matches the DO UPDATE's weight += EXCLUDED.weight accumulation, so a
+// batch with repeated pairs lands the same total as separate calls would.
+func aggregateEdges(edges []analysis.Edge) (froms, tos []string, weights []float64) {
+	type edgeKey struct{ from, to string }
+	agg := make(map[edgeKey]float64, len(edges))
+	order := make([]edgeKey, 0, len(edges))
+	for _, e := range edges {
+		if e.Weight <= 0 {
+			continue
+		}
+		k := edgeKey{e.From, e.To}
+		if _, seen := agg[k]; !seen {
+			order = append(order, k)
+		}
+		agg[k] += e.Weight
+	}
+	froms = make([]string, len(order))
+	tos = make([]string, len(order))
+	weights = make([]float64, len(order))
+	for i, k := range order {
+		froms[i], tos[i], weights[i] = k.from, k.to, agg[k]
+	}
+	return froms, tos, weights
 }
 
 // DecayTrustEdges applies exponential weight decay to edges older than

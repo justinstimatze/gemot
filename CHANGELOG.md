@@ -2,6 +2,40 @@
 
 All notable changes to gemot are documented here.
 
+## Unreleased
+
+### Composability interop contract
+
+New `COMPOSING.md` documents how to layer an external identity or delegation issuer on top of gemot without gemot becoming an IdP: the attribution/signing split (`sub`/`act`, already present via `SubmitPositionWithSigningID`), per-agent ed25519 keys + envelope proof-of-possession, and bearer + MPP scope. `docs/act-claim.schema.json` publishes an RFC 8693/9068-subset act-claim (recursive nested-actor chain, attenuating scope). A new `/.well-known/oauth-protected-resource` endpoint serves RFC 9728 metadata that **deliberately omits `authorization_servers`** — gemot authenticates with bearer API keys + MPP, not OAuth, so advertising an authorization server would push spec-compliant MCP clients into a DCR flow gemot can't service. The doc separates what exists today from three unwired extension points (external trust root, JWT-in-bearer, end-to-end act-claim enforcement).
+
+### Security: bump golang.org/x/net to 0.55.0
+
+Resolves a moderate-severity DoS in the `x/net` HTML parser (Dependabot #4); pulled `x/sync`, `x/sys`, and `x/text` forward as a side effect. Indirect dependency.
+
+### Analysis LLM telemetry + cache-readiness
+
+Added per-call `llm_usage` telemetry (input/output/cache tokens) behind a new `LOG_LEVEL` env (`debug|info|warn|error`, default `info`), and marked the analysis pipeline's tools+system prefix with `cache_control` ephemeral. Note: a calibration run showed the cache breakpoint is currently **inert** — the analyze prompts' stable prefix (~93-token system + ~433-token instruction template, the latter presently in the user message) falls under Anthropic's 1024-token cache minimum, so `cache_control` is silently ignored (`cache_write=0` across 396 measured calls). The marking is harmless and will engage automatically if prompts grow past the floor or are restructured to move the stable instruction block into the cacheable prefix; the telemetry is the immediate value, and it's what surfaced the true cost driver (call volume, ~44 LLM calls/deliberation, not per-call inefficiency).
+
+### Fix: trust-edge upsert double-row conflict (SQLSTATE 21000)
+
+`AccumulateTrustEdges` and `ApplyDisputeEdges` expanded parallel arrays into a single `INSERT ... ON CONFLICT` via `unnest`. A batch containing duplicate `(from_agent, to_agent)` pairs — which any 3+ agent deliberation produces — made Postgres reject the statement ("ON CONFLICT DO UPDATE command cannot affect row a second time"), silently failing the reputation update on every such deliberation. Edges are now deduped and their weights summed before the upsert (matching the `DO UPDATE` accumulation). Surfaced during a multi-agent keyed run where 6/6 deliberations warned.
+
+### Fix: single-node BFT view wedge on post-propose error
+
+`bft.Engine.Submit` marked a view proposed via `replica.Propose` but only advanced the view on the success path. Any failure after `Propose` (self-vote drain, QC check, context cancellation) returned without advancing, leaving the replica "already proposed in this view" — so every subsequent `Submit` failed with `ErrDoublePropose` in perpetuity, a permanent wedge cleared only by restart. Under batch submission one transient error bricks all later writes. `Submit` now advances the view on every exit after a successful `Propose`, so a failed round is abandoned rather than wedging the engine.
+
+### Fix: compromise generation for non-Synthesizer analyzers
+
+`ProposeCompromise` refused when the analysis had zero cruxes, and `main` wired the compromise/reframe generators only via a concrete `*analysis.Synthesizer` type assertion. Together these made any alternative analyzer unable to produce a compromise. Wiring is now by the `CompromiseGenerator`/`Reframer` interfaces, and `ProposeCompromise` refuses only when there are neither cruxes nor positions to work from.
+
+### compromise synthesis commits to a concrete decision
+
+The options-empty compromise prompt asked for a "statement agents could vote on", which on decision-type deliberations produced procedural language rather than a concrete choice. It now commits to a specific option/action when the deliberation calls for one — conditional, so consultation-style deliberations that legitimately produce statements are unaffected.
+
+### freeform template + chat analyzer
+
+New `freeform` governance template (neutral analysis hint, no procedural rules) and a `ChatAnalyzer` (selected with `GEMOT_ANALYZER=chat`) that bypasses claim extraction, clustering, crux detection, and synthesis in favor of a single unstructured pass over the raw positions. Together they provide an unstructured baseline for measuring what the structured pipeline adds.
+
 ## 0.13.1 — 2026-06-17
 
 Close the loop on 0.13.0's private-deployment story: ship the `gemot admin create-api-key` CLI the deployment doc promised.

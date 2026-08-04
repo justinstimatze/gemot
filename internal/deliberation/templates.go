@@ -94,6 +94,15 @@ var templates = map[string]Template{
 			"speaking_time_limit":    500,
 		},
 	},
+	"freeform": {
+		Name:               "freeform",
+		Description:        "Unstructured discussion. No procedure, coalitions, or ZOPA — agents just talk and converge. The control for measuring what gemot's structure adds.",
+		DefaultType:        "",
+		DefaultMaxPart:     20,
+		SuggestedThreshold: 0.5,
+		AnalysisHint:       "Plain discussion. Summarize what was said and what the group converged on; report unresolved disagreement. Impose no procedural structure.",
+		DefaultRules:       map[string]any{"min_participants": 2},
+	},
 }
 
 // GetTemplate returns a template by name.

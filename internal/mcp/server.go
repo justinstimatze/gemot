@@ -294,6 +294,10 @@ type analyzeToolParams struct {
 	GroupID    string `json:"group_id,omitempty"`
 	SourceType string `json:"source_type,omitempty"`
 	Depth      string `json:"depth,omitempty"` // "quick" or "thorough" (default: thorough)
+	// forced-choice compromise: when Options is non-empty, propose_compromise
+	// selects exactly one of them instead of synthesizing free text.
+	Options     []string       `json:"options,omitempty"`
+	OptionVotes map[string]int `json:"option_votes,omitempty"`
 }
 
 type decideParams struct {
@@ -857,7 +861,12 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 				return errResult(fmt.Errorf("insufficient credits: have %d, need %d", balance, creditCost))
 			}
 		}
-		proposal, err := s.svc.ProposeCompromise(ctx, args.DeliberationID)
+		var proposal, selected string
+		if len(args.Options) > 0 {
+			proposal, selected, err = s.svc.ProposeCompromiseWithChoiceAndVotes(ctx, args.DeliberationID, args.Options, args.OptionVotes)
+		} else {
+			proposal, err = s.svc.ProposeCompromise(ctx, args.DeliberationID)
+		}
 		if err != nil {
 			if apiKey != "" && creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
@@ -871,6 +880,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		result, _, _ := jsonResult(map[string]string{
 			"deliberation_id":     args.DeliberationID,
 			"compromise_proposal": proposal,
+			"selected_option":     selected,
 		})
 		if mppReceipt != nil {
 			result.Meta = payments.ReceiptMeta(mppReceipt)

@@ -429,6 +429,12 @@ No API key needed — the join code is your credential.
 	// can never drift from the released binary. See agent_card.go.
 	mux.HandleFunc("/.well-known/agent-card.json", AgentCardHandler)
 
+	// Protected-resource metadata (RFC 9728). Deliberately omits
+	// authorization_servers: gemot uses bearer API keys + MPP, not OAuth, and
+	// won't advertise a handshake it doesn't implement. See protected_resource.go
+	// and COMPOSING.md.
+	mux.HandleFunc("/.well-known/oauth-protected-resource", ProtectedResourceHandler(baseURL))
+
 	// Health check (public) — verifies DB connectivity in production,
 	// always reports ok in demo mode (the in-memory backend is part of
 	// the process, so liveness == health).
