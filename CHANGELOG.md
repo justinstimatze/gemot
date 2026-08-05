@@ -4,6 +4,12 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Paid actions no longer panic on bare instances; ATXP buy_credits groundwork — 2026-08-05
+
+`gateSandbox` — the daily-quota gate for paid actions (`analyze:run`, `propose_compromise`, `expert_panel`, `follow_up`) — dereferenced `sandboxQuota` without a nil check. On a bare or local instance with no MPP/payments subsystem configured, `sandboxQuota` is nil, so every paid action nil-panicked and took the server down. It now proceeds free when no quota is configured (there is nothing to meter); production, where the quota is always initialized, is unaffected.
+
+Groundwork (inert until wired): a churn-isolated core for funding credits over an external payment rail (ATXP). A narrow `CreditGate` seam mirrors a fail-closed `RequirePayment` tri-state, and a `BuyCredits` handler credits the existing ledger only on a settled charge, emits a payment challenge otherwise, and fails closed on any error — fully unit-tested without importing the external SDK, so gemot's build stays decoupled from it.
+
 ### Reputation follows the principal, not the agent — 2026-08-04
 
 Reputation used to accrue to whichever `agent_id` carried a position. Under the delegation model that agent is often ephemeral — a throwaway fielded by a human-org principal — so standing earned on behalf of that principal evaporated when the agent rotated. A round now credits the **verified delegation principal** (`on_behalf_of`) instead of the agent: trust edges, `survived_count`, and the EigenTrust eigenvector all attribute to the principal vertex, so a principal's reputation persists across the agents it fields and consolidates the work of several agents acting for it.
