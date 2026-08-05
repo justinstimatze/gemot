@@ -1295,6 +1295,13 @@ func (s *server) checkMPPCredential(ctx context.Context, req *sdkmcp.CallToolReq
 // -32042 + scope-bound challenges when MPP is enabled and quota is
 // exhausted; returns a plain error otherwise.
 func (s *server) gateSandbox(ctx context.Context, scope payments.ChallengeScope, description string) error {
+	// No quota configured (a bare/local instance with no MPP/payments
+	// subsystem): there is nothing to meter, so the call proceeds free. This
+	// guards a nil-pointer panic that otherwise crashes the server on every
+	// paid action when running locally without payments wired.
+	if s.sandboxQuota == nil {
+		return nil
+	}
 	ip, _ := ctx.Value(payments.ContextKeyClientIP{}).(string)
 	if allowed, _ := s.sandboxQuota.Allow(ip); allowed {
 		return nil
