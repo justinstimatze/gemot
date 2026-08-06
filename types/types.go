@@ -179,25 +179,39 @@ type CommitmentAccess struct {
 // CommitmentSignals is the externally-visible clock + stakes marker derived
 // from a commitment's access ledger. Every field is computed from
 // server-stamped facts, so a third party can read them and neither the buyer
-// nor the seller can rewrite them — the property the payment-mesh scheme
-// needs so its disclosure window and stakes gate are not self-attested.
+// nor the seller can rewrite them.
+//
+// Design note (from design review): the clock supplies IMMUNITY and EVIDENCE, not an
+// automatic verdict. The real trigger for a late disclosure is seller
+// knowledge, which gemot cannot observe — so gemot deliberately does NOT emit
+// a "seller is late" deadline (that would be a cliff: the moment consequence
+// becomes real is the same moment protection would start). Adjudication weighs
+// seller knowledge against the evidence here. Stakes key to DEPENDENTS ONLY: a
+// raw reader count is gameable upward (N sock-puppet readers must not force a
+// seller into a costly mandatory tier) and reading is not relying.
 type CommitmentSignals struct {
 	CommitmentID string `json:"commitment_id"`
 
-	// Clock: anchors a third party can read. The disclosure window keys to
-	// FirstDownstreamAccessAt (the earliest moment consequence became real),
-	// not to a seller-asserted "when I discovered it".
+	// FirstDownstreamAccessAt is the IMMUNITY CUTOFF: a correction the seller
+	// self-reports (timestamped) strictly before this — i.e. before anyone was
+	// exposed — earns immunity. nil = nobody downstream has accessed yet, so a
+	// self-report now is fully immune. It is NOT a deadline.
 	FirstDownstreamAccessAt *time.Time `json:"first_downstream_access_at,omitempty"`
-	LastDownstreamAccessAt  *time.Time `json:"last_downstream_access_at,omitempty"`
-	FirstQuestionAt         *time.Time `json:"first_question_at,omitempty"`
-	DisclosureDeadline      *time.Time `json:"disclosure_deadline,omitempty"`
-	DisclosureWindowOpen    bool       `json:"disclosure_window_open"`
+	// FirstQuestionAt is the on-notice evidentiary floor: the earliest external
+	// question put to the artifact, the latest point at which a seller can be
+	// argued to have been on notice. Evidence for adjudication, not a verdict.
+	FirstQuestionAt *time.Time `json:"first_question_at,omitempty"`
+	// LastDownstreamAccessAt is informational only — deliberately NOT a
+	// deadline: any accessor would reset it, so a popular artifact's window
+	// would never close (unbounded, buyer-gameable seller liability).
+	LastDownstreamAccessAt *time.Time `json:"last_downstream_access_at,omitempty"`
 
-	// Stakes marker: consequence derived from mesh activity, independent of
-	// both parties. A seller declining Tier-3 on a HighStakes artifact is a
-	// visible logged act — "the refusal is the data".
-	DistinctAccessors int    `json:"distinct_accessors"`
-	AccessCount       int    `json:"access_count"`
-	DependentCount    int    `json:"dependent_count"` // accesses of kind "dependency"
-	StakesLevel       string `json:"stakes_level"`    // normal | high
+	// DistinctAccessors and AccessCount are reported but do NOT set stakes.
+	DistinctAccessors int `json:"distinct_accessors"`
+	AccessCount       int `json:"access_count"`
+	// DependentCount is the stakes signal: a dependent commitment is a costly,
+	// logged act by someone other than the seller — expensive to fake and hard
+	// to suppress.
+	DependentCount int    `json:"dependent_count"`
+	StakesLevel    string `json:"stakes_level"` // normal | high (high iff DependentCount >= 1)
 }

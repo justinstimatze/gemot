@@ -7,7 +7,6 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/mcp"
 )
 
@@ -53,7 +52,8 @@ func TestRecordAccessRejectsNonParticipant(t *testing.T) {
 }
 
 // A downstream participant may record access, and gemot stamps the id and
-// time server-side — the clock is the store's, never the caller's.
+// time server-side — the clock is the store's, never the caller's. That first
+// access is the immunity cutoff, not a deadline.
 func TestRecordAccessAllowsDownstreamAndStampsServerClock(t *testing.T) {
 	ctx := context.Background()
 	svc, c, _ := commitFixture(t)
@@ -80,15 +80,15 @@ func TestRecordAccessAllowsDownstreamAndStampsServerClock(t *testing.T) {
 	if sig.AccessCount != 1 || sig.DistinctAccessors != 1 {
 		t.Fatalf("expected 1 access by 1 accessor, got count=%d distinct=%d", sig.AccessCount, sig.DistinctAccessors)
 	}
-	if sig.FirstDownstreamAccessAt == nil || sig.DisclosureDeadline == nil {
-		t.Fatal("clock not populated after a downstream access")
+	// First downstream access is the immunity cutoff, and it is the server's
+	// stamp on the access we just recorded.
+	if sig.FirstDownstreamAccessAt == nil {
+		t.Fatal("immunity cutoff (first downstream access) not populated")
 	}
-	if want := sig.FirstDownstreamAccessAt.Add(deliberation.DisclosureWindow); !sig.DisclosureDeadline.Equal(want) {
-		t.Fatalf("disclosure deadline %v != first access + window %v", *sig.DisclosureDeadline, want)
+	if !sig.FirstDownstreamAccessAt.Equal(a.CreatedAt) {
+		t.Fatalf("immunity cutoff %v != first access stamp %v", *sig.FirstDownstreamAccessAt, a.CreatedAt)
 	}
-	if !sig.DisclosureWindowOpen {
-		t.Fatal("window should be open immediately after first access")
-	}
+	// A single read is not reliance, so stakes stay normal.
 	if sig.StakesLevel != "normal" {
 		t.Fatalf("a single read should be normal stakes, got %q", sig.StakesLevel)
 	}
@@ -124,43 +124,6 @@ func TestCommitmentSignalsDependencyFlagsHighAndQuestionClock(t *testing.T) {
 	// One accessor, two accesses.
 	if sig.DistinctAccessors != 1 || sig.AccessCount != 2 {
 		t.Fatalf("expected 1 accessor / 2 accesses, got distinct=%d count=%d", sig.DistinctAccessors, sig.AccessCount)
-	}
-}
-
-// Reaching the distinct-accessor threshold flags high consequence from mesh
-// breadth alone — no dependency needed. Two different agents reading the same
-// artifact is the signal.
-func TestCommitmentSignalsDistinctAccessorsFlagHigh(t *testing.T) {
-	ctx := context.Background()
-	svc, c, delibID := commitFixture(t)
-
-	// carol gains standing by committing in the same deliberation, then reads.
-	if _, err := svc.Commit(ctx, delibID, "keyC:carol", "I will run the benchmark", ""); err != nil {
-		t.Fatalf("Commit carol: %v", err)
-	}
-	if _, err := mcp.CoreRecordAccess(ctx, svc, c.ID, "keyB:bob", "read", "", "keyB"); err != nil {
-		t.Fatalf("record bob: %v", err)
-	}
-	sig, err := mcp.CoreCommitmentSignals(ctx, svc, c.ID, "keyB")
-	if err != nil {
-		t.Fatalf("signals after one accessor: %v", err)
-	}
-	if sig.StakesLevel != "normal" {
-		t.Fatalf("one distinct accessor is below threshold, expected normal, got %q", sig.StakesLevel)
-	}
-
-	if _, err := mcp.CoreRecordAccess(ctx, svc, c.ID, "keyC:carol", "read", "", "keyC"); err != nil {
-		t.Fatalf("record carol: %v", err)
-	}
-	sig, err = mcp.CoreCommitmentSignals(ctx, svc, c.ID, "keyB")
-	if err != nil {
-		t.Fatalf("signals after two accessors: %v", err)
-	}
-	if sig.DistinctAccessors != 2 {
-		t.Fatalf("expected 2 distinct accessors, got %d", sig.DistinctAccessors)
-	}
-	if sig.StakesLevel != "high" {
-		t.Fatalf("two distinct accessors should flag high stakes, got %q", sig.StakesLevel)
 	}
 }
 
@@ -215,5 +178,48 @@ func TestCommitmentSignalsAccessAndNotFound(t *testing.T) {
 	// Unknown commitment is a clean not-found, not a nil-deref.
 	if _, err := mcp.CoreCommitmentSignals(ctx, svc, "does-not-exist", "keyB"); err == nil {
 		t.Fatal("expected not-found for unknown commitment")
+	}
+}
+
+// The anti-grief property: reads never fire high stakes, no matter how
+// many distinct accessors. Otherwise an adversary points N sock puppets at an
+// artifact to force the seller into a costly mandatory tier. Only a dependent
+// commitment — a costly, logged act by someone else — raises stakes.
+func TestCommitmentSignalsReadersNeverFireHighStakes(t *testing.T) {
+	ctx := context.Background()
+	svc, c, delibID := commitFixture(t)
+
+	// carol gains standing by committing in the same deliberation, then reads.
+	if _, err := svc.Commit(ctx, delibID, "keyC:carol", "I will run the benchmark", ""); err != nil {
+		t.Fatalf("Commit carol: %v", err)
+	}
+	if _, err := mcp.CoreRecordAccess(ctx, svc, c.ID, "keyB:bob", "read", "", "keyB"); err != nil {
+		t.Fatalf("record bob: %v", err)
+	}
+	if _, err := mcp.CoreRecordAccess(ctx, svc, c.ID, "keyC:carol", "read", "", "keyC"); err != nil {
+		t.Fatalf("record carol: %v", err)
+	}
+	sig, err := mcp.CoreCommitmentSignals(ctx, svc, c.ID, "keyB")
+	if err != nil {
+		t.Fatalf("signals: %v", err)
+	}
+	if sig.DistinctAccessors != 2 {
+		t.Fatalf("expected 2 distinct accessors, got %d", sig.DistinctAccessors)
+	}
+	// Two distinct readers, zero dependents: stakes MUST stay normal.
+	if sig.StakesLevel != "normal" {
+		t.Fatalf("distinct readers must not fire high stakes, got %q", sig.StakesLevel)
+	}
+
+	// One dependent commitment flips it.
+	if _, err := mcp.CoreRecordAccess(ctx, svc, c.ID, "keyB:bob", "dependency", "relied on it", "keyB"); err != nil {
+		t.Fatalf("record dependency: %v", err)
+	}
+	sig, err = mcp.CoreCommitmentSignals(ctx, svc, c.ID, "keyB")
+	if err != nil {
+		t.Fatalf("signals after dependency: %v", err)
+	}
+	if sig.StakesLevel != "high" {
+		t.Fatalf("a dependent commitment should fire high stakes, got %q", sig.StakesLevel)
 	}
 }

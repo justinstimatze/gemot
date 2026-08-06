@@ -31,15 +31,12 @@ type errAgentKeyNotFound struct{}
 func (errAgentKeyNotFound) Error() string { return "agent_keys: no active key registered for agent" }
 
 const (
-	maxTopicLen       = 500
-	maxDescriptionLen = 5000
-	maxContentLen     = 50000
 	maxAgentIDLen     = 200
+	maxContentLen     = 50000
+	maxDescriptionLen = 5000
 	maxPositions      = 1000
+	maxTopicLen       = 500
 )
-
-// Store defines the persistence interface the service needs.
-// Store sub-interfaces — split by domain for clarity and targeted mocking.
 
 // DeliberationStore manages deliberation lifecycle.
 type DeliberationStore interface {
@@ -155,9 +152,13 @@ type Store interface {
 // ContextKeyDeliberationID is the context key for passing the deliberation ID
 // through the analysis pipeline (used for per-deliberation cost tracking).
 type ContextKeyDeliberationID struct{}
+
 type ContextKeyDeliberationType struct{}
+
 type ContextKeyPriorNorms struct{}
+
 type ContextKeyConstitutionalRules struct{}
+
 type ContextKeyPriorClaims struct{}
 
 // ContextKeyProgressFunc is used to pass a progress callback via context.
@@ -766,6 +767,7 @@ type ContextKeyPriorTaxonomy struct{}
 
 // ContextKeyPriorTopicIDs passes prior round topic ID→name mapping for stable IDs across rounds.
 type ContextKeyPriorTopicIDs struct{}
+
 type ContextKeyPriorSummaries struct{}
 
 // RuleInt reads an integer rule from a deliberation, returning the default if not set.
@@ -2523,11 +2525,7 @@ func (s *Service) CancelAnalysis(ctx context.Context, deliberationID string) err
 }
 
 const (
-	// systemActor attributes a commitment verdict the server made on its
-	// own initiative rather than on behalf of a caller.
-	systemActor = "system"
-	// withdrawalBreakReason is recorded on commitments invalidated because
-	// their author left the deliberation.
+	systemActor           = "system"
 	withdrawalBreakReason = "agent withdrew from deliberation"
 )
 
@@ -2771,9 +2769,6 @@ func generateMemorableCode() string {
 	num := (int(b[2])<<24 | int(b[3])<<16 | int(b[4])<<8 | int(b[5])) % 1000000
 	return fmt.Sprintf("%s-%s-%06d", adj, noun, num)
 }
-
-// 70 adjectives × 70 nouns × 1,000,000 numbers = ~4.9 billion combinations
-// At 10 guesses/sec with rate limiting, brute force = ~15 years
 
 func truncate(s string, n int) string {
 	if len(s) <= n {
@@ -3036,23 +3031,6 @@ func (s *Service) verifyVoteSignature(ctx context.Context, d *Deliberation, v *V
 	return nil
 }
 
-// Externally-visible-signal tuning for the payment-mesh keystone. These are
-// the two judgment calls the deliberation left open; defaults come from the
-// design doc and are deliberately conservative — cheap and hard to game.
-const (
-	// DisclosureWindow is how long after the FIRST downstream access a seller
-	// may self-report a correction and still earn timestamped immunity. Keyed
-	// to gemot's clock (first downstream access), never to a seller-asserted
-	// "when I discovered it" — that is the whole point of the keystone.
-	DisclosureWindow = 30 * time.Minute
-
-	// StakesAccessorThreshold: at or above this many distinct downstream
-	// accessors, an artifact is flagged high-consequence from mesh signal
-	// alone (independent of both parties). Any dependent commitment also
-	// flags it, whichever comes first.
-	StakesAccessorThreshold = 2
-)
-
 // RecordAccess appends a downstream-access record to a commitment's ledger —
 // the primitive the payment-mesh disclosure window and stakes marker both key
 // to. It is deliberately built like FulfillCommitment: it routes through the
@@ -3106,6 +3084,11 @@ func (s *Service) RecordAccess(ctx context.Context, commitmentID, accessorID, ki
 // The ledger holds only downstream (non-committer) accesses by construction
 // (RecordAccess rejects self-access), so every record here is a real
 // downstream signal.
+//
+// It supplies immunity + evidence, not a verdict: FirstDownstreamAccessAt is
+// the immunity cutoff, FirstQuestionAt the on-notice floor. No auto-deadline
+// is emitted (the real trigger, seller knowledge, is unobservable). Stakes key
+// to dependents only — a raw reader count is gameable upward.
 func (s *Service) CommitmentSignals(ctx context.Context, commitmentID string) (*CommitmentSignals, error) {
 	if _, err := s.store.GetCommitmentByID(ctx, commitmentID); err != nil {
 		return nil, err
@@ -3136,15 +3119,9 @@ func (s *Service) CommitmentSignals(ctx context.Context, commitmentID string) (*
 	}
 	sig.DistinctAccessors = len(distinct)
 
-	// Clock: the disclosure window runs from the first downstream access.
-	if sig.FirstDownstreamAccessAt != nil {
-		deadline := sig.FirstDownstreamAccessAt.Add(DisclosureWindow)
-		sig.DisclosureDeadline = &deadline
-		sig.DisclosureWindowOpen = time.Now().Before(deadline)
-	}
-
-	// Stakes marker: mesh-derived, party-independent.
-	if sig.DependentCount >= 1 || sig.DistinctAccessors >= StakesAccessorThreshold {
+	// Stakes: dependents only. A reader count — even a large one — never fires
+	// high, so N sock-puppet reads cannot force a costly mandatory tier.
+	if sig.DependentCount >= 1 {
 		sig.StakesLevel = "high"
 	}
 	return sig, nil
