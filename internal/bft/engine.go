@@ -41,6 +41,13 @@ type Engine struct {
 	// latestQC is the highest-view QC observed so far, used as the
 	// justify for the next proposal. Seeded to genesis QC.
 	latestQC QC
+	// log, voteHist, keyStore are the durable stores this engine was
+	// bootstrapped from. Retained so resyncFromLog can rebuild the replica
+	// from the log after a fork. nil for engines built via NewEngine directly
+	// (tests) — such engines cannot self-resync.
+	log      LogStore
+	voteHist VoteHistoryStore
+	keyStore ReplicaKeyStore
 }
 
 // NewEngine constructs a single-node engine. Caller is responsible
@@ -75,7 +82,36 @@ func (e *Engine) RestoreChainState() {
 	e.latestQC = e.replica.HighQC()
 }
 
-// Submit proposes payload as the next block, drives the self-vote
+// Submit orders payload into the shared log. It drives one
+// propose→self-vote→commit round via submitOnce; if that round loses an
+// append race to another instance sharing the log (ErrLogForkDetected —
+// the height PRIMARY KEY guarantees one block per height, so a fork is a
+// rejected duplicate, never divergence), Submit resyncs this engine's
+// replica from the log and retries on the reconciled head. Bounded, so a
+// genuine pathology fails loudly instead of spinning.
+func (e *Engine) Submit(ctx context.Context, payload []byte) (QC, Block, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	const maxAttempts = 4
+	var forkErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		qc, blk, err := e.submitOnce(ctx, payload)
+		if err == nil {
+			return qc, blk, nil
+		}
+		if !errors.Is(err, ErrLogForkDetected) {
+			return QC{}, Block{}, err
+		}
+		forkErr = err
+		if rerr := e.resyncFromLog(ctx); rerr != nil {
+			return QC{}, Block{}, fmt.Errorf("bft: fork recovery failed: %w (fork: %v)", rerr, err)
+		}
+	}
+	return QC{}, Block{}, fmt.Errorf("bft: log fork persisted after %d resync+retry attempts: %w", maxAttempts, forkErr)
+}
+
+// submitOnce proposes payload as the next block, drives the self-vote
 // through the replica, and returns the prepared QC plus the block.
 // Serialized: concurrent callers queue behind the engine mutex.
 //
@@ -94,9 +130,7 @@ func (e *Engine) RestoreChainState() {
 //
 // Returns the prepared QC. The block is committed on the NEXT
 // Submit when its QC is carried as the justify.
-func (e *Engine) Submit(ctx context.Context, payload []byte) (QC, Block, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *Engine) submitOnce(ctx context.Context, payload []byte) (QC, Block, error) {
 
 	// Advance view for the new round. After the first Submit we're
 	// one view past the previous; r.view is already set correctly on
@@ -200,4 +234,31 @@ func EncodeQCProof(qc QC) ([]byte, error) {
 		return nil, fmt.Errorf("bft: encode QC proof: %w", err)
 	}
 	return bytes, nil
+}
+
+// resyncFromLog rebuilds this engine's replica from the durable log after a
+// fork was detected on append — another instance committed a different block
+// at a height this replica also targeted. It adopts the log's committed chain
+// (the single source of truth), discarding this replica's divergent,
+// uncommitted state, and re-primes the chain pointers. The rebuild reuses the
+// exact bootstrap path, so recovered state is identical to a fresh restart
+// against the same log. Caller must hold e.mu. Requires the durable stores
+// retained at bootstrap; returns an error if the engine has no log configured
+// (e.g. constructed via NewEngine directly in a test).
+func (e *Engine) resyncFromLog(ctx context.Context) error {
+	if e.log == nil {
+		return errors.New("bft: cannot resync — engine has no durable log")
+	}
+	replica, transport, err := buildSingleNodeReplica(ctx, e.log, e.voteHist, e.keyStore)
+	if err != nil {
+		return fmt.Errorf("bft: resync rebuild: %w", err)
+	}
+	e.replica = replica
+	e.transport = transport
+	// Re-prime chain pointers from the rebuilt, log-derived committed head.
+	if committed := e.replica.Committed(); len(committed) > 1 {
+		e.latestHash = committed[len(committed)-1]
+		e.latestQC = e.replica.HighQC()
+	}
+	return nil
 }

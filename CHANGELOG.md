@@ -4,6 +4,12 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### BFT: a losing writer reconciles from the shared log instead of wedging — 2026-08-05
+
+Several gemot instances sharing one durable BFT log (a multi-machine deploy, or several dev processes on one Postgres) each run a single-node engine and can race to append at the same height. The height PRIMARY KEY already guarantees safety — one block per height, so a fork is a rejected duplicate, never divergence — but the *losing* writer wedged: its append returned `ErrLogForkDetected`, and every retry then failed with "already proposed in this view," silently disenfranchising that instance (the message reads like a benign duplicate-vote guard). It surfaced live when three sessions voting in one deliberation left one permanently unable to commit its vote.
+
+`Submit` now recovers: on `ErrLogForkDetected` it rebuilds the engine's replica from the shared log — the same path a fresh restart uses, so recovered state is identical — then retries on the reconciled head, bounded so a genuine pathology still fails loudly rather than spinning. The losing instance adopts the committed chain and its operation lands at the next free height. No schema change and no new infrastructure; the log stays the single source of truth. New tests cover the fork-recovery scenario and the no-durable-log guard.
+
 ### Paid actions no longer panic on bare instances; ATXP buy_credits groundwork — 2026-08-05
 
 `gateSandbox` — the daily-quota gate for paid actions (`analyze:run`, `propose_compromise`, `expert_panel`, `follow_up`) — dereferenced `sandboxQuota` without a nil check. On a bare or local instance with no MPP/payments subsystem configured, `sandboxQuota` is nil, so every paid action nil-panicked and took the server down. It now proceeds free when no quota is configured (there is nothing to meter); production, where the quota is always initialized, is unaffected.
