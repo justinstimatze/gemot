@@ -90,13 +90,14 @@ type MemoryStore struct {
 	mu sync.RWMutex
 
 	// Core deliberation data
-	deliberations map[string]*deliberation.Deliberation           // id -> deliberation
-	statusChanged map[string]time.Time                            // id -> when status last changed
-	positions     map[string]*deliberation.Position               // id -> position
-	votes         map[string]*deliberation.Vote                   // id -> vote
-	delegations   map[string]*deliberation.Delegation             // id -> delegation
-	commitments   map[string]*deliberation.Commitment             // id -> commitment
-	analyses      map[string]map[int]*deliberation.AnalysisResult // delibID -> round -> result
+	deliberations    map[string]*deliberation.Deliberation           // id -> deliberation
+	statusChanged    map[string]time.Time                            // id -> when status last changed
+	positions        map[string]*deliberation.Position               // id -> position
+	votes            map[string]*deliberation.Vote                   // id -> vote
+	delegations      map[string]*deliberation.Delegation             // id -> delegation
+	commitments      map[string]*deliberation.Commitment             // id -> commitment
+	commitmentAccess map[string][]*deliberation.CommitmentAccess     // commitment_id -> downstream accesses
+	analyses         map[string]map[int]*deliberation.AnalysisResult // delibID -> round -> result
 
 	// Access control
 	joinCodes   map[string]*deliberation.JoinCode // code -> jc
@@ -185,6 +186,7 @@ func NewMemoryStore() *MemoryStore {
 		votes:            map[string]*deliberation.Vote{},
 		delegations:      map[string]*deliberation.Delegation{},
 		commitments:      map[string]*deliberation.Commitment{},
+		commitmentAccess: map[string][]*deliberation.CommitmentAccess{},
 		analyses:         map[string]map[int]*deliberation.AnalysisResult{},
 		joinCodes:        map[string]*deliberation.JoinCode{},
 		acl:              map[string]map[string]bool{},
@@ -1421,3 +1423,39 @@ func newID(prefix string) string {
 // sense without persistent state (currently unused; kept for future
 // methods that need to refuse rather than no-op).
 var errInDemoMode = errors.New("operation requires a persistent database (set DATABASE_URL)") //nolint:unused
+
+// RecordCommitmentAccess appends a server-stamped downstream-access record.
+// Mirrors the Postgres adapter: id and created_at are filled here so the
+// timestamp is the store's, never the caller's.
+func (m *MemoryStore) RecordCommitmentAccess(_ context.Context, a *deliberation.CommitmentAccess) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.commitments[a.CommitmentID]; !ok {
+		return fmt.Errorf("commitment not found: %s", a.CommitmentID)
+	}
+	if a.ID == "" {
+		a.ID = newUUID()
+	}
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = time.Now().UTC()
+	}
+	if a.Kind == "" {
+		a.Kind = "read"
+	}
+	clone := *a
+	m.commitmentAccess[a.CommitmentID] = append(m.commitmentAccess[a.CommitmentID], &clone)
+	return nil
+}
+
+// GetCommitmentAccesses returns a commitment's downstream-access ledger in
+// ascending created_at order, matching the Postgres adapter.
+func (m *MemoryStore) GetCommitmentAccesses(_ context.Context, commitmentID string) ([]deliberation.CommitmentAccess, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []deliberation.CommitmentAccess
+	for _, a := range m.commitmentAccess[commitmentID] {
+		out = append(out, *a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
+}

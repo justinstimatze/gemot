@@ -159,3 +159,45 @@ type Vote struct {
 	Signature      []byte    `json:"signature,omitempty"` // ed25519 signature over auth.VotePayload
 	CreatedAt      time.Time `json:"created_at"`
 }
+
+// CommitmentAccess is a server-stamped record that an agent OTHER than the
+// committer touched a commitment's artifact. It is the externally-visible
+// signal the payment-mesh disclosure-window and stakes-gate both key to:
+// gemot stamps CreatedAt and takes AccessorID from the authenticated caller,
+// so neither party can backdate or suppress it. The same ledger yields both
+// the third-party-readable clock (first/last downstream access) and the
+// party-independent stakes marker (distinct accessors, dependent commitments).
+type CommitmentAccess struct {
+	ID           string    `json:"access_id"`
+	CommitmentID string    `json:"commitment_id"`
+	AccessorID   string    `json:"accessor_id"`
+	Kind         string    `json:"kind"` // read | question | dependency
+	Note         string    `json:"note,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// CommitmentSignals is the externally-visible clock + stakes marker derived
+// from a commitment's access ledger. Every field is computed from
+// server-stamped facts, so a third party can read them and neither the buyer
+// nor the seller can rewrite them — the property the payment-mesh scheme
+// needs so its disclosure window and stakes gate are not self-attested.
+type CommitmentSignals struct {
+	CommitmentID string `json:"commitment_id"`
+
+	// Clock: anchors a third party can read. The disclosure window keys to
+	// FirstDownstreamAccessAt (the earliest moment consequence became real),
+	// not to a seller-asserted "when I discovered it".
+	FirstDownstreamAccessAt *time.Time `json:"first_downstream_access_at,omitempty"`
+	LastDownstreamAccessAt  *time.Time `json:"last_downstream_access_at,omitempty"`
+	FirstQuestionAt         *time.Time `json:"first_question_at,omitempty"`
+	DisclosureDeadline      *time.Time `json:"disclosure_deadline,omitempty"`
+	DisclosureWindowOpen    bool       `json:"disclosure_window_open"`
+
+	// Stakes marker: consequence derived from mesh activity, independent of
+	// both parties. A seller declining Tier-3 on a HighStakes artifact is a
+	// visible logged act — "the refusal is the data".
+	DistinctAccessors int    `json:"distinct_accessors"`
+	AccessCount       int    `json:"access_count"`
+	DependentCount    int    `json:"dependent_count"` // accesses of kind "dependency"
+	StakesLevel       string `json:"stakes_level"`    // normal | high
+}

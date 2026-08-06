@@ -310,6 +310,9 @@ type decideParams struct {
 	Reason         string `json:"reason,omitempty"`
 	VerifiedBy     string `json:"verified_by,omitempty"`
 	GroupID        string `json:"group_id,omitempty"`
+	AccessorID     string `json:"accessor_id,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Note           string `json:"note,omitempty"`
 }
 
 type coordinateParams struct {
@@ -1089,8 +1092,28 @@ func (s *server) handleDecide(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 		}
 		return jsonResult(rep)
 
+	case "record_access":
+		accessor := args.AccessorID
+		if accessor == "" {
+			accessor = args.AgentID
+		}
+		accessor = scopeAgentID(ctx, accessor)
+		a, err := CoreRecordAccess(ctx, s.svc, args.CommitmentID, accessor, args.Kind, args.Note, keyID)
+		if err != nil {
+			return errResult(err)
+		}
+		s.audit(ctx, "decide:access", "", accessor)
+		return jsonResult(a)
+
+	case "get_signals":
+		sig, err := CoreCommitmentSignals(ctx, s.svc, args.CommitmentID, keyID)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(sig)
+
 	default:
-		return errResult(fmt.Errorf("unknown action %q — use: commit, get_commitments, fulfill, break, reputation", args.Action))
+		return errResult(fmt.Errorf("unknown action %q — use: commit, get_commitments, fulfill, break, reputation, record_access, get_signals", args.Action))
 	}
 }
 

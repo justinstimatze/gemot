@@ -83,6 +83,24 @@ CREATE TABLE IF NOT EXISTS commitments (
 CREATE INDEX IF NOT EXISTS idx_commitments_delib ON commitments(deliberation_id);
 CREATE INDEX IF NOT EXISTS idx_commitments_agent ON commitments(agent_id);
 
+-- commitment_access is the externally-visible signal the payment-mesh
+-- disclosure-window and stakes-gate both key to. Each row records that an
+-- agent OTHER than the committer touched a commitment's artifact. gemot
+-- stamps created_at and takes accessor_id from the authenticated caller, so
+-- neither party can backdate or suppress it: it is the third-party-readable
+-- clock (first/last downstream access) AND the party-independent stakes
+-- marker (distinct accessors, dependent commitments) in one ledger.
+CREATE TABLE IF NOT EXISTS commitment_access (
+    id TEXT PRIMARY KEY,
+    commitment_id TEXT NOT NULL REFERENCES commitments(id),
+    accessor_id TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'read',
+    note TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_commitment_access_commitment ON commitment_access(commitment_id);
+
 CREATE TABLE IF NOT EXISTS join_codes (
     code TEXT PRIMARY KEY,
     deliberation_id TEXT NOT NULL REFERENCES deliberations(id),

@@ -93,6 +93,8 @@ type CommitmentStore interface {
 	UpdateCommitmentStatus(ctx context.Context, id, status string) error
 	FulfillCommitment(ctx context.Context, id, verifiedBy string) error
 	BreakCommitment(ctx context.Context, id, reason, verifiedBy string) error
+	RecordCommitmentAccess(ctx context.Context, a *types.CommitmentAccess) error
+	GetCommitmentAccesses(ctx context.Context, commitmentID string) ([]types.CommitmentAccess, error)
 }
 
 // AnalysisStore manages analysis results and stuck recovery.
@@ -3032,4 +3034,118 @@ func (s *Service) verifyVoteSignature(ctx context.Context, d *Deliberation, v *V
 		}
 	}
 	return nil
+}
+
+// Externally-visible-signal tuning for the payment-mesh keystone. These are
+// the two judgment calls the deliberation left open; defaults come from the
+// design doc and are deliberately conservative — cheap and hard to game.
+const (
+	// DisclosureWindow is how long after the FIRST downstream access a seller
+	// may self-report a correction and still earn timestamped immunity. Keyed
+	// to gemot's clock (first downstream access), never to a seller-asserted
+	// "when I discovered it" — that is the whole point of the keystone.
+	DisclosureWindow = 30 * time.Minute
+
+	// StakesAccessorThreshold: at or above this many distinct downstream
+	// accessors, an artifact is flagged high-consequence from mesh signal
+	// alone (independent of both parties). Any dependent commitment also
+	// flags it, whichever comes first.
+	StakesAccessorThreshold = 2
+)
+
+// RecordAccess appends a downstream-access record to a commitment's ledger —
+// the primitive the payment-mesh disclosure window and stakes marker both key
+// to. It is deliberately built like FulfillCommitment: it routes through the
+// ordered log and stamps the time server-side, because a signal a third party
+// is meant to trust cannot be one either party can backdate or omit.
+//
+// The committer may not record access to its own artifact: "downstream" means
+// someone other than the seller touched it, so a self-access would let a seller
+// manufacture its own clock. kind is read | question | dependency.
+func (s *Service) RecordAccess(ctx context.Context, commitmentID, accessorID, kind, note, keyID string) (*CommitmentAccess, error) {
+	c, err := s.store.GetCommitmentByID(ctx, commitmentID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.CheckParticipant(ctx, c.DeliberationID, keyID); err != nil {
+		return nil, err
+	}
+	// A committer touching its own artifact is not a downstream signal.
+	if keyID != "" && strings.HasPrefix(c.AgentID, keyID+":") {
+		return nil, fmt.Errorf("access denied: a commitment's own author cannot record downstream access to it")
+	}
+	switch kind {
+	case "", "read":
+		kind = "read"
+	case "question", "dependency":
+		// ok
+	default:
+		return nil, fmt.Errorf("invalid access kind %q — use: read, question, dependency", kind)
+	}
+	a := &CommitmentAccess{
+		CommitmentID: commitmentID,
+		AccessorID:   accessorID,
+		Kind:         kind,
+		Note:         note,
+	}
+	// Field order is action_type|deliberation_id|agent_id|… as the tamper-
+	// evident log parses; the acting agent is the accessor.
+	if err := s.orderAction(ctx, "access", c.DeliberationID, accessorID, commitmentID, kind); err != nil {
+		return nil, err
+	}
+	if err := s.store.RecordCommitmentAccess(ctx, a); err != nil {
+		return nil, err
+	}
+	s.audit("decide:access", c.DeliberationID, accessorID)
+	return a, nil
+}
+
+// CommitmentSignals derives the externally-visible clock + stakes marker from
+// a commitment's access ledger. It reads only server-stamped facts, so the
+// result is something a third party can trust and neither party can rewrite.
+// The ledger holds only downstream (non-committer) accesses by construction
+// (RecordAccess rejects self-access), so every record here is a real
+// downstream signal.
+func (s *Service) CommitmentSignals(ctx context.Context, commitmentID string) (*CommitmentSignals, error) {
+	if _, err := s.store.GetCommitmentByID(ctx, commitmentID); err != nil {
+		return nil, err
+	}
+	accesses, err := s.store.GetCommitmentAccesses(ctx, commitmentID)
+	if err != nil {
+		return nil, err
+	}
+	sig := &CommitmentSignals{CommitmentID: commitmentID, StakesLevel: "normal"}
+	distinct := map[string]struct{}{}
+	for i := range accesses {
+		a := accesses[i]
+		sig.AccessCount++
+		distinct[a.AccessorID] = struct{}{}
+		if sig.FirstDownstreamAccessAt == nil {
+			t := a.CreatedAt
+			sig.FirstDownstreamAccessAt = &t
+		}
+		last := a.CreatedAt
+		sig.LastDownstreamAccessAt = &last
+		if a.Kind == "question" && sig.FirstQuestionAt == nil {
+			t := a.CreatedAt
+			sig.FirstQuestionAt = &t
+		}
+		if a.Kind == "dependency" {
+			sig.DependentCount++
+		}
+	}
+	sig.DistinctAccessors = len(distinct)
+
+	// Clock: the disclosure window runs from the first downstream access.
+	if sig.FirstDownstreamAccessAt != nil {
+		deadline := sig.FirstDownstreamAccessAt.Add(DisclosureWindow)
+		sig.DisclosureDeadline = &deadline
+		sig.DisclosureWindowOpen = time.Now().Before(deadline)
+	}
+
+	// Stakes marker: mesh-derived, party-independent.
+	if sig.DependentCount >= 1 || sig.DistinctAccessors >= StakesAccessorThreshold {
+		sig.StakesLevel = "high"
+	}
+	return sig, nil
 }

@@ -1191,3 +1191,46 @@ func (s *DB) hardDeleteDeliberation(id string) error {
 	tx.Exec("DELETE FROM deliberations WHERE id = $1", id) //nolint:errcheck
 	return tx.Commit()
 }
+
+// RecordCommitmentAccess persists a server-stamped downstream-access record.
+// id and created_at are filled here (as CreateCommitment does) so the
+// timestamp on the clock is always the store's, never the caller's — the
+// property that keeps the disclosure window and stakes marker non-forgeable.
+func (s *DB) RecordCommitmentAccess(ctx context.Context, a *deliberation.CommitmentAccess) error {
+	if a.ID == "" {
+		a.ID = uuid.New().String()
+	}
+	if a.CreatedAt.IsZero() {
+		a.CreatedAt = time.Now().UTC()
+	}
+	if a.Kind == "" {
+		a.Kind = "read"
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO commitment_access (id, commitment_id, accessor_id, kind, note, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+		a.ID, a.CommitmentID, a.AccessorID, a.Kind, a.Note, a.CreatedAt,
+	)
+	return err
+}
+
+// GetCommitmentAccesses returns a commitment's downstream-access ledger in
+// ascending created_at order.
+func (s *DB) GetCommitmentAccesses(ctx context.Context, commitmentID string) ([]deliberation.CommitmentAccess, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, commitment_id, accessor_id, kind, COALESCE(note, ''), created_at FROM commitment_access WHERE commitment_id = $1 ORDER BY created_at`,
+		commitmentID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close() //nolint:errcheck
+	var result []deliberation.CommitmentAccess
+	for rows.Next() {
+		var a deliberation.CommitmentAccess
+		if err := rows.Scan(&a.ID, &a.CommitmentID, &a.AccessorID, &a.Kind, &a.Note, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, rows.Err()
+}

@@ -706,3 +706,26 @@ Be specific and constructive. Focus on what changed or what was missed.`, cruxSu
 		Model:          model,
 	}, nil
 }
+
+func CoreRecordAccess(ctx context.Context, svc *deliberation.Service, commitmentID, accessorID, kind, note, keyID string) (*deliberation.CommitmentAccess, error) {
+	if commitmentID == "" || accessorID == "" {
+		return nil, fmt.Errorf("commitment_id and accessor_id are required")
+	}
+	return svc.RecordAccess(ctx, commitmentID, accessorID, kind, note, keyID)
+}
+
+func CoreCommitmentSignals(ctx context.Context, svc *deliberation.Service, commitmentID, keyID string) (*deliberation.CommitmentSignals, error) {
+	if commitmentID == "" {
+		return nil, fmt.Errorf("commitment_id is required")
+	}
+	// Gate on deliberation access like CoreGetCommitments: the signals are
+	// meant to be readable by the counterparty and the mesh, not the world.
+	c, err := svc.GetCommitmentByID(ctx, commitmentID)
+	if err != nil {
+		return nil, err
+	}
+	if err := svc.CheckAccess(ctx, c.DeliberationID, keyID); err != nil {
+		return nil, err
+	}
+	return svc.CommitmentSignals(ctx, commitmentID)
+}

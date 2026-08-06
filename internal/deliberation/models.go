@@ -17,3 +17,7 @@ type Invitation = types.Invitation
 type Dispute = types.Dispute
 type Criterion = types.Criterion
 type Vote = types.Vote
+
+type CommitmentAccess = types.CommitmentAccess
+
+type CommitmentSignals = types.CommitmentSignals

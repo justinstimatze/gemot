@@ -289,7 +289,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				"gemot/deliberation": {"create": true, "delete": true, "set_template": true},
 				"gemot/participate":  {"submit_position": true, "vote": true, "withdraw": true, "register_key": true, "revoke_key": true},
 				"gemot/analyze":      {"run": true, "propose_compromise": true, "dispute_crux": true, "challenge": true, "expert_panel": true},
-				"gemot/decide":       {"commit": true, "fulfill": true, "break": true},
+				"gemot/decide":       {"commit": true, "fulfill": true, "break": true, "record_access": true},
 				"gemot/coordinate":   {"delegate": true, "invite": true, "generate_join_code": true, "join": true},
 				"gemot/admin":        {"report_abuse": true},
 			}
@@ -1020,6 +1020,27 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 					return
 				}
 				writeA2AResult(w, req.ID, rep)
+
+			case "record_access":
+				accessor := str(s, "accessor_id")
+				if accessor == "" {
+					accessor = str(s, "agent_id")
+				}
+				accessor = scope(accessor)
+				a, err := CoreRecordAccess(ctx, svc, str(s, "commitment_id"), accessor, str(s, "kind"), str(s, "note"), keyID)
+				if err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, a)
+
+			case "get_signals":
+				sig, err := CoreCommitmentSignals(ctx, svc, str(s, "commitment_id"), keyID)
+				if err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, sig)
 
 			default:
 				writeA2AError(w, req.ID, -32602, fmt.Sprintf("unknown action %q for gemot/decide", action))

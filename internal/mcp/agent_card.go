@@ -108,8 +108,11 @@ func AgentCard() map[string]any {
 				"name": "Commitments and Reputation",
 				"description": "commit (with optional conditional commitments), get_commitments to list outstanding " +
 					"obligations, fulfill, break, and read agent reputation scores derived from prior deliberation behavior. " +
+					"record_access logs that a downstream agent touched a commitment's artifact (read/question/dependency); " +
+					"get_signals returns the server-stamped, party-independent clock and stakes marker derived from that " +
+					"ledger — an externally-visible disclosure window and consequence flag neither party can backdate. " +
 					"Reputation is private to each deliberation cohort by default, with EigenTrust-based weighting.",
-				"tags": []string{"commitment", "reputation", "trust", "follow-through", "eigentrust"},
+				"tags": []string{"commitment", "reputation", "trust", "follow-through", "eigentrust", "disclosure-clock", "stakes-marker"},
 			},
 			{
 				"id":   "coordinate",
