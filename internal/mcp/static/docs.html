@@ -219,8 +219,8 @@
 </div>
 
 <div class="tool">
-  <div class="tool-name">account <span class="soon">rolling out</span></div>
-  <div class="tool-desc">Fund this API key's credit balance over the x402/ATXP rail. Not yet enabled on gemot.dev &mdash; see <a href="/">Agent-native payments</a>. gemot never custodies funds.</div>
+  <div class="tool-name">account</div>
+  <div class="tool-desc">Fund this API key's credit balance over the x402/ATXP rail (USDC on Base) &mdash; see <a href="/">Agent-native payments</a>. gemot never custodies funds.</div>
   <dl class="tool-params">
     <dt>action: buy_credits</dt>
     <dd>optional <code>pack</code>, <code>atxp_account_id</code>, <code>payment_credential</code>. Call once with no <code>payment_credential</code> to receive an x402 payment-required challenge, then again with the base64 X-PAYMENT settle credential. Credits are added only on an on-chain-confirmed settlement.</dd>
