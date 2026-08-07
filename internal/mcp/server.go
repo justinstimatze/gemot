@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+
 	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- non-crypto: only used for display-order shuffling of positions (get_positions), never for secrets/codes
 	mrand "math/rand"
 	"os"
@@ -44,6 +45,10 @@ type server struct {
 	// sandbox identity (IP) exceeds the daily limit, handlers respond with
 	// -32042 challenges so the agent can fund via credits or MPP.
 	sandboxQuota *payments.SandboxQuota
+	// gate funds account:buy_credits over the ATXP/x402 rail (the CreditGate
+	// seam). nil ⇒ buy_credits is not configured and refuses. Set at the
+	// composition root (RunHTTP) when a merchant is available.
+	gate payments.CreditGate
 }
 
 // RunAnalysisAsync starts an analysis in a background goroutine with proper
@@ -123,7 +128,7 @@ func (s *server) audit(ctx context.Context, method, deliberationID, agentID stri
 // Version is the current gemot release version.
 const Version = "0.13.1"
 
-// newServer creates an MCP server with 6 grouped tools.
+// newServer creates an MCP server with 7 grouped tools.
 func newServer(s *server) *sdkmcp.Server {
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{
 		Name:    "gemot",
@@ -201,6 +206,12 @@ func newServer(s *server) *sdkmcp.Server {
 - get_vote_state: Get your own agent's recorded votes to confirm they landed and whether each is marked relayed vs direct (deliberation_id, agent_id)
 - replica_pubkey: Get the server's BLS public key for offline proof verification`,
 	}, s.handleAdmin)
+
+	sdkmcp.AddTool(srv, &sdkmcp.Tool{
+		Name: "account",
+		Description: `Fund your gemot credit balance. Actions:
+- buy_credits: Top up THIS API key's balance over the ATXP/x402 rail (optional: pack, atxp_account_id, payment_credential). Call once with no payment_credential to receive a payment-required challenge (the x402 accepts to pay against), then call again with payment_credential set to the base64 X-PAYMENT settle credential. Credits are added only on a settled, on-chain-confirmed charge.`,
+	}, s.handleAccount)
 
 	return srv
 }

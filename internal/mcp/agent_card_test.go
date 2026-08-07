@@ -84,9 +84,15 @@ func TestAgentCardActionCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("locating repo root: %v", err)
 	}
-	src, err := os.ReadFile(filepath.Join(root, "internal/mcp/server.go"))
-	if err != nil {
-		t.Fatalf("reading server.go: %v", err)
+	// Scrape every grouped handler's action cases. server.go holds the six
+	// original tools; account.go holds the account tool — both must be covered.
+	var src []byte
+	for _, f := range []string{"internal/mcp/server.go", "internal/mcp/account.go"} {
+		b, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			t.Fatalf("reading %s: %v", f, err)
+		}
+		src = append(src, b...)
 	}
 	// Match `case "<lowercase_with_underscores>":` patterns inside the
 	// action-dispatch switches. The scope is intentionally broad — any

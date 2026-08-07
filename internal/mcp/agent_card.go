@@ -158,6 +158,14 @@ func AgentCard() map[string]any {
 					"warnings, EigenTrust reputation, BFT consensus on writes.",
 				"tags": []string{"safety", "moderation", "integrity", "bft", "eigentrust"},
 			},
+			{
+				"id":   "account-credits",
+				"name": "Fund Credits",
+				"description": "buy_credits tops up your own gemot API key's balance over the ATXP / x402 rail: " +
+					"call once to receive a payment-required challenge, pay it, then call again with the base64 settle " +
+					"credential. Credits are added only on a settled, on-chain-confirmed charge.",
+				"tags": []string{"account", "credits", "payments", "atxp", "x402", "buy_credits"},
+			},
 		},
 	}
 }

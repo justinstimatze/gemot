@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/auth"
+	"github.com/justinstimatze/gemot/internal/chitgate"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
 	"github.com/justinstimatze/gemot/internal/store"
@@ -108,7 +109,32 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 	// abuse signal emerges.
 	sandboxQuota := payments.NewSandboxQuota(20, 24*time.Hour)
 
-	s := &server{svc: svc, credits: creditStore, db: backend, shutdown: ctx, analyzeLimiter: analyzeLimiter, mppCfg: mppCfg, sandboxQuota: sandboxQuota}
+	// account:buy_credits x402 gate (ATXP rail). Enabled only when the
+	// merchant's account id AND its wallet-grade connection token are both in
+	// the environment — never in source. Absent either, the tool stays off and
+	// refuses (nil gate). A generous per-payer-address policy bounds abuse
+	// without blocking legitimate use, keyed on the verified EIP-3009 signer.
+	var creditGate payments.CreditGate
+	if merchantID, token := os.Getenv("GEMOT_ATXP_MERCHANT_ID"), os.Getenv("GEMOT_ATXP_CONNECTION_TOKEN"); merchantID != "" && token != "" {
+		policy, err := payments.NewPayerPolicy(nil, 20000 /* $200/day */, 500 /* settles/day */, 24*time.Hour)
+		if err != nil {
+			return fmt.Errorf("configuring buy_credits payer policy: %w", err)
+		}
+		g, err := chitgate.New(chitgate.Config{
+			MerchantID:      merchantID,
+			ConnectionToken: token,
+			PayeeName:       "gemot",
+			Resource:        "gemot:buy_credits",
+			Policy:          policy,
+		})
+		if err != nil {
+			return fmt.Errorf("configuring buy_credits x402 gate: %w", err)
+		}
+		creditGate = g
+		slog.Info("account:buy_credits enabled (ATXP x402 gate)", "merchant", merchantID)
+	}
+
+	s := &server{svc: svc, credits: creditStore, db: backend, shutdown: ctx, analyzeLimiter: analyzeLimiter, mppCfg: mppCfg, sandboxQuota: sandboxQuota, gate: creditGate}
 	srv := newServer(s)
 
 	paymentMiddleware := payments.Middleware(ctx, mppCfg, apiSecret, creditStore)
