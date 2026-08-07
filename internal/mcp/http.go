@@ -123,10 +123,20 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 		if err != nil {
 			return fmt.Errorf("configuring buy_credits payer policy: %w", err)
 		}
+		// PayeeName is the DCR client_name registered with the ATXP auth
+		// server. chit's default Store is in-memory, so a client_secret does
+		// not survive a restart — reusing a previously-registered name then
+		// 409s (client_name_taken) even though the secret is gone. Keep it
+		// env-configurable so each deployment/launch can register a fresh,
+		// unclaimed name. (Production fix is a persistent atxp.Store; tracked.)
+		payeeName := os.Getenv("GEMOT_ATXP_PAYEE_NAME")
+		if payeeName == "" {
+			payeeName = "gemot"
+		}
 		g, err := chitgate.New(chitgate.Config{
 			MerchantID:      merchantID,
 			ConnectionToken: token,
-			PayeeName:       "gemot",
+			PayeeName:       payeeName,
 			Resource:        "gemot:buy_credits",
 			Policy:          policy,
 		})

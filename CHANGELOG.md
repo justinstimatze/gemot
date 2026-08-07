@@ -4,6 +4,12 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Payments: buy_credits validated live on-chain; env-configurable ATXP payee name — 2026-08-07
+
+The `buy_credits` x402 path was validated end-to-end against **Base mainnet**: a self-custodial stranger payer settled a real **$5.00 USDC** Starter purchase through the gate, and gemot credited the caller's key **only on confirmed on-chain settlement** (settle tx `0x0c2fa011…fa778`, block 49650659; payer −5.00 / merchant +5.00 USDC; balance 1→1001). Real x402 stranger→merchant settlement through gemot's own tool, verified on two independent ledgers.
+
+One config fix landed from the live bring-up: the ATXP DCR `client_name` (chit's `PayeeName`) is now env-configurable via `GEMOT_ATXP_PAYEE_NAME` (default `gemot`). chit's default connection `Store` is in-memory, so a DCR `client_secret` does not survive a restart — reusing a fixed name then 409s `client_name_taken` even though the secret is gone. A per-launch name sidesteps that; the durable fix (a persistent `atxp.Store`) is a tracked follow-up. Also confirmed operationally: the merchant `/charge` path authenticates to the auth server via DCR, so a `GEMOT_ATXP_CONNECTION_TOKEN` is required in practice (the token authenticates AS calls only; funds still settle to the plain payout `Destination`).
+
 ### Payments: agents can buy credits over the ATXP / x402 rail (buy_credits) — 2026-08-07
 
 New `account` tool with a `buy_credits` action: an agent tops up its OWN gemot API key's balance by paying in-band over a self-custodial bare-402 x402 charge (USDC on Base) — the MCP-native counterpart to the Stripe web checkout. Call once with no credential to receive a payment-required challenge (the x402 `accepts`), pay it, then call again with the base64 X-PAYMENT settle credential; credits are added only on a settled, on-chain-confirmed charge.
