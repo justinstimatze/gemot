@@ -142,26 +142,9 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 |---|---|---|
 | `buy_credits` | Top up **this** API key's balance over the x402/ATXP rail. Call once with no `payment_credential` to get an x402 payment-required challenge, then call again with the base64 `X-PAYMENT` settle credential — credits are added only on a settled, on-chain-confirmed charge. The money never touches gemot. | Free (you pay the pack price on-chain) |
 
-## Quick start
+## Self-hosting & configuration
 
-### Hosted (recommended)
-
-1. Get an API key at [gemot.dev/pricing](https://gemot.dev/pricing)
-2. Add to your `.mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "gemot": {
-      "type": "http",
-      "url": "https://gemot.dev/mcp",
-      "headers": {
-        "Authorization": "Bearer gmt_your_key_here"
-      }
-    }
-  }
-}
-```
+For the hosted service, see [Install](#install) above — `claude mcp add` is all you need. To run your own instance:
 
 ### Local (stdio)
 
