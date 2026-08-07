@@ -139,6 +139,10 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 			PayeeName:       payeeName,
 			Resource:        "gemot:buy_credits",
 			Policy:          policy,
+			// Persist DCR client credentials in gemot's Postgres so the merchant
+			// reuses one registration across restarts/instances (a stable
+			// PayeeName then works; no unique-name-per-launch needed).
+			DB: db,
 		})
 		if err != nil {
 			return fmt.Errorf("configuring buy_credits x402 gate: %w", err)

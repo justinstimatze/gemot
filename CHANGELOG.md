@@ -4,6 +4,10 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Payments: persistent ATXP DCR credentials (buy_credits survives restarts) — 2026-08-07
+
+Added a Postgres-backed `atxp.Store` (`internal/chitgate/store.go`) so the `buy_credits` x402 merchant persists its dynamic-client-registration credentials across restarts and instances, instead of re-registering every boot. chit's default store is in-memory: on restart the `client_secret` is lost but the auth server keeps the `client_name` claimed, so a stable name 409s (`client_name_taken`) forever — the reason a unique name per launch was needed. The new store keys DCR credentials by auth-server issuer in a new `atxp_client_credentials` table (schema v10; `client_secret` is a secret at rest, same tier as `api_keys`), and embeds chit's in-memory store for the OAuth client-side bits a bare-402 merchant never uses, so a DB hiccup degrades to in-memory rather than breaking the charge path. With persistence, a **stable** `PayeeName` works and multi-instance deploys share one registration. Wired via `chitgate.Config.DB`; a Postgres round-trip test (guarded on `DATABASE_URL`) confirms a fresh store instance reads the persisted credentials — the restart property.
+
 ### Payments: buy_credits validated live on-chain; env-configurable ATXP payee name — 2026-08-07
 
 The `buy_credits` x402 path was validated end-to-end against **Base mainnet**: a self-custodial stranger payer settled a real **$5.00 USDC** Starter purchase through the gate, and gemot credited the caller's key **only on confirmed on-chain settlement** (settle tx `0x0c2fa011…fa778`, block 49650659; payer −5.00 / merchant +5.00 USDC; balance 1→1001). Real x402 stranger→merchant settlement through gemot's own tool, verified on two independent ledgers.

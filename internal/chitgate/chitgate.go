@@ -21,6 +21,7 @@ package chitgate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -61,6 +62,11 @@ type Config struct {
 	// Policy is gemot's per-payer-address abuse policy (blocklist / spend cap /
 	// settle rate), keyed on the verified EIP-3009 signer. Optional (nil = none).
 	Policy *payments.PayerPolicy
+
+	// DB, when non-nil, backs a persistent atxp.Store so DCR client credentials
+	// survive restarts/instances (chit's default store is in-memory, which forces
+	// a fresh client_name each launch). Optional; nil keeps the in-memory default.
+	DB *sql.DB
 }
 
 // New builds a payments.CreditGate backed by a chit bare-402 x402 merchant.
@@ -72,11 +78,18 @@ func New(cfg Config) (payments.CreditGate, error) {
 	// uses: chit's server.Config only strictly needs a Destination. The token is
 	// for DCR-bound registration on OAuth-gated resources, which this flow is
 	// not — so pass it through only when set (a plain payout address suffices).
-	m, err := chit.New(chit.Config{
+	chitCfg := chit.Config{
 		Destination:     chit.StaticDestination{ID: cfg.MerchantID},
 		ConnectionToken: cfg.ConnectionToken,
 		PayeeName:       cfg.PayeeName,
-	})
+	}
+	// Persist DCR client credentials across restarts/instances when a DB is
+	// provided. Without it, chit's default in-memory store re-registers a client
+	// every boot and a stable PayeeName 409s. See internal/chitgate/store.go.
+	if cfg.DB != nil {
+		chitCfg.Store = newPGStore(cfg.DB)
+	}
+	m, err := chit.New(chitCfg)
 	if err != nil {
 		return nil, fmt.Errorf("chitgate: building merchant: %w", err)
 	}

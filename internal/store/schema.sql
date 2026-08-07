@@ -540,9 +540,22 @@ CREATE TABLE IF NOT EXISTS calibration_results (
     PRIMARY KEY (run_id, question_id)
 );
 
+-- ATXP DCR client credentials (v10): persists dynamic-client-registration
+-- credentials keyed by auth-server issuer, so the buy_credits x402 merchant
+-- reuses ONE registration across restarts/instances instead of re-registering
+-- each boot (which 409s on a stable client_name once the in-memory secret is
+-- lost). client_secret is a secret at rest — same trust tier as api_keys here.
+CREATE TABLE IF NOT EXISTS atxp_client_credentials (
+    issuer        TEXT PRIMARY KEY,
+    client_id     TEXT NOT NULL,
+    client_secret TEXT NOT NULL DEFAULT '',
+    redirect_uri  TEXT NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (9) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (10) ON CONFLICT DO NOTHING;
