@@ -26,12 +26,10 @@ var CreditPacks = []CreditPack{
 	{Name: "Starter", Credits: PackStarter, PriceUSD: 500},
 	{Name: "Standard", Credits: PackStandard, PriceUSD: 2000},
 	{Name: "Pro", Credits: PackPro, PriceUSD: 5000},
-	// Test: a sub-dollar x402 pack for verifying the buy_credits gate at a
-	// fraction of a real pack's cost ($0.10 → 100000 USDC atomic units). It sits
-	// below Stripe's 50c SPT floor, so it is usable ONLY on the x402/USDC rail
-	// (a Stripe /checkout of it would be rejected). Intended for live gate
-	// verification; decide keep/remove before enabling on prod.
-	{Name: "Test", Credits: 10, PriceUSD: 10},
+	// Micro: a sub-dollar top-up ($0.10 → 100000 USDC atomic units) for agents
+	// paying over the x402/USDC rail. It sits below Stripe's 50c SPT floor, so
+	// CheckoutHandler rejects it for card checkout — it is x402/buy_credits only.
+	{Name: "Micro", Credits: 10, PriceUSD: 10},
 }
 
 // CheckoutHandler creates a Stripe Checkout session for purchasing credits.
@@ -59,6 +57,13 @@ func CheckoutHandler(store *CreditStore, baseURL string) http.HandlerFunc {
 		}
 		if pack == nil {
 			http.Error(w, `{"error":"invalid pack — use starter, standard, or pro"}`, http.StatusBadRequest)
+			return
+		}
+		// Sub-floor packs (below Stripe's card minimum) are x402/USDC-only: they
+		// exist for buy_credits over the ATXP rail, and Stripe would reject a
+		// session below its 50c minimum anyway.
+		if pack.PriceUSD < MPPSPTMinimumCents {
+			http.Error(w, `{"error":"this pack is available only via buy_credits (x402/USDC), not card checkout"}`, http.StatusBadRequest)
 			return
 		}
 
