@@ -36,6 +36,8 @@ github.com/justinstimatze/chit v0.1.0 h1:2FC3ZKEnEWTzTc0NqUPSG3Z2gCNUXNW68Mkx8cE
 github.com/justinstimatze/chit v0.1.0/go.mod h1:aooQiqf5lv8NtuUv0+Tl8bZYSJqNTjJ80NjweN4X0mU=
 github.com/justinstimatze/chit v0.1.2-0.20260807165516-077be71f8314 h1:qpzSrte1RJ0yfX38RBIzqUV0ank7nuQVR1fnnU3pwag=
 github.com/justinstimatze/chit v0.1.2-0.20260807165516-077be71f8314/go.mod h1:aooQiqf5lv8NtuUv0+Tl8bZYSJqNTjJ80NjweN4X0mU=
+github.com/justinstimatze/chit v0.1.2 h1:fchh6Bk1GQ00oDcEtX/u0PwaXetdEKiDKv3LsIgmyTk=
+github.com/justinstimatze/chit v0.1.2/go.mod h1:aooQiqf5lv8NtuUv0+Tl8bZYSJqNTjJ80NjweN4X0mU=
 github.com/leanovate/gopter v0.2.11 h1:vRjThO1EKPb/1NsDXuDrzldR28RLkBflWYcU9CvzWu4=
 github.com/leanovate/gopter v0.2.11/go.mod h1:aK3tzZP/C+p1m3SPRE4SYZFGP7jjkuSI4f7Xvpt0S9c=
 github.com/modelcontextprotocol/go-sdk v1.7.0 h1:yqjY2dsbKAC0LSuWZVBMrHgiG8ukXv6NRo0JiALay44=

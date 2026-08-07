@@ -7,7 +7,7 @@ require (
 	github.com/consensys/gnark-crypto v0.20.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/justinstimatze/chit v0.1.2-0.20260807165516-077be71f8314
+	github.com/justinstimatze/chit v0.1.2
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/notnil/chess v1.10.0
 	github.com/stripe/stripe-go/v82 v82.5.1
