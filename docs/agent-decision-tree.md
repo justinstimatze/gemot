@@ -167,7 +167,7 @@ Need to delete a deliberation?
 
 | Tool | Cost |
 |------|------|
-| analyze action:run | 50 credits (Sonnet), 200 (Opus), 20 (Haiku) |
-| analyze action:propose_compromise | 50 credits (Sonnet) |
-| analyze action:reframe | 50 credits (Sonnet) |
+| analyze action:run | 60 credits (Sonnet), 300 (Opus), 20 (Haiku) |
+| analyze action:propose_compromise | 60 credits (Sonnet) |
+| analyze action:reframe | 60 credits (Sonnet) |
 | Everything else | Free |

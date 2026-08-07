@@ -143,8 +143,8 @@ Example agent prompts:
 | Create deliberation | Free | Project |
 | Submit positions | Free | Each reviewer |
 | Vote | Free | Each reviewer |
-| analyze action:run | 50 credits ($0.50) | PR author |
-| analyze action:propose_compromise | 50 credits ($0.50) | PR author |
+| analyze action:run | 60 credits ($0.30) | PR author |
+| analyze action:propose_compromise | 60 credits ($0.30) | PR author |
 
 PR authors pay for the analysis — this is the "review fee" that acts as a spam filter. For your own PRs on your own projects, use the admin secret (free).
 

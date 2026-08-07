@@ -165,9 +165,9 @@ Conditional commitments create accountability chains. Track fulfillment with `de
 
 | Action | Credits |
 |---|---|
-| `analyze action:run` | 50 (Sonnet) / 200 (Opus) / 20 (Haiku) |
-| `analyze action:propose_compromise` | 50 |
-| `analyze action:reframe` | 50 |
+| `analyze action:run` | 60 (Sonnet) / 300 (Opus) / 20 (Haiku) |
+| `analyze action:propose_compromise` | 60 |
+| `analyze action:reframe` | 60 |
 | Everything else | Free |
 
 The starter pack (1000 credits, $5) gets you ~20 Sonnet analyses or ~50 Haiku analyses.
