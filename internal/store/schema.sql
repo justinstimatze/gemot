@@ -96,10 +96,17 @@ CREATE TABLE IF NOT EXISTS commitment_access (
     accessor_id TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'read',
     note TEXT DEFAULT '',
+    -- For kind='dependency': the commitment the accessor made that relies on
+    -- this one. Ties the stakes signal to a real, costly, key-attributable
+    -- artifact rather than a bare forgeable row.
+    dependent_commitment_id TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_commitment_access_commitment ON commitment_access(commitment_id);
+-- Migration: for already-created commitment_access tables (deployed before the
+-- dependency-references-a-commitment hardening).
+ALTER TABLE commitment_access ADD COLUMN IF NOT EXISTS dependent_commitment_id TEXT DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS join_codes (
     code TEXT PRIMARY KEY,

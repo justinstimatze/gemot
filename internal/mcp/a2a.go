@@ -1027,7 +1027,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 					accessor = str(s, "agent_id")
 				}
 				accessor = scope(accessor)
-				a, err := CoreRecordAccess(ctx, svc, str(s, "commitment_id"), accessor, str(s, "kind"), str(s, "note"), keyID)
+				a, err := CoreRecordAccess(ctx, svc, str(s, "commitment_id"), accessor, str(s, "kind"), str(s, "note"), str(s, "dependent_commitment_id"), keyID)
 				if err != nil {
 					writeA2AError(w, req.ID, -32000, sanitizeError(err))
 					return

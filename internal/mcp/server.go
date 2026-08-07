@@ -302,18 +302,19 @@ type analyzeToolParams struct {
 }
 
 type decideParams struct {
-	Action         string `json:"action"`
-	DeliberationID string `json:"deliberation_id,omitempty"`
-	AgentID        string `json:"agent_id,omitempty"`
-	Statement      string `json:"statement,omitempty"`
-	Conditional    string `json:"conditional,omitempty"`
-	CommitmentID   string `json:"commitment_id,omitempty"`
-	Reason         string `json:"reason,omitempty"`
-	VerifiedBy     string `json:"verified_by,omitempty"`
-	GroupID        string `json:"group_id,omitempty"`
-	AccessorID     string `json:"accessor_id,omitempty"`
-	Kind           string `json:"kind,omitempty"`
-	Note           string `json:"note,omitempty"`
+	Action                string `json:"action"`
+	DeliberationID        string `json:"deliberation_id,omitempty"`
+	AgentID               string `json:"agent_id,omitempty"`
+	Statement             string `json:"statement,omitempty"`
+	Conditional           string `json:"conditional,omitempty"`
+	CommitmentID          string `json:"commitment_id,omitempty"`
+	Reason                string `json:"reason,omitempty"`
+	VerifiedBy            string `json:"verified_by,omitempty"`
+	GroupID               string `json:"group_id,omitempty"`
+	AccessorID            string `json:"accessor_id,omitempty"`
+	Kind                  string `json:"kind,omitempty"`
+	Note                  string `json:"note,omitempty"`
+	DependentCommitmentID string `json:"dependent_commitment_id,omitempty"`
 }
 
 type coordinateParams struct {
@@ -1100,7 +1101,7 @@ func (s *server) handleDecide(ctx context.Context, _ *sdkmcp.CallToolRequest, ar
 			accessor = args.AgentID
 		}
 		accessor = scopeAgentID(ctx, accessor)
-		a, err := CoreRecordAccess(ctx, s.svc, args.CommitmentID, accessor, args.Kind, args.Note, keyID)
+		a, err := CoreRecordAccess(ctx, s.svc, args.CommitmentID, accessor, args.Kind, args.Note, args.DependentCommitmentID, keyID)
 		if err != nil {
 			return errResult(err)
 		}

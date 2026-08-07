@@ -3043,10 +3043,15 @@ func (s *Service) verifyVoteSignature(ctx context.Context, d *Deliberation, v *V
 // ordered log and stamps the time server-side, because a signal a third party
 // is meant to trust cannot be one either party can backdate or omit.
 //
-// The committer may not record access to its own artifact: "downstream" means
-// someone other than the seller touched it, so a self-access would let a seller
-// manufacture its own clock. kind is read | question | dependency.
-func (s *Service) RecordAccess(ctx context.Context, commitmentID, accessorID, kind, note, keyID string) (*CommitmentAccess, error) {
+// The committer may not record access to its own artifact (checked by both key
+// ownership and agent id): "downstream" means someone else touched it, so a
+// self-access would let a seller manufacture its own immunity clock. kind is
+// read | question | dependency. A dependency MUST reference dependentCommitmentID
+// — a commitment authored by the accessor that relies on this one — which is
+// what makes the stakes signal costly and attributable rather than a bare,
+// forgeable row. (A determined maker can still field sock-puppet identities;
+// that residual Sybil surface is documented in docs/payment-mesh-poc.md.)
+func (s *Service) RecordAccess(ctx context.Context, commitmentID, accessorID, kind, note, dependentCommitmentID, keyID string) (*CommitmentAccess, error) {
 	c, err := s.store.GetCommitmentByID(ctx, commitmentID)
 	if err != nil {
 		return nil, err
@@ -3054,23 +3059,46 @@ func (s *Service) RecordAccess(ctx context.Context, commitmentID, accessorID, ki
 	if err := s.CheckParticipant(ctx, c.DeliberationID, keyID); err != nil {
 		return nil, err
 	}
-	// A committer touching its own artifact is not a downstream signal.
-	if keyID != "" && strings.HasPrefix(c.AgentID, keyID+":") {
+	// A committer touching its own artifact is not a downstream signal —
+	// rejected by key ownership AND by agent id, so a maker cannot stamp its
+	// own clock or inflate its own stakes.
+	if (keyID != "" && strings.HasPrefix(c.AgentID, keyID+":")) || accessorID == c.AgentID {
 		return nil, fmt.Errorf("access denied: a commitment's own author cannot record downstream access to it")
 	}
 	switch kind {
 	case "", "read":
 		kind = "read"
-	case "question", "dependency":
-		// ok
+		dependentCommitmentID = ""
+	case "question":
+		dependentCommitmentID = ""
+	case "dependency":
+		if dependentCommitmentID == "" {
+			return nil, fmt.Errorf("a dependency access requires dependent_commitment_id — the commitment you made that relies on this one")
+		}
+		if dependentCommitmentID == commitmentID {
+			return nil, fmt.Errorf("a commitment cannot be recorded as its own dependent")
+		}
+		dep, err := s.store.GetCommitmentByID(ctx, dependentCommitmentID)
+		if err != nil {
+			return nil, fmt.Errorf("dependent commitment not found: %w", err)
+		}
+		// The dependent must be the accessor's OWN commitment — that is what
+		// makes a dependency a costly, key-attributable act rather than a row
+		// anyone can write.
+		ownedByKey := keyID != "" && strings.HasPrefix(dep.AgentID, keyID+":")
+		ownedByAgent := dep.AgentID == accessorID
+		if !ownedByKey && !ownedByAgent {
+			return nil, fmt.Errorf("access denied: dependent_commitment_id must be a commitment authored by the accessor")
+		}
 	default:
 		return nil, fmt.Errorf("invalid access kind %q — use: read, question, dependency", kind)
 	}
 	a := &CommitmentAccess{
-		CommitmentID: commitmentID,
-		AccessorID:   accessorID,
-		Kind:         kind,
-		Note:         note,
+		CommitmentID:          commitmentID,
+		AccessorID:            accessorID,
+		Kind:                  kind,
+		Note:                  note,
+		DependentCommitmentID: dependentCommitmentID,
 	}
 	// Field order is action_type|deliberation_id|agent_id|… as the tamper-
 	// evident log parses; the acting agent is the accessor.
@@ -3094,7 +3122,10 @@ func (s *Service) RecordAccess(ctx context.Context, commitmentID, accessorID, ki
 // It supplies immunity + evidence, not a verdict: FirstDownstreamAccessAt is
 // the immunity cutoff, FirstQuestionAt the on-notice floor. No auto-deadline
 // is emitted (the real trigger, seller knowledge, is unobservable). Stakes key
-// to dependents only — a raw reader count is gameable upward.
+// to DISTINCT, LIVE dependent commitments only: a dependency references a real
+// commitment authored by the accessor, and one whose commitment is later
+// broken/withdrawn stops counting — so the marker is neither a bare forgeable
+// row nor a ratchet that reads high forever after reliance has ended.
 func (s *Service) CommitmentSignals(ctx context.Context, commitmentID string) (*CommitmentSignals, error) {
 	if _, err := s.store.GetCommitmentByID(ctx, commitmentID); err != nil {
 		return nil, err
@@ -3104,11 +3135,12 @@ func (s *Service) CommitmentSignals(ctx context.Context, commitmentID string) (*
 		return nil, err
 	}
 	sig := &CommitmentSignals{CommitmentID: commitmentID, StakesLevel: "normal"}
-	distinct := map[string]struct{}{}
+	distinctAccessors := map[string]struct{}{}
+	liveDependents := map[string]struct{}{}
 	for i := range accesses {
 		a := accesses[i]
 		sig.AccessCount++
-		distinct[a.AccessorID] = struct{}{}
+		distinctAccessors[a.AccessorID] = struct{}{}
 		if sig.FirstDownstreamAccessAt == nil {
 			t := a.CreatedAt
 			sig.FirstDownstreamAccessAt = &t
@@ -3119,14 +3151,21 @@ func (s *Service) CommitmentSignals(ctx context.Context, commitmentID string) (*
 			t := a.CreatedAt
 			sig.FirstQuestionAt = &t
 		}
-		if a.Kind == "dependency" {
-			sig.DependentCount++
+		if a.Kind == "dependency" && a.DependentCommitmentID != "" {
+			if _, seen := liveDependents[a.DependentCommitmentID]; !seen {
+				// Count a dependent only while its commitment is still live;
+				// a broken/withdrawn dependent means reliance has ended.
+				if dep, derr := s.store.GetCommitmentByID(ctx, a.DependentCommitmentID); derr == nil && dep.Status != "broken" {
+					liveDependents[a.DependentCommitmentID] = struct{}{}
+				}
+			}
 		}
 	}
-	sig.DistinctAccessors = len(distinct)
+	sig.DistinctAccessors = len(distinctAccessors)
+	sig.DependentCount = len(liveDependents)
 
-	// Stakes: dependents only. A reader count — even a large one — never fires
-	// high, so N sock-puppet reads cannot force a costly mandatory tier.
+	// Stakes: distinct live dependents only. A reader count — even a large one
+	// — never fires high, and a forged/stale dependency does not persist as one.
 	if sig.DependentCount >= 1 {
 		sig.StakesLevel = "high"
 	}

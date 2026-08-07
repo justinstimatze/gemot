@@ -1207,8 +1207,8 @@ func (s *DB) RecordCommitmentAccess(ctx context.Context, a *deliberation.Commitm
 		a.Kind = "read"
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO commitment_access (id, commitment_id, accessor_id, kind, note, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		a.ID, a.CommitmentID, a.AccessorID, a.Kind, a.Note, a.CreatedAt,
+		`INSERT INTO commitment_access (id, commitment_id, accessor_id, kind, note, dependent_commitment_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		a.ID, a.CommitmentID, a.AccessorID, a.Kind, a.Note, a.DependentCommitmentID, a.CreatedAt,
 	)
 	return err
 }
@@ -1217,7 +1217,7 @@ func (s *DB) RecordCommitmentAccess(ctx context.Context, a *deliberation.Commitm
 // ascending created_at order.
 func (s *DB) GetCommitmentAccesses(ctx context.Context, commitmentID string) ([]deliberation.CommitmentAccess, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, commitment_id, accessor_id, kind, COALESCE(note, ''), created_at FROM commitment_access WHERE commitment_id = $1 ORDER BY created_at`,
+		`SELECT id, commitment_id, accessor_id, kind, COALESCE(note, ''), COALESCE(dependent_commitment_id, ''), created_at FROM commitment_access WHERE commitment_id = $1 ORDER BY created_at`,
 		commitmentID,
 	)
 	if err != nil {
@@ -1227,7 +1227,7 @@ func (s *DB) GetCommitmentAccesses(ctx context.Context, commitmentID string) ([]
 	var result []deliberation.CommitmentAccess
 	for rows.Next() {
 		var a deliberation.CommitmentAccess
-		if err := rows.Scan(&a.ID, &a.CommitmentID, &a.AccessorID, &a.Kind, &a.Note, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.CommitmentID, &a.AccessorID, &a.Kind, &a.Note, &a.DependentCommitmentID, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, a)

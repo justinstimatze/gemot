@@ -173,12 +173,18 @@ type Vote struct {
 // the third-party-readable clock (first/last downstream access) and the
 // party-independent stakes marker (distinct accessors, dependent commitments).
 type CommitmentAccess struct {
-	ID           string    `json:"access_id"`
-	CommitmentID string    `json:"commitment_id"`
-	AccessorID   string    `json:"accessor_id"`
-	Kind         string    `json:"kind"` // read | question | dependency
-	Note         string    `json:"note,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           string `json:"access_id"`
+	CommitmentID string `json:"commitment_id"`
+	AccessorID   string `json:"accessor_id"`
+	Kind         string `json:"kind"` // read | question | dependency
+	Note         string `json:"note,omitempty"`
+	// DependentCommitmentID is required for kind="dependency": the commitment
+	// the accessor made that relies on this one. It makes a dependency costly
+	// (you must have made a real, reputation-bearing commitment) and
+	// attributable (to that commitment), so the stakes signal is not a bare
+	// forgeable row.
+	DependentCommitmentID string    `json:"dependent_commitment_id,omitempty"`
+	CreatedAt             time.Time `json:"created_at"`
 }
 
 // CommitmentSignals is the externally-visible clock + stakes marker derived
@@ -214,9 +220,10 @@ type CommitmentSignals struct {
 	// DistinctAccessors and AccessCount are reported but do NOT set stakes.
 	DistinctAccessors int `json:"distinct_accessors"`
 	AccessCount       int `json:"access_count"`
-	// DependentCount is the stakes signal: a dependent commitment is a costly,
-	// logged act by someone other than the seller — expensive to fake and hard
-	// to suppress.
+	// DependentCount is the stakes signal: the number of DISTINCT, still-live
+	// commitments (authored by others) that declared a dependency on this one.
+	// A costly, key-attributable act — not a bare row — and broken/withdrawn
+	// dependents drop out, so it is not a ratchet.
 	DependentCount int    `json:"dependent_count"`
 	StakesLevel    string `json:"stakes_level"` // normal | high (high iff DependentCount >= 1)
 }

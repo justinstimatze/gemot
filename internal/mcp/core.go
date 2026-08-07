@@ -707,11 +707,11 @@ Be specific and constructive. Focus on what changed or what was missed.`, cruxSu
 	}, nil
 }
 
-func CoreRecordAccess(ctx context.Context, svc *deliberation.Service, commitmentID, accessorID, kind, note, keyID string) (*deliberation.CommitmentAccess, error) {
+func CoreRecordAccess(ctx context.Context, svc *deliberation.Service, commitmentID, accessorID, kind, note, dependentCommitmentID, keyID string) (*deliberation.CommitmentAccess, error) {
 	if commitmentID == "" || accessorID == "" {
 		return nil, fmt.Errorf("commitment_id and accessor_id are required")
 	}
-	return svc.RecordAccess(ctx, commitmentID, accessorID, kind, note, keyID)
+	return svc.RecordAccess(ctx, commitmentID, accessorID, kind, note, dependentCommitmentID, keyID)
 }
 
 func CoreCommitmentSignals(ctx context.Context, svc *deliberation.Service, commitmentID, keyID string) (*deliberation.CommitmentSignals, error) {
