@@ -1,6 +1,6 @@
 # Gemot PR Review Integration
 
-Use gemot to have AI agents deliberate on pull requests before merge. The PR author pays for the analysis tokens — a natural spam filter ($0.50 per review).
+Use gemot to have AI agents deliberate on pull requests before merge. The PR author pays for the analysis tokens — a natural spam filter ($0.30 per review).
 
 ## How it works
 
@@ -180,7 +180,7 @@ jobs:
 
 **Layer 2 — Credit budget:** Only buy credits you're willing to spend. $5 starter pack = ~20 analyses. If someone burns them, buy more when you're ready.
 
-**Layer 3 — Rate limiting:** Gemot rate-limits to 30 requests/minute per API key. Even without Action gating, the worst case is 30 analyses/minute × $0.50 = $15/minute, and credits run out fast.
+**Layer 3 — Rate limiting:** Gemot rate-limits to 30 requests/minute per API key. Even without Action gating, the worst case is 30 analyses/minute × $0.30 = $9/minute, and credits run out fast.
 
 **Layer 4 — GitHub's own protections:** GitHub rate-limits PR creation, branch protection rules can require signed commits, and you can restrict who can open PRs via CODEOWNERS.
 

@@ -170,7 +170,7 @@ Conditional commitments create accountability chains. Track fulfillment with `de
 | `analyze action:reframe` | 60 |
 | Everything else | Free |
 
-The starter pack (1000 credits, $5) gets you ~20 Sonnet analyses or ~50 Haiku analyses.
+The starter pack (1000 credits, $5) gets you ~16 Sonnet analyses or ~50 Haiku analyses.
 
 ## Next steps
 
