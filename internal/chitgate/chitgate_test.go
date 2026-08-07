@@ -3,7 +3,6 @@ package chitgate
 import (
 	"context"
 	"testing"
-	"time"
 
 	chit "github.com/justinstimatze/chit/server"
 	"github.com/justinstimatze/gemot/internal/payments"
@@ -31,66 +30,105 @@ func TestCentsToAmount(t *testing.T) {
 	}
 }
 
-func TestCorrelationKey(t *testing.T) {
-	c := &chitMerchant{}
-	keyed := context.WithValue(context.Background(), payments.ContextKeyKeyID{}, "k123")
-	if got := c.correlationKey(keyed, payments.X402PaymentRequest{PayerAccountID: "atxp:payer"}); got != "k123" {
-		t.Errorf("ctx keyID should win, got %q", got)
+func TestPayToAddress(t *testing.T) {
+	cases := map[string]string{
+		"base:0x948eB1Bc3fb960D97EA7AFc0FAca9F6625352594": "0x948eB1Bc3fb960D97EA7AFc0FAca9F6625352594",
+		"0xabc":              "0xabc",  // no prefix → unchanged
+		"base:":              "",       // prefix only → empty
+		"eip155:8453:0xdead": "0xdead", // strips to the last colon (CAIP-2 style)
 	}
-	if got := c.correlationKey(context.Background(), payments.X402PaymentRequest{PayerAccountID: "atxp:payer"}); got != "atxp:payer" {
-		t.Errorf("should fall back to payer account, got %q", got)
-	}
-	if got := c.correlationKey(context.Background(), payments.X402PaymentRequest{}); got != "default" {
-		t.Errorf("should fall back to default, got %q", got)
-	}
-}
-
-func TestChallengeCache_RememberRecallForget(t *testing.T) {
-	orig := nowFn
-	defer func() { nowFn = orig }()
-	base := time.Unix(1_700_000_000, 0)
-	nowFn = func() time.Time { return base }
-
-	c := &chitMerchant{pending: map[string]pendingChallenge{}}
-	ch := &chit.Challenge{Data: map[string]any{"paymentRequestId": "pr-abc"}}
-
-	c.remember("corr1", ch)
-	p, ok := c.recall("corr1")
-	if !ok || p.paymentID != "pr-abc" {
-		t.Fatalf("recall after remember: ok=%v paymentID=%q", ok, p.paymentID)
-	}
-	c.forget("corr1")
-	if _, ok := c.recall("corr1"); ok {
-		t.Fatal("recall after forget should miss")
+	for in, want := range cases {
+		if got := payToAddress(in); got != want {
+			t.Errorf("payToAddress(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
-func TestChallengeCache_TTLExpiry(t *testing.T) {
-	orig := nowFn
-	defer func() { nowFn = orig }()
-	base := time.Unix(1_700_000_000, 0)
-	nowFn = func() time.Time { return base }
-
-	c := &chitMerchant{pending: map[string]pendingChallenge{}}
-	c.remember("corr", &chit.Challenge{Data: map[string]any{"paymentRequestId": "pr"}})
-
-	// Just inside the window → still present.
-	nowFn = func() time.Time { return base.Add(pendingTTL - time.Second) }
-	if _, ok := c.recall("corr"); !ok {
-		t.Fatal("should still be present just inside TTL")
+func TestMintRequirements(t *testing.T) {
+	c := &chitMerchant{payTo: "0x948eB1Bc3fb960D97EA7AFc0FAca9F6625352594"}
+	reqs, err := c.mintRequirements(500, "gemot:buy_credits")
+	if err != nil {
+		t.Fatalf("mintRequirements: %v", err)
 	}
-	// Past the window → pruned on read.
-	nowFn = func() time.Time { return base.Add(pendingTTL + time.Second) }
-	if _, ok := c.recall("corr"); ok {
-		t.Fatal("should be expired past TTL")
+	if reqs.X402Version != x402Version {
+		t.Errorf("X402Version = %d, want %d", reqs.X402Version, x402Version)
+	}
+	if len(reqs.Accepts) != 1 {
+		t.Fatalf("Accepts len = %d, want 1", len(reqs.Accepts))
+	}
+	a := reqs.Accepts[0]
+	// $5.00 = 500 cents = 5.00 USDC = 5_000_000 atomic units.
+	if a.Amount != "5000000" {
+		t.Errorf("Amount = %q, want %q", a.Amount, "5000000")
+	}
+	if a.Scheme != x402Scheme || a.Network != x402Network {
+		t.Errorf("scheme/network = %q/%q, want %q/%q", a.Scheme, a.Network, x402Scheme, x402Network)
+	}
+	if a.PayTo != c.payTo {
+		t.Errorf("PayTo = %q, want %q", a.PayTo, c.payTo)
+	}
+	if a.Asset != usdcAssetBase {
+		t.Errorf("Asset = %q, want %q", a.Asset, usdcAssetBase)
+	}
+	if a.MaxTimeoutSeconds != x402MaxTimeoutSeconds {
+		t.Errorf("MaxTimeoutSeconds = %d, want %d", a.MaxTimeoutSeconds, x402MaxTimeoutSeconds)
+	}
+	if a.Extra["name"] != usdcEIP712Name || a.Extra["version"] != usdcEIP712Version {
+		t.Errorf("Extra = %v, want name=%q version=%q", a.Extra, usdcEIP712Name, usdcEIP712Version)
+	}
+	if a.Resource != "gemot:buy_credits" {
+		t.Errorf("Resource = %q, want %q", a.Resource, "gemot:buy_credits")
+	}
+	// Guardrails: non-positive price and missing payout address must error.
+	if _, err := c.mintRequirements(0, "r"); err == nil {
+		t.Error("expected error for 0 cents")
+	}
+	empty := &chitMerchant{}
+	if _, err := empty.mintRequirements(500, "r"); err == nil {
+		t.Error("expected error when payTo is empty")
 	}
 }
 
-func TestToChallengeInfo(t *testing.T) {
-	ch := &chit.Challenge{Code: -30402, Message: "pay up", Data: map[string]any{"x402": "reqs"}}
-	ci := toChallengeInfo(ch)
-	if ci.Code != -30402 || ci.Message != "pay up" || ci.Data["x402"] != "reqs" {
-		t.Fatalf("toChallengeInfo mismapped: %+v", ci)
+func TestChallengeFrom(t *testing.T) {
+	c := &chitMerchant{payTo: "0xabc"}
+	reqs, err := c.mintRequirements(100, "r")
+	if err != nil {
+		t.Fatalf("mintRequirements: %v", err)
+	}
+	ci := challengeFrom(reqs)
+	if ci.Code != x402PaymentRequiredCode {
+		t.Errorf("Code = %d, want %d", ci.Code, x402PaymentRequiredCode)
+	}
+	if ci.Message == "" {
+		t.Error("Message should be non-empty")
+	}
+	got, ok := ci.Data["x402"].(chit.X402PaymentRequirements)
+	if !ok {
+		t.Fatalf("Data[\"x402\"] type = %T, want chit.X402PaymentRequirements", ci.Data["x402"])
+	}
+	if len(got.Accepts) != 1 || got.Accepts[0].Amount != "1000000" {
+		t.Errorf("challenge requirements not carried through: %+v", got)
+	}
+}
+
+// TestRequirePayment_Call1SelfMint proves call 1 emits a challenge WITHOUT
+// touching chit: the merchant's *chit.Merchant is nil, so any attempt to call it
+// would panic. A clean challenge return is the proof the decouple holds.
+func TestRequirePayment_Call1SelfMint(t *testing.T) {
+	c := &chitMerchant{payTo: "0x948eB1Bc3fb960D97EA7AFc0FAca9F6625352594", resource: "gemot:buy_credits"}
+	settled, ch, err := c.RequirePayment(context.Background(), payments.X402PaymentRequest{PriceCents: 500})
+	if err != nil {
+		t.Fatalf("call-1 RequirePayment: %v", err)
+	}
+	if settled != nil {
+		t.Errorf("call-1 must not settle, got %+v", settled)
+	}
+	if ch == nil {
+		t.Fatal("call-1 must return a challenge")
+	}
+	reqs, ok := ch.Data["x402"].(chit.X402PaymentRequirements)
+	if !ok || len(reqs.Accepts) != 1 || reqs.Accepts[0].Amount != "5000000" {
+		t.Fatalf("call-1 challenge shape wrong: %+v", ch.Data)
 	}
 }
 

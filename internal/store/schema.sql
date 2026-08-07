@@ -559,3 +559,15 @@ CREATE TABLE IF NOT EXISTS schema_version (
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
 INSERT INTO schema_version (version) VALUES (10) ON CONFLICT DO NOTHING;
+
+-- x402 buy_credits idempotency: one credit per EIP-3009 authorization nonce.
+-- The nonce is consumed on-chain at settlement, so it is the canonical replay
+-- identity — keying here stops a concurrent double-present (or an AlreadySettled
+-- retry) from crediting the same paid authorization twice. The credit + this row
+-- commit in one transaction (see CreditStore.CreditX402Settlement).
+CREATE TABLE IF NOT EXISTS x402_settlements (
+    nonce TEXT PRIMARY KEY,
+    api_key TEXT NOT NULL,
+    credits INTEGER NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);

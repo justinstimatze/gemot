@@ -4,19 +4,25 @@
 // unit-testable against a fake merchant, and the on-chain seam — which can only
 // be validated live — is isolated here.
 //
-// It orchestrates chit's two-phase bare-402 flow behind the single-call
-// x402Merchant shape payments.X402Gate expects:
+// It orchestrates chit's bare-402 x402 flow behind the single-call x402Merchant
+// shape payments.X402Gate expects:
 //
-//	call 1 (no credential): Merchant.RequirePayment → a 402 Challenge to emit.
+//	call 1 (no credential): gemot SELF-MINTS the x402 challenge to emit.
 //	call 2 (credential):    DetectProtocol → OpenPaymentSession → RequirePayment
 //	                        (charges the session) → CloseSession (settles
 //	                        on-chain) → the verified payer address.
 //
-// The subtlety chit's own x402stranger example calls out: a session's settle
-// needs the SAME X402PaymentRequirements advertised in call 1's challenge, and
-// chit has no exported way to rebuild it. So call 1's requirements are cached
-// and replayed on call 2 — keyed by the authenticated gemot caller (ctx), which
-// is stable across the two-call exchange, rather than the example's RemoteAddr.
+// Why self-mint call 1 (instead of asking chit): on the bare-402 path a
+// credential-less call sets User=merchantID with no OAuth, so chit's pull
+// /charge probe sees source==destination — a self-charge that the AS can report
+// as already-settled right after the merchant settled anything, wedging strangers
+// out of a challenge at prod scale. call 2 takes chit's Session branch, which
+// skips /charge entirely and was always safe. So the fix is isolated to call 1:
+// don't call chit there at all. Since the price is a static per-pack lookup, both
+// calls recompute the SAME X402PaymentRequirements deterministically — no cached
+// challenge state, no RemoteAddr correlation. The settle path (call 2) needs the
+// same requirements that were advertised in call 1, and recomputing gives exactly
+// that.
 package chitgate
 
 import (
@@ -25,26 +31,42 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
-	"time"
+	"strings"
 
 	chit "github.com/justinstimatze/chit/server"
 	"github.com/justinstimatze/gemot/internal/payments"
 )
 
-// pendingTTL bounds how long a call-1 challenge waits for its call-2 credential
-// before it is pruned. Generous enough for a human-paced pay-and-retry, tight
-// enough that abandoned challenges don't accumulate.
-const pendingTTL = 15 * time.Minute
+// x402 challenge constants for the Base / USDC "exact" scheme. gemot's merchant
+// Destination is a Base address and it is paid in USDC, so these are fixed for
+// this deployment. If a second chain/asset is ever added, lift them into Config.
+const (
+	x402Version           = 2
+	x402Network           = "eip155:8453"                                // Base mainnet (CAIP-2)
+	x402Scheme            = "exact"                                      // EIP-3009 transferWithAuthorization
+	usdcAssetBase         = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" // USD Coin on Base
+	usdcEIP712Name        = "USD Coin"                                   // EIP-712 domain name — MUST match USDC's real domain
+	usdcEIP712Version     = "2"                                          // EIP-712 domain version on Base
+	x402MaxTimeoutSeconds = 300
+	// usdcAtomicPerCent scales integer US cents to USDC atomic units (6 decimals):
+	// 1 cent = $0.01 = 0.01 USDC = 10_000 atomic units. So 500 cents → 5_000_000.
+	usdcAtomicPerCent = 10_000
+)
+
+// x402PaymentRequiredCode is the code surfaced to the agent in the
+// payment-required result. Informational: the x402 payer reads data.x402.accepts,
+// not this code.
+const x402PaymentRequiredCode = 402
 
 // Config configures the chit-backed merchant gate. Only MerchantID is required.
 // ConnectionToken is optional (see the field) and, when set, is a wallet-grade
 // secret that must come from the environment, never source.
 type Config struct {
 	// MerchantID is chit's "network:address" account id, e.g.
-	// "base:0x52440B7EF75B9329b84Fed88061e5665767b409B". It doubles as the
+	// "base:0x948eB1Bc3fb960D97EA7AFc0FAca9F6625352594". It doubles as the
 	// destination and the nominal sourceAccountId (never checked against the
-	// real payer — abuse controls key on the credential's signer instead).
+	// real payer — abuse controls key on the credential's signer instead). The
+	// bare address (after the "network:" prefix) is the x402 payTo.
 	MerchantID string
 
 	// ConnectionToken is the merchant's ATXP connection token. OPTIONAL: needed
@@ -96,8 +118,8 @@ func New(cfg Config) (payments.CreditGate, error) {
 	adapter := &chitMerchant{
 		m:          m,
 		merchantID: cfg.MerchantID,
+		payTo:      payToAddress(cfg.MerchantID),
 		resource:   cfg.Resource,
-		pending:    map[string]pendingChallenge{},
 	}
 	// merchantID is passed as the gate's nominal source account (bare-402
 	// requirement). The X402Gate layers on settle-before-serve + payer-signer
@@ -105,21 +127,12 @@ func New(cfg Config) (payments.CreditGate, error) {
 	return payments.NewX402Gate(adapter, cfg.MerchantID, cfg.Policy)
 }
 
-// pendingChallenge is a call-1 challenge awaiting its call-2 credential.
-type pendingChallenge struct {
-	reqs      chit.X402PaymentRequirements
-	paymentID string
-	at        time.Time
-}
-
 // chitMerchant adapts a *chit.Merchant onto payments' x402Merchant shape.
 type chitMerchant struct {
 	m          *chit.Merchant
 	merchantID string
+	payTo      string // bare on-chain address (merchantID minus the "network:" prefix)
 	resource   string
-
-	mu      sync.Mutex
-	pending map[string]pendingChallenge
 }
 
 // RequirePayment implements the (unexported) payments.x402Merchant contract:
@@ -128,32 +141,24 @@ type chitMerchant struct {
 //	(nil, *ChallengeInfo, nil)  → payment required; emit the challenge.
 //	(nil, nil, non-nil)         → infrastructure/settle error; fail closed.
 func (c *chitMerchant) RequirePayment(ctx context.Context, req payments.X402PaymentRequest) (*payments.X402Settlement, *payments.ChallengeInfo, error) {
-	price, err := centsToAmount(req.PriceCents)
-	if err != nil {
-		return nil, nil, err
-	}
-	corr := c.correlationKey(ctx, req)
 	resource := c.resource
 	if req.Resource != "" {
 		resource = req.Resource
 	}
-
-	// Call 1: no credential yet — ask chit for a challenge to emit.
-	if req.Credential == "" {
-		ch, err := c.m.RequirePayment(ctx, chit.PaymentRequest{Price: price, User: c.merchantID, Resource: resource})
-		if err != nil {
-			return nil, nil, err
-		}
-		if ch == nil {
-			// chit reported paid with no credential presented. On the bare-402
-			// x402 path this should not happen; do not fabricate a settlement.
-			return nil, nil, errors.New("chitgate: merchant reported settlement with no credential presented")
-		}
-		c.remember(corr, ch)
-		return nil, toChallengeInfo(ch), nil
+	reqs, err := c.mintRequirements(req.PriceCents, resource)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// Call 2: settle the presented credential.
+	// Call 1: no credential yet — emit a self-minted challenge. chit is not
+	// consulted here (see the package doc: this is the whole point of the fix).
+	if req.Credential == "" {
+		return nil, challengeFrom(reqs), nil
+	}
+
+	// Call 2: settle the presented credential. chit's Session branch skips the
+	// pull /charge entirely; the requirements it settles against are the same
+	// ones advertised in call 1 (recomputed above, deterministically).
 	hdr := http.Header{}
 	hdr.Set("X-Payment", req.Credential)
 	detected := chit.DetectProtocol(hdr)
@@ -161,10 +166,14 @@ func (c *chitMerchant) RequirePayment(ctx context.Context, req payments.X402Paym
 		return nil, nil, errors.New("chitgate: presented credential is not a recognized x402 payment credential")
 	}
 
-	sctx := chit.SettlementContext{SourceAccountID: c.merchantID, DestinationAccountID: c.merchantID}
-	if pend, ok := c.recall(corr); ok {
-		sctx.PaymentRequirements = &pend.reqs
-		sctx.PaymentRequestID = pend.paymentID
+	price, err := centsToAmount(req.PriceCents)
+	if err != nil {
+		return nil, nil, err
+	}
+	sctx := chit.SettlementContext{
+		PaymentRequirements:  &reqs,
+		SourceAccountID:      c.merchantID,
+		DestinationAccountID: c.merchantID,
 	}
 	session := c.m.OpenPaymentSession(*detected, sctx)
 
@@ -173,17 +182,19 @@ func (c *chitMerchant) RequirePayment(ctx context.Context, req payments.X402Paym
 		return nil, nil, err
 	}
 	if ch != nil {
-		// Still needs payment (credential rejected / insufficient). Re-challenge.
-		c.remember(corr, ch)
-		return nil, toChallengeInfo(ch), nil
+		// Still needs payment (credential rejected / insufficient). Re-challenge
+		// with our own minted requirements — never trust a chit-built one here.
+		return nil, challengeFrom(reqs), nil
 	}
 
 	// The charge is recorded against the session — settle it on-chain BEFORE we
-	// report success. A failed settle is not a paid charge: fail closed.
+	// report success. A failed settle is not a paid charge: fail closed. As of
+	// chit's UnderpaymentError change, CloseSession also fails here when the
+	// signer settled less than advertised, so this single check covers the
+	// amount-safety gate without a separate SettledAmount comparison.
 	if err := c.m.CloseSession(ctx, session); err != nil {
 		return nil, nil, fmt.Errorf("chitgate: settlement failed: %w", err)
 	}
-	c.forget(corr)
 
 	// The verified EIP-3009 signer — the one identity the gate accounts on.
 	payer, err := chit.ExtractX402PayerAddress(req.Credential)
@@ -196,62 +207,50 @@ func (c *chitMerchant) RequirePayment(ctx context.Context, req payments.X402Paym
 	return &payments.X402Settlement{PayerAddress: payer}, nil, nil
 }
 
-// correlationKey ties call 1 (challenge) to call 2 (credential). The
-// authenticated gemot caller is stable across both; fall back to the payer's
-// ATXP account, then a single shared slot for the unauthenticated stdio case.
-func (c *chitMerchant) correlationKey(ctx context.Context, req payments.X402PaymentRequest) string {
-	if k, _ := ctx.Value(payments.ContextKeyKeyID{}).(string); k != "" {
-		return k
+// mintRequirements builds the x402 "exact" requirements for a pack price. Both
+// call 1 (challenge) and call 2 (settle) call this with the same PriceCents, so
+// the settle path presents exactly what was advertised.
+func (c *chitMerchant) mintRequirements(priceCents int64, resource string) (chit.X402PaymentRequirements, error) {
+	if priceCents <= 0 {
+		return chit.X402PaymentRequirements{}, fmt.Errorf("chitgate: price must be positive, got %d cents", priceCents)
 	}
-	if req.PayerAccountID != "" {
-		return req.PayerAccountID
+	if c.payTo == "" {
+		return chit.X402PaymentRequirements{}, errors.New("chitgate: merchant has no payout address")
 	}
-	return "default"
+	return chit.X402PaymentRequirements{
+		X402Version: x402Version,
+		Accepts: []chit.X402PaymentOption{{
+			Scheme:            x402Scheme,
+			Network:           x402Network,
+			Amount:            fmt.Sprintf("%d", priceCents*usdcAtomicPerCent),
+			Resource:          resource,
+			Description:       "gemot credit purchase",
+			PayTo:             c.payTo,
+			MaxTimeoutSeconds: x402MaxTimeoutSeconds,
+			Asset:             usdcAssetBase,
+			Extra:             map[string]any{"name": usdcEIP712Name, "version": usdcEIP712Version},
+		}},
+	}, nil
 }
 
-func (c *chitMerchant) remember(corr string, ch *chit.Challenge) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pruneLocked()
-	c.pending[corr] = pendingChallenge{
-		reqs:      ch.X402,
-		paymentID: fmt.Sprint(ch.Data["paymentRequestId"]),
-		at:        nowFn(),
-	}
-}
-
-func (c *chitMerchant) recall(corr string) (pendingChallenge, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	p, ok := c.pending[corr]
-	if ok && nowFn().Sub(p.at) >= pendingTTL {
-		delete(c.pending, corr)
-		return pendingChallenge{}, false
-	}
-	return p, ok
-}
-
-func (c *chitMerchant) forget(corr string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.pending, corr)
-}
-
-// pruneLocked drops expired pending challenges. Caller holds c.mu.
-func (c *chitMerchant) pruneLocked() {
-	now := nowFn()
-	for k, p := range c.pending {
-		if now.Sub(p.at) >= pendingTTL {
-			delete(c.pending, k)
-		}
+// challengeFrom wraps minted requirements in the ChallengeInfo shape the gate
+// re-emits to the agent. Data mirrors chit's challenge under the "x402" key
+// (paymentRequestId/chargeAmount are ATXP-native and intentionally omitted).
+func challengeFrom(reqs chit.X402PaymentRequirements) *payments.ChallengeInfo {
+	return &payments.ChallengeInfo{
+		Code:    x402PaymentRequiredCode,
+		Message: "Payment required. Sign the x402 challenge and retry with the credential.",
+		Data:    map[string]any{"x402": reqs},
 	}
 }
 
-// nowFn is time.Now, indirected for tests.
-var nowFn = time.Now
-
-func toChallengeInfo(ch *chit.Challenge) *payments.ChallengeInfo {
-	return &payments.ChallengeInfo{Code: ch.Code, Message: ch.Message, Data: ch.Data}
+// payToAddress strips the "network:" prefix from a chit MerchantID to get the
+// bare on-chain payout address the x402 accepts array carries.
+func payToAddress(merchantID string) string {
+	if i := strings.LastIndexByte(merchantID, ':'); i >= 0 {
+		return merchantID[i+1:]
+	}
+	return merchantID
 }
 
 // centsToAmount converts integer US cents to a chit Amount via its decimal

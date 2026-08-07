@@ -378,3 +378,30 @@ func (g *X402Gate) RequirePayment(ctx context.Context, priceCents int64, account
 	g.policy.record(verified, priceCents)
 	return nil, nil
 }
+
+// decodeX402Nonce extracts payload.authorization.nonce from a base64 X-PAYMENT
+// credential — the EIP-3009 authorization nonce, unique per signed authorization
+// and consumed on-chain at settlement. buy_credits keys its once-only credit on
+// this so a concurrent double-present, an AlreadySettled retry, or a re-encoded
+// copy of the same authorization all credit exactly once.
+func decodeX402Nonce(credential string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(credential))
+	if err != nil {
+		return "", fmt.Errorf("x402: credential is not valid base64: %w", err)
+	}
+	var c struct {
+		Payload struct {
+			Authorization struct {
+				Nonce string `json:"nonce"`
+			} `json:"authorization"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return "", fmt.Errorf("x402: credential is not valid JSON: %w", err)
+	}
+	nonce := strings.TrimSpace(c.Payload.Authorization.Nonce)
+	if nonce == "" {
+		return "", errors.New("x402: credential authorization has no nonce")
+	}
+	return nonce, nil
+}

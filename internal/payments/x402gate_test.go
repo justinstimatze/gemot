@@ -447,12 +447,12 @@ func TestX402Gate_WithBuyCredits_EndToEnd(t *testing.T) {
 
 	// Paid path: credential present, merchant settles → credits added.
 	paid := mustGate(t, &fakeX402Merchant{mode: settleMode(testPayerAddr)}, testSourceAcct, nil)
-	adder := &fakeAdder{newBal: 500}
+	adder := &fakeAdder{}
 	res, err := BuyCredits(context.Background(), paid, adder, pack.Name, "gmt_key", "atxp:payer", cred)
 	if err != nil {
 		t.Fatalf("paid path errored: %v", err)
 	}
-	if adder.calls != 1 || res.NewBalance != 500 || res.Credits != pack.Credits {
+	if adder.calls != 1 || res.NewBalance != pack.Credits || res.Credits != pack.Credits {
 		t.Fatalf("unexpected paid result: calls=%d res=%+v", adder.calls, res)
 	}
 

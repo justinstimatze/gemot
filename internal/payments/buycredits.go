@@ -21,9 +21,13 @@ type ChallengeInfo struct {
 // rail, the gemot key is the account. Mirrors the Stripe checkout path
 // (pay → AddCredits) with ATXP swapped in for Stripe.
 //
+// Crediting is idempotent on the credential's EIP-3009 nonce: a concurrent
+// double-present, or an AlreadySettled retry of the same authorization, credits
+// the key exactly once (see CreditStore.CreditX402Settlement).
+//
 //	gemotKey        — the gemot API key whose balance is topped up (required).
 //	atxpAccountID   — the caller's ATXP account (sub); who gets charged.
-//	atxpSourceToken — optional pull-mode token for on-demand settle.
+//	atxpSourceToken — the base64 X-PAYMENT settle credential (empty on call 1).
 func BuyCredits(ctx context.Context, gate CreditGate, adder creditAdder, packName, gemotKey, atxpAccountID, atxpSourceToken string) (*BuyCreditsResult, error) {
 	if gate == nil || adder == nil {
 		return nil, errors.New("buy_credits: gate and credit store are required")
@@ -44,10 +48,20 @@ func BuyCredits(ctx context.Context, gate CreditGate, adder creditAdder, packNam
 		return nil, &ErrPaymentRequired{Challenge: ch}
 	}
 
-	bal, err := adder.AddCredits(gemotKey, pack.Credits)
+	// Settled. Key the credit on the credential's EIP-3009 nonce so a concurrent
+	// double-present or an AlreadySettled retry credits exactly once. A settled
+	// charge we cannot key is not safe to credit blindly — fail closed and flag
+	// for reconcile rather than risk a double-credit.
+	nonce, err := decodeX402Nonce(atxpSourceToken)
+	if err != nil {
+		return nil, fmt.Errorf("buy_credits: charge SETTLED but could not extract settlement nonce (reconcile, do not retry): %w", err)
+	}
+	bal, _, err := adder.CreditX402Settlement(nonce, gemotKey, pack.Credits)
 	if err != nil {
 		return nil, fmt.Errorf("buy_credits: charge SETTLED but crediting key failed (reconcile): %w", err)
 	}
+	// applied=false (nonce already processed) is not an error: the returned
+	// balance is authoritative and the credit was applied by the first settlement.
 	return &BuyCreditsResult{Pack: pack.Name, Credits: pack.Credits, NewBalance: bal}, nil
 }
 
@@ -77,7 +91,10 @@ type ErrPaymentRequired struct{ Challenge *ChallengeInfo }
 // creditAdder is the slice of *CreditStore the buy_credits handler needs, kept
 // as an interface so the handler is unit-testable without a database.
 type creditAdder interface {
-	AddCredits(key string, amount int) (int, error)
+	// CreditX402Settlement credits the pack once per settlement nonce, returning
+	// (balance, applied). applied=false means the nonce was already processed and
+	// no new credit was added.
+	CreditX402Settlement(nonce, key string, amount int) (int, bool, error)
 }
 
 // lookupPack resolves a credit pack by name (case-insensitive); empty name

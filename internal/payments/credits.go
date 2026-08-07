@@ -218,3 +218,52 @@ func MPPPriceForModel(model string) int64 {
 	}
 	return price
 }
+
+// CreditX402Settlement credits `amount` to `key` exactly once per settlement
+// `nonce` (the EIP-3009 authorization nonce). The nonce row and the balance
+// update commit in ONE transaction, so a concurrent double-present of the same
+// credential cannot double-credit: the x402_settlements PRIMARY KEY serializes
+// the racers and only the first INSERT wins. Returns (balance, applied);
+// applied=false means this nonce was already processed and NO new credit was
+// added — the returned balance is the current (unchanged) balance.
+func (s *CreditStore) CreditX402Settlement(nonce, key string, amount int) (int, bool, error) {
+	if nonce == "" {
+		return 0, false, fmt.Errorf("x402 settlement nonce required for idempotency")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, false, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
+		`INSERT INTO x402_settlements (nonce, api_key, credits) VALUES ($1, $2, $3) ON CONFLICT (nonce) DO NOTHING`,
+		nonce, key, amount,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Already processed — do NOT re-credit. Return the current balance.
+		var bal int
+		if err := tx.QueryRow(`SELECT credits_remaining FROM api_keys WHERE key = $1`, key).Scan(&bal); err != nil {
+			return 0, false, fmt.Errorf("api key not found")
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, false, err
+		}
+		return bal, false, nil
+	}
+
+	var bal int
+	if err := tx.QueryRow(
+		`UPDATE api_keys SET credits_remaining = credits_remaining + $1 WHERE key = $2 RETURNING credits_remaining`,
+		amount, key,
+	).Scan(&bal); err != nil {
+		return 0, false, fmt.Errorf("api key not found")
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, false, err
+	}
+	return bal, true, nil
+}
