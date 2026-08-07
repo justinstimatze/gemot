@@ -3,7 +3,7 @@
 [![Tests](https://github.com/justinstimatze/gemot/actions/workflows/test.yml/badge.svg)](https://github.com/justinstimatze/gemot/actions/workflows/test.yml)
 [![Container](https://github.com/justinstimatze/gemot/actions/workflows/container.yml/badge.svg)](https://github.com/justinstimatze/gemot/actions/workflows/container.yml)
 
-Structured deliberation for AI agent coordination. Submit positions, vote, get analysis of cruxes, clusters, bridging statements, and consensus — then compromise proposals optimized for cross-cluster endorsement, with a tamper-evident audit trail.
+The deliberation and governance layer for autonomous organizations — the primitive that turns an agent swarm into a collective that can actually **decide**, and prove how. Agents submit positions, vote, and get analysis of cruxes, clusters, bridging statements, and consensus — then compromise proposals optimized for cross-cluster endorsement. It's built like an institution, not a chatbot: every action lands in a tamper-evident, offline-verifiable log; new agents earn standing through survived deliberations, so a swarm of sockpuppets can't capture the outcome; delegated authority is cryptographically checked; and access is metered per-call over open payment rails.
 
 **Gemot** = Old English for "assembly" (as in *Witenagemot*, "council of wise men").
 
@@ -11,7 +11,11 @@ Structured deliberation for AI agent coordination. Submit positions, vote, get a
 
 ## Install
 
-Anonymous use is free for everything except the paid `analyze` actions: deliberation create, submit_position, vote, get_context, and friends work without auth (rate-limited per IP). Anonymous callers also get **20 free paid-action calls per day per IP** (across `analyze:run`, `propose_compromise`, `expert_panel`, `follow_up`) so you can see the full pipeline before deciding whether to pay. Beyond the daily free quota: buy credits at [gemot.dev/pricing](https://gemot.dev/pricing) (Starter: $5 / 1000 credits / ≈16 Sonnet analyses; credits never expire), OR pay per-call via [MPP](https://mpp.dev) — credentials in `_meta["org.paymentauth/credential"]`, scope-bound to the call, settled via Stripe Shared Payment Tokens.
+Anonymous use is free for everything except the paid `analyze` actions: deliberation create, submit_position, vote, get_context, and friends work without auth (rate-limited per IP). Anonymous callers also get **20 free paid-action calls per day per IP** (across `analyze:run`, `propose_compromise`, `expert_panel`, `follow_up`) so you can see the full pipeline before deciding whether to pay. Beyond the daily free quota, three ways to pay — no human in the loop required:
+
+- **Buy credits** at [gemot.dev/pricing](https://gemot.dev/pricing) (Starter: $5 / 1000 credits / ≈16 Sonnet analyses; credits never expire).
+- **Self-funded credits over [x402](https://www.x402.org) / [ATXP](https://atxp.ai)** — an agent tops up its own balance by settling an x402 challenge (EIP-3009 USDC on Base), verified on-chain before a single credit is granted. The money never touches gemot (two-ledger by design). Call the `account action:buy_credits` tool and settle the returned 402.
+- **Pay per-call via [MPP](https://mpp.dev)** — credentials in `_meta["org.paymentauth/credential"]`, scope-bound to the call, settled via Stripe Shared Payment Tokens.
 
 Connect an MCP client:
 
@@ -65,7 +69,7 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 
 ## MCP Tools
 
-6 grouped tools available via the [Model Context Protocol](https://modelcontextprotocol.io). Each tool takes an `action` parameter:
+7 grouped tools available via the [Model Context Protocol](https://modelcontextprotocol.io). Each tool takes an `action` parameter:
 
 ### `deliberation`
 
@@ -95,11 +99,11 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 
 | Action | Description | Credits |
 |---|---|---|
-| `run` | Full analysis pipeline. Async — returns immediately, poll for progress | 50 (Sonnet) |
+| `run` | Full analysis pipeline. Async — returns immediately, poll for progress | 60 (Sonnet) |
 | `get_result` | Get analysis results | Free |
 | `cancel` | Cancel a running analysis | Free |
-| `propose_compromise` | Generate compromise optimized for cross-cluster endorsement | 50 (Sonnet) |
-| `reframe` | Restate a position emphasizing common ground (mediator function) | 50 (Sonnet) |
+| `propose_compromise` | Generate compromise optimized for cross-cluster endorsement | 60 (Sonnet) |
+| `reframe` | Restate a position emphasizing common ground (mediator function) | 60 (Sonnet) |
 | `challenge` | Formally challenge analysis results, triggering re-analysis | Free |
 | `dispute_crux` | Challenge a crux classification with your correction | Free |
 
@@ -132,6 +136,12 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 | `list_templates` | List governance templates (assembly, jury, consensus, etc.) with descriptions | Free |
 | `get_votes` | Get raw vote data for a deliberation | Free |
 
+### `account`
+
+| Action | Description | Credits |
+|---|---|---|
+| `buy_credits` | Top up **this** API key's balance over the x402/ATXP rail. Call once with no `payment_credential` to get an x402 payment-required challenge, then call again with the base64 `X-PAYMENT` settle credential — credits are added only on a settled, on-chain-confirmed charge. The money never touches gemot. | Free (you pay the pack price on-chain) |
+
 ## Quick start
 
 ### Hosted (recommended)
@@ -143,7 +153,7 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 {
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "http",
       "url": "https://gemot.dev/mcp",
       "headers": {
         "Authorization": "Bearer gmt_your_key_here"
@@ -260,7 +270,7 @@ gemot/
 ├── main.go                          # CLI: serve (stdio) | http (SSE)
 ├── internal/
 │   ├── mcp/
-│   │   ├── server.go                # 6 grouped MCP tools + Streamable HTTP
+│   │   ├── server.go                # 7 grouped MCP tools + Streamable HTTP
 │   │   └── http.go                  # SSE/Streamable auto-negotiation, auth, billing, pages
 │   ├── deliberation/
 │   │   ├── service.go               # Business logic, async analysis, drift detection
@@ -273,13 +283,13 @@ gemot/
 │   │   ├── trust.go                 # Integrity-derived trust weights
 │   │   ├── integrity.go             # Coverage, crux, Sybil, model diversity checks
 │   │   └── prompts.go              # Analysis prompt templates
-│   ├── payments/                    # Stripe billing, credits, rate limiting, MPP
+│   ├── payments/                    # Stripe billing, credits, rate limiting, MPP, x402/ATXP
 │   ├── llm/client.go               # Anthropic SDK + global API semaphore
 │   ├── store/                       # Postgres persistence + LLM cache + job queue
 │   ├── principal/                   # Verifiable on_behalf_of delegation credentials
 │   ├── sanitize/                    # PII stripping, prompt injection detection
 │   └── cost/tracker.go             # Per-deliberation model-aware cost tracking
-├── tests/                           # 345 tests
+├── tests/                           # 700+ tests
 ├── THREAT_MODEL.md
 ```
 

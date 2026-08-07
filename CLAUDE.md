@@ -17,10 +17,10 @@ go test ./...           # Test
 - `internal/deliberation/` — Business logic, models, service layer, event bus
 - `internal/analysis/` — Analysis pipeline (T3C-inspired) + Polis vote math + synthesizer
 - `internal/store/` — Postgres persistence (pgx)
-- `internal/payments/` — Stripe billing, credits, rate limiting, MPP
+- `internal/payments/` — Stripe billing, credits, rate limiting, MPP, x402/ATXP self-funded credits
 - `internal/llm/` — Anthropic SDK wrapper with structured output
 - `internal/principal/` — Verifiable on_behalf_of delegation credentials
 - `internal/sanitize/` — PII stripping, prompt injection detection
 - `internal/cost/` — Per-deliberation token tracking
 - `internal/config/` — Runtime configuration
-- `tests/` — 345 tests (integration, adversarial, billing, benchmarks)
+- `tests/` — 700+ tests (integration, adversarial, billing, benchmarks)
