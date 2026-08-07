@@ -99,6 +99,7 @@ func CheckoutHandler(store *CreditStore, baseURL string) http.HandlerFunc {
 			return
 		}
 
+		// nosemgrep: go.lang.security.injection.open-redirect.open-redirect -- s.URL is the Stripe-issued Checkout Session URL from the Stripe API, not user input
 		http.Redirect(w, r, s.URL, http.StatusSeeOther)
 	}
 }

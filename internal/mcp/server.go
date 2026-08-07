@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- non-crypto: only used for display-order shuffling of positions (get_positions), never for secrets/codes
 	mrand "math/rand"
 	"os"
 	"strings"

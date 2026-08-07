@@ -42,3 +42,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
+
+  semgrep:
+    name: semgrep (static analysis — golang / security-audit / secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Version-pinned (not the moving registry image / not @latest) for
+      # supply-chain hygiene, matching the pinned actions above. This is the
+      # exact version validated locally against the current tree. Bump
+      # deliberately.
+      - name: Install semgrep
+        run: pip install semgrep==1.163.0
+      # Scans production code (internal/, root) against the same three rulesets
+      # chit runs. Experiment tooling under scripts/ is excluded via
+      # .semgrepignore (math/rand there is game/simulation randomness, and the
+      # local experiment runners are not a network-facing surface). The handful
+      # of production false positives are annotated inline with `// nosemgrep`
+      # plus a justification, so --error stays meaningful: a NEW finding fails CI.
+      - name: Run semgrep
+        run: semgrep scan --config p/golang --config p/security-audit --config p/secrets --error --metrics off

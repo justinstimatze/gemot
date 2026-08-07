@@ -316,6 +316,7 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 			statusColor = "#dc2626"
 		}
 
+		// nosemgrep: go.lang.security.injection.raw-html-format.raw-html-format -- topic is html.EscapeString(d.Topic) at assignment and jc.Code is html.EscapeString(...) inline; status/statusColor are server constants
 		_, _ = fmt.Fprintf(w, `<!DOCTYPE html><html><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gemot — Join Deliberation</title>
@@ -742,6 +743,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		}
 
 		// Redirect to the sandbox page
+		// nosemgrep: go.lang.security.injection.open-redirect.open-redirect -- same-origin relative path; jc.Code is a server-generated join code, not user-supplied
 		http.Redirect(w, r, "/try/"+jc.Code, http.StatusSeeOther)
 	})
 

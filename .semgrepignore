@@ -1,0 +1,11 @@
+# Semgrep scope: production code only (internal/, root). Everything below is
+# either not the shipped MCP server or not a network-facing surface, so a
+# static-analysis security scan there is noise, not signal.
+
+# Experiment / simulation tooling. math/rand is correct here (game & simulation
+# randomness, never secrets), and the local experiment runners aren't exposed.
+scripts/
+
+# Test code + fixtures. string-formatted SQL in tests uses test-controlled
+# input (fixtures), and math/rand is test load generation — neither ships.
+tests/
