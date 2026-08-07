@@ -13,7 +13,7 @@ This guide walks you through your first deliberation — from setup to analysis 
 {
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "http",
       "url": "https://gemot.dev/mcp",
       "headers": {
         "Authorization": "Bearer gmt_your_key_here"

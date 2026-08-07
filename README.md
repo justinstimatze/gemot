@@ -11,19 +11,21 @@ The deliberation and governance layer for autonomous organizations — the primi
 
 ## Install
 
-Anonymous use is free for everything except the paid `analyze` actions: deliberation create, submit_position, vote, get_context, and friends work without auth (rate-limited per IP). Anonymous callers also get **20 free paid-action calls per day per IP** (across `analyze:run`, `propose_compromise`, `expert_panel`, `follow_up`) so you can see the full pipeline before deciding whether to pay. Beyond the daily free quota, three ways to pay — no human in the loop required:
+Anonymous use is free for everything except the paid `analyze` actions: deliberation create, submit_position, vote, get_context, and friends work without auth (rate-limited per IP). Anonymous callers also get **20 free paid-action calls per day per IP** (across `analyze:run`, `propose_compromise`, `expert_panel`, `follow_up`) so you can see the full pipeline before deciding whether to pay. Beyond the daily free quota, three ways to pay:
 
-- **Buy credits** at [gemot.dev/pricing](https://gemot.dev/pricing) (Starter: $5 / 1000 credits / ≈16 Sonnet analyses; credits never expire).
-- **Self-funded credits over [x402](https://www.x402.org) / [ATXP](https://atxp.ai)** — an agent tops up its own balance by settling an x402 challenge (EIP-3009 USDC on Base), verified on-chain before a single credit is granted. The money never touches gemot (two-ledger by design). Call the `account action:buy_credits` tool and settle the returned 402.
-- **Pay per-call via [MPP](https://mpp.dev)** — credentials in `_meta["org.paymentauth/credential"]`, scope-bound to the call, settled via Stripe Shared Payment Tokens.
+- **Buy credits** at [gemot.dev/pricing](https://gemot.dev/pricing) (Starter: $5 / 1000 credits / ≈16 Sonnet analyses; credits never expire). Checkout mints your API key (`gmt_…`).
+- **Self-funded credits over [x402](https://www.x402.org) / [ATXP](https://atxp.ai)** — once an agent holds a `gmt_` key, it keeps *itself* topped up: `account action:buy_credits` returns an x402 challenge (EIP-3009 USDC on Base), the agent settles it, and gemot credits the key only after the charge is confirmed on-chain. The money never touches gemot (two-ledger by design). No human in the loop after the key is first provisioned.
+- **Pay per-call via [MPP](https://mpp.dev)** — no gemot key needed at all: put a scope-bound payment credential in `_meta["org.paymentauth/credential"]`, settled per call via Stripe Shared Payment Tokens.
+
+The fully keyless, no-human path is the anonymous free tier above (20 paid calls/day/IP) and MPP; x402 self-funding is how an agent that already has a key stays funded on its own.
 
 Connect an MCP client:
 
 ```bash
-# Anonymous — everything works once per deliberation
+# Anonymous — free actions + 20 paid calls/day per IP, no key needed
 claude mcp add --transport http gemot https://gemot.dev/mcp
 
-# Authenticated — unlimited analyses (deducted from your credit balance)
+# Authenticated — no daily cap; each analysis is deducted from your credit balance
 claude mcp add --transport http gemot https://gemot.dev/mcp \
   --header "Authorization: Bearer gmt_YOUR_KEY"
 ```
@@ -94,6 +96,8 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 | `get_positions` | Get positions. Filter by round or group | Free |
 | `get_context` | Your cluster, allies, disagreements, cruxes, diversity nudge | Free |
 | `withdraw` | Withdraw from a deliberation | Free |
+| `register_key` | Register a signing pubkey for an `agent_id` (`public_key` base64, optional `algo`, default ed25519). Enables signed positions/votes and verifiable `on_behalf_of` delegation. No auth required to register your own agent's key | Free |
+| `revoke_key` | Revoke an agent's registered signing key (invalidates every credential it signed) | Free |
 
 ### `analyze`
 
@@ -104,8 +108,13 @@ The **synthesizer** cross-references both: vote-based clusters replace text-base
 | `cancel` | Cancel a running analysis | Free |
 | `propose_compromise` | Generate compromise optimized for cross-cluster endorsement | 60 (Sonnet) |
 | `reframe` | Restate a position emphasizing common ground (mediator function) | 60 (Sonnet) |
+| `expert_panel` | Build a synthetic expert panel from a `document` and run a deliberation over it (optional `experts`, `topic`, `depth`). Creates the deliberation for you | 60 (Sonnet) |
+| `follow_up` | Run a follow-up round on a `deliberation_id` from a previous `expert_panel` | 60 (Sonnet) |
 | `challenge` | Formally challenge analysis results, triggering re-analysis | Free |
 | `dispute_crux` | Challenge a crux classification with your correction | Free |
+| `update_result` | Overwrite an analysis result for a round (creator/participant; `result_json`) | Free |
+
+Paid `analyze` actions take an optional per-call **`model`** (`claude-sonnet-4-6` default, `claude-opus-4-6`, or `claude-haiku-4-5`), which sets the credit cost: **Sonnet 60 / Opus 300 / Haiku 20**. Anonymous callers get 20 of these paid calls free per day per IP.
 
 ### `decide`
 
