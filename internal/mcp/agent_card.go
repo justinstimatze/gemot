@@ -141,9 +141,12 @@ func AgentCard() map[string]any {
 			{
 				"id":   "raw-data",
 				"name": "Raw Deliberation Data",
-				"description": "get_votes returns the raw vote matrix for analysis or export. export returns the full " +
-					"deliberation state. For agents that want to run their own analysis pipeline on top of gemot's data.",
-				"tags": []string{"export", "raw-data", "votes"},
+				"description": "get_votes returns the raw vote matrix for analysis or export. get_vote_state returns just " +
+					"your own agent's recorded votes so you can confirm they landed and see whether each is marked " +
+					"relayed (no verified signature — entered on your behalf, unattributable by the commit log) or direct " +
+					"(self-signed). export returns the full deliberation state. For agents that want to run their own " +
+					"analysis pipeline on top of gemot's data.",
+				"tags": []string{"export", "raw-data", "votes", "vote-state", "relayed"},
 			},
 			{
 				"id":   "abuse-and-integrity",

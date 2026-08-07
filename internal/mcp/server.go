@@ -197,6 +197,7 @@ func newServer(s *server) *sdkmcp.Server {
 - get_audit_log: Get audit trail incl. tamper-evident log with proofs (deliberation_id)
 - list_templates: List available governance templates
 - get_votes: Get all votes (deliberation_id)
+- get_vote_state: Get your own agent's recorded votes to confirm they landed and whether each is marked relayed vs direct (deliberation_id, agent_id)
 - replica_pubkey: Get the server's BLS public key for offline proof verification`,
 	}, s.handleAdmin)
 
@@ -334,6 +335,7 @@ type adminParams struct {
 	Action         string `json:"action"`
 	DeliberationID string `json:"deliberation_id,omitempty"`
 	Reason         string `json:"reason,omitempty"`
+	AgentID        string `json:"agent_id,omitempty"`
 }
 
 // --- Grouped handlers ---
@@ -1250,8 +1252,16 @@ func (s *server) handleAdmin(ctx context.Context, _ *sdkmcp.CallToolRequest, arg
 		}
 		return jsonResult(votes)
 
+	case "get_vote_state":
+		agentID := scopeAgentID(ctx, args.AgentID)
+		votes, err := CoreGetVoteState(ctx, s.svc, args.DeliberationID, agentID, keyID)
+		if err != nil {
+			return errResult(err)
+		}
+		return jsonResult(votes)
+
 	default:
-		return errResult(fmt.Errorf("unknown action %q — use: report_abuse, get_audit_log, list_templates, get_votes, replica_pubkey", args.Action))
+		return errResult(fmt.Errorf("unknown action %q — use: report_abuse, get_audit_log, list_templates, get_votes, get_vote_state, replica_pubkey", args.Action))
 	}
 }
 

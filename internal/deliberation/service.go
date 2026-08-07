@@ -1250,6 +1250,12 @@ func (s *Service) castVote(ctx context.Context, v *Vote, signingAgentID string) 
 		return err
 	}
 
+	// A vote with no signature cannot be cryptographically attributed to the
+	// named agent (verifyVoteSignature has already rejected any bad signature),
+	// so it was effectively entered on the agent's behalf — mark it relayed so
+	// the record shows it is unverifiable rather than self-signed.
+	v.Relayed = len(v.Signature) == 0
+
 	if err := s.store.CreateVote(ctx, v); err != nil {
 		return err
 	}
@@ -3125,4 +3131,26 @@ func (s *Service) CommitmentSignals(ctx context.Context, commitmentID string) (*
 		sig.StakesLevel = "high"
 	}
 	return sig, nil
+}
+
+// GetAgentVotes returns the votes recorded under a single agent in a
+// deliberation, in creation order. Because castVote writes the tamper-evident
+// ordered-log entry BEFORE the store row (a wedged order returns an error and
+// stores nothing), a vote present here is one that actually landed in the
+// ordered log. So an agent can use this to confirm its vote was recorded, and
+// whether the record marks it relayed (unverifiable) or direct (self-signed) —
+// exactly the "did my vote land, and how?" question the BFT fork-wedge left
+// unanswerable.
+func (s *Service) GetAgentVotes(ctx context.Context, deliberationID, agentID string) ([]Vote, error) {
+	all, err := s.store.GetVotes(ctx, deliberationID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Vote, 0)
+	for _, v := range all {
+		if v.AgentID == agentID {
+			out = append(out, v)
+		}
+	}
+	return out, nil
 }

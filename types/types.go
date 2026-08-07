@@ -148,16 +148,21 @@ type Criterion struct {
 }
 
 type Vote struct {
-	ID             string    `json:"vote_id"`
-	DeliberationID string    `json:"deliberation_id"`
-	AgentID        string    `json:"agent_id"`
-	PositionID     string    `json:"position_id"`
-	Value          int       `json:"value"` // -2 (strongly disagree) to +2 (strongly agree)
-	CriterionID    string    `json:"criterion_id,omitempty"`
-	Qualifier      string    `json:"qualifier,omitempty"` // brief reason for this stance
-	Caveat         string    `json:"caveat,omitempty"`    // specific condition or objection
-	Signature      []byte    `json:"signature,omitempty"` // ed25519 signature over auth.VotePayload
-	CreatedAt      time.Time `json:"created_at"`
+	ID             string `json:"vote_id"`
+	DeliberationID string `json:"deliberation_id"`
+	AgentID        string `json:"agent_id"`
+	PositionID     string `json:"position_id"`
+	Value          int    `json:"value"` // -2 (strongly disagree) to +2 (strongly agree)
+	CriterionID    string `json:"criterion_id,omitempty"`
+	Qualifier      string `json:"qualifier,omitempty"` // brief reason for this stance
+	Caveat         string `json:"caveat,omitempty"`    // specific condition or objection
+	Signature      []byte `json:"signature,omitempty"` // ed25519 signature over auth.VotePayload
+	// Relayed marks a vote with no verified signature — entered on the voter's
+	// behalf (e.g. over a side channel), so the commit log cannot attribute it
+	// to the named agent. Surfaced so an unverifiable vote is visibly distinct
+	// from a self-signed, direct one.
+	Relayed   bool      `json:"relayed,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // CommitmentAccess is a server-stamped record that an agent OTHER than the

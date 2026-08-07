@@ -25,9 +25,14 @@ var (
 	// ErrDoubleVote fires when a replica attempts to vote twice in the
 	// same view.
 	ErrDoubleVote = errors.New("bft: already voted in this view")
-	// ErrDoublePropose fires when a leader attempts to propose a second
-	// block in the same view.
-	ErrDoublePropose = errors.New("bft: already proposed in this view")
+	// ErrDoublePropose fires when a replica attempts to propose a second
+	// block in the same view. It is a proposer-side protocol guard —
+	// chained HotStuff is one-proposal-per-view, so AdvanceView is required
+	// before proposing again. It is NOT a rejected duplicate vote, nor a
+	// duplicate submission by a caller: a caller seeing it surfaced means the
+	// single-node view failed to advance (the engine now recovers by advancing
+	// the view on exit and, on a log fork, resyncing from the log and retrying).
+	ErrDoublePropose = errors.New("bft: replica already proposed a block in this view; AdvanceView required before re-proposing (proposer-side guard, not a duplicate-vote rejection)")
 	// ErrSafetyRule fires when a proposal fails the HotStuff safety
 	// rule (doesn't extend locked QC and justify view isn't newer).
 	ErrSafetyRule = errors.New("bft: proposal fails safety rule")

@@ -729,3 +729,15 @@ func CoreCommitmentSignals(ctx context.Context, svc *deliberation.Service, commi
 	}
 	return svc.CommitmentSignals(ctx, commitmentID)
 }
+
+// CoreGetVoteState returns one agent's recorded votes so it can confirm what
+// landed and whether each is marked relayed. Gated like CoreGetVotes.
+func CoreGetVoteState(ctx context.Context, svc *deliberation.Service, deliberationID, agentID, keyID string) ([]deliberation.Vote, error) {
+	if deliberationID == "" || agentID == "" {
+		return nil, fmt.Errorf("deliberation_id and agent_id are required")
+	}
+	if err := svc.CheckAccess(ctx, deliberationID, keyID); err != nil {
+		return nil, err
+	}
+	return svc.GetAgentVotes(ctx, deliberationID, agentID)
+}

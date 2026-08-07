@@ -274,6 +274,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_keys_active ON agent_keys(agent_id) 
 -- Per-action signatures. Nullable because signing is opt-in per signature_policy.
 ALTER TABLE positions ADD COLUMN IF NOT EXISTS signature BYTEA;
 ALTER TABLE votes ADD COLUMN IF NOT EXISTS signature BYTEA;
+-- Migration: mark votes that carry no verified signature (relayed / entered on the voter's behalf).
+ALTER TABLE votes ADD COLUMN IF NOT EXISTS relayed BOOLEAN DEFAULT FALSE;
 
 -- Per-deliberation signature policy: 'none' (legacy, no signing),
 -- 'advisory' (warn on unsigned when key registered), 'required' (reject unsigned).

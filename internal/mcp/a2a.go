@@ -1195,6 +1195,14 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				}
 				writeA2AResult(w, req.ID, votes)
 
+			case "get_vote_state":
+				votes, err := CoreGetVoteState(ctx, svc, str(s, "deliberation_id"), scope(str(s, "agent_id")), keyID)
+				if err != nil {
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, votes)
+
 			default:
 				writeA2AError(w, req.ID, -32602, fmt.Sprintf("unknown action %q for gemot/admin", action))
 			}
