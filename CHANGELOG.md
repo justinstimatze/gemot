@@ -4,6 +4,10 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Payments: buy_credits over A2A + sub-dollar Test pack — 2026-08-07
+
+Wired the `account` tool into the A2A JSON-RPC dispatch (`gemot/account` action `buy_credits`) so it has parity with the other grouped tools — previously `buy_credits` was reachable only over MCP. The `CreditGate` is passed into `A2AHandler`, the action is write-gated/audited, and the challenge/settle result shape mirrors the MCP handler. Added a `$0.10` "Test" credit pack that sits below Stripe's 50¢ SPT floor (so it is usable only on the x402/USDC rail, not Stripe checkout), letting the live gate be verified for cents rather than dollars; it is a verification aid — decide keep/remove before enabling on prod. Verified live over A2A with no funds moved: call-1 self-mint returns the correct `accepts` for both Starter (`5000000`) and Test (`100000`).
+
 ### Payments: buy_credits call-1 decouple + idempotent settlement crediting — 2026-08-07
 
 `buy_credits` call-1 (the unpaid challenge) now **self-mints** the x402 `accepts` from the static per-pack price instead of asking chit — so it no longer runs chit's pull `/charge` probe, whose `User=merchantID`/no-OAuth self-charge could be reported already-settled right after any merchant settlement and wedge strangers out of a challenge at prod scale. call-2 recomputes the same requirements deterministically and settles via chit's Session branch (which never hit that probe). Crediting is now **idempotent on the EIP-3009 authorization nonce**: a new `x402_settlements` table (nonce `PRIMARY KEY`) and `CreditStore.CreditX402Settlement` record the nonce and apply the credit in one transaction (`ON CONFLICT DO NOTHING`), so a concurrent double-present or an `AlreadySettled` retry credits the key exactly once; `buy_credits` fails closed if it cannot extract the nonce. Bumped chit to `077be71`, whose `CloseSession` returns a typed `*server.UnderpaymentError` on a short settle — the existing fail-closed `CloseSession`-error check now also covers the sign-low/advertise-high amount hole with no manual amount comparison. Deploy remains gated on a live on-chain settle test.

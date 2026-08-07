@@ -43,7 +43,7 @@ func TestA2ASandboxBearerlessJoin(t *testing.T) {
 	rateLim := payments.NewRateLimiter(ctx, 100, time.Minute)
 	sandboxLim := payments.NewRateLimiter(ctx, 100, time.Minute)
 	cache := auth.NewMemoryNonceCache(0, 0)
-	handler := mcp.A2AHandler(svc, nil, nil, nil)
+	handler := mcp.A2AHandler(svc, nil, nil, nil, nil)
 	authMW := mcp.A2AAuthMiddleware("test-secret", nil, rateLim, svc, sandboxLim, false)
 	envMW := mcp.EnvelopeMiddleware(svc, cache, mcp.EnvelopeOff, 0)
 	chain := authMW(envMW(handler))

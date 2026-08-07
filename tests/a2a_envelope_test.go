@@ -389,7 +389,7 @@ func TestA2AEnvelope_SignatureParamRoundTrip(t *testing.T) {
 	// Build the full A2A stack in dev mode so no bearer is required.
 	authMW := mcp.A2AAuthMiddleware("", nil, nil, nil, nil, false)
 	envMW := mcp.EnvelopeMiddleware(svc, auth.NewMemoryNonceCache(0, 0), mcp.EnvelopeOff, 0)
-	handler := mcp.A2AHandler(svc, nil, db, db)
+	handler := mcp.A2AHandler(svc, nil, db, db, nil)
 	chain := authMW(envMW(handler))
 
 	rpc := map[string]any{

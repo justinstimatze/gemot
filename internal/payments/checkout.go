@@ -26,6 +26,12 @@ var CreditPacks = []CreditPack{
 	{Name: "Starter", Credits: PackStarter, PriceUSD: 500},
 	{Name: "Standard", Credits: PackStandard, PriceUSD: 2000},
 	{Name: "Pro", Credits: PackPro, PriceUSD: 5000},
+	// Test: a sub-dollar x402 pack for verifying the buy_credits gate at a
+	// fraction of a real pack's cost ($0.10 → 100000 USDC atomic units). It sits
+	// below Stripe's 50c SPT floor, so it is usable ONLY on the x402/USDC rail
+	// (a Stripe /checkout of it would be rejected). Intended for live gate
+	// verification; decide keep/remove before enabling on prod.
+	{Name: "Test", Credits: 10, PriceUSD: 10},
 }
 
 // CheckoutHandler creates a Stripe Checkout session for purchasing credits.

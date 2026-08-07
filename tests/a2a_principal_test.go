@@ -36,7 +36,7 @@ func a2aChain(t *testing.T, db *store.DB, svc *deliberation.Service) (http.Handl
 		t.Fatalf("generate key: %v", err)
 	}
 	rateLim := payments.NewRateLimiter(context.Background(), 100, time.Minute)
-	handler := mcp.A2AHandler(svc, credits, nil, db)
+	handler := mcp.A2AHandler(svc, credits, nil, db, nil)
 	return mcp.A2AAuthMiddleware("test-secret", credits, rateLim, nil, nil, false)(handler), token
 }
 
@@ -314,7 +314,7 @@ func TestA2A_LeakedCredentialIsUselessToAnotherTenant(t *testing.T) {
 	}
 	rateLim := payments.NewRateLimiter(ctx, 500, time.Minute)
 	chain := mcp.A2AAuthMiddleware("test-secret", credits, rateLim, nil, nil, false)(
-		mcp.A2AHandler(svc, credits, nil, db))
+		mcp.A2AHandler(svc, credits, nil, db, nil))
 
 	cred, agentPriv := a2aDelegation(t, svc, chain, victimTok, delegPrincipal, delegAgent)
 

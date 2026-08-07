@@ -51,7 +51,7 @@ func TestA2A_AnalyzeRunRequiresQuorumBeforeCharge(t *testing.T) {
 	}
 
 	rateLim := payments.NewRateLimiter(ctx, 100, time.Minute)
-	handler := mcp.A2AHandler(svc, credits, nil, db)
+	handler := mcp.A2AHandler(svc, credits, nil, db, nil)
 	authMW := mcp.A2AAuthMiddleware("test-secret", credits, rateLim, nil, nil, false)
 	chain := authMW(handler)
 
@@ -121,7 +121,7 @@ func TestA2A_AnalyzeFollowUpPreconditionGate(t *testing.T) {
 	}
 
 	rateLim := payments.NewRateLimiter(ctx, 100, time.Minute)
-	handler := mcp.A2AHandler(svc, credits, nil, db)
+	handler := mcp.A2AHandler(svc, credits, nil, db, nil)
 	authMW := mcp.A2AAuthMiddleware("test-secret", credits, rateLim, nil, nil, false)
 	chain := authMW(handler)
 

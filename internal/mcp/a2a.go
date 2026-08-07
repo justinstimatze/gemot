@@ -217,6 +217,7 @@ var a2aMethods = []string{
 	"gemot/decide",
 	"gemot/coordinate",
 	"gemot/admin",
+	"gemot/account",
 }
 
 // A2ARequest is an A2A JSON-RPC 2.0 request.
@@ -241,7 +242,7 @@ type AuditStore interface {
 	GetAuditLog(deliberationID string, limit int) ([]map[string]string, error)
 }
 
-func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, auditLog AuditStore, jobDB store.Backend) http.HandlerFunc {
+func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, auditLog AuditStore, jobDB store.Backend, gate payments.CreditGate) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Auth, admin detection, and rate limiting are all handled by
 		// A2AAuthMiddleware. The handler just consumes the context it populates.
@@ -292,6 +293,7 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 				"gemot/decide":       {"commit": true, "fulfill": true, "break": true, "record_access": true},
 				"gemot/coordinate":   {"delegate": true, "invite": true, "generate_join_code": true, "join": true},
 				"gemot/admin":        {"report_abuse": true},
+				"gemot/account":      {"buy_credits": true},
 			}
 			if actions, ok := writeOps[req.Method]; ok && actions[action] {
 				ip := ClientIP(r)
@@ -1205,6 +1207,41 @@ func A2AHandler(svc *deliberation.Service, creditStore *payments.CreditStore, au
 
 			default:
 				writeA2AError(w, req.ID, -32602, fmt.Sprintf("unknown action %q for gemot/admin", action))
+			}
+
+		case "gemot/account":
+			s := req.Params
+			switch action {
+			case "buy_credits":
+				if gate == nil {
+					writeA2AError(w, req.ID, -32000, "buy_credits is not configured on this server (no payment gate)")
+					return
+				}
+				if creditStore == nil {
+					writeA2AError(w, req.ID, -32000, "buy_credits is unavailable (no credit store)")
+					return
+				}
+				if token == "" || !strings.HasPrefix(token, "gmt_") {
+					writeA2AError(w, req.ID, -32000, "buy_credits requires an authenticated gemot API key (that key's balance is topped up)")
+					return
+				}
+				res, err := payments.BuyCredits(ctx, gate, creditStore, str(s, "pack"), token, str(s, "atxp_account_id"), str(s, "payment_credential"))
+				if err != nil {
+					if pr, ok := err.(*payments.ErrPaymentRequired); ok && pr.Challenge != nil {
+						writeA2AResult(w, req.ID, map[string]any{
+							"status":    "payment_required",
+							"code":      pr.Challenge.Code,
+							"message":   pr.Challenge.Message,
+							"challenge": pr.Challenge.Data,
+						})
+						return
+					}
+					writeA2AError(w, req.ID, -32000, sanitizeError(err))
+					return
+				}
+				writeA2AResult(w, req.ID, res)
+			default:
+				writeA2AError(w, req.ID, -32602, fmt.Sprintf("unknown action %q for gemot/account", action))
 			}
 
 		default:

@@ -432,7 +432,7 @@ No API key needed — the join code is your credential.
 	// block, tight enough that a shared join code can't flood prod.
 	a2aSandboxLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
 	a2aAuth := A2AAuthMiddleware(apiSecret, creditStore, a2aLimiter, svc, a2aSandboxLimiter, mppCfg.RequireAuth)
-	a2aHandler := A2AHandler(svc, creditStore, backend, backend)
+	a2aHandler := A2AHandler(svc, creditStore, backend, backend, creditGate)
 	mux.Handle("POST /a2a", a2aAuth(envelopeMiddleware(a2aHandler)))
 
 	// SSE event stream — real-time deliberation state changes
