@@ -628,7 +628,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			validAdmin := strings.HasPrefix(auth, "Bearer ") && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
 			validKey := false
 			if !validAdmin && creditStore != nil && strings.HasPrefix(auth, "Bearer ") {
-				validKey, _ = creditStore.ValidateKey(token)
+				validKey, _ = creditStore.KeyActive(token)
 			}
 			if !validAdmin && !validKey {
 				http.Error(w, `{"error":"provide API key as Bearer token"}`, http.StatusUnauthorized)

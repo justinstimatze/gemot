@@ -173,7 +173,7 @@ func A2AAuthMiddleware(
 				writeA2AError(w, nil, -32000, "Invalid API key")
 				return
 			}
-			valid, _ := creditStore.ValidateKey(token)
+			valid, _ := creditStore.KeyActive(token)
 			if !valid {
 				writeA2AError(w, nil, -32000, "Invalid or expired API key")
 				return

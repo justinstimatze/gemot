@@ -84,7 +84,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 						http.Error(w, "invalid API key", http.StatusUnauthorized)
 						return
 					}
-					if valid, _ := creditStore.ValidateKey(token); !valid {
+					if valid, _ := creditStore.KeyActive(token); !valid {
 						http.Error(w, "invalid or expired API key", http.StatusUnauthorized)
 						return
 					}

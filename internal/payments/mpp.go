@@ -90,7 +90,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 					}
 					// Check customer API key
 					if strings.HasPrefix(auth, "Bearer ") && cs != nil && strings.HasPrefix(token, "gmt_") {
-						if valid, _ := cs.ValidateKey(token); valid {
+						if valid, _ := cs.KeyActive(token); valid {
 							if !limiter.Allow(token) {
 								http.Error(w, `{"error":"rate limit exceeded — max 30 requests per minute"}`, http.StatusTooManyRequests)
 								return
@@ -140,7 +140,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				}
 				// Customer API key — validate and set in context
 				if cs != nil && strings.HasPrefix(token, "gmt_") {
-					if valid, _ := cs.ValidateKey(token); valid {
+					if valid, _ := cs.KeyActive(token); valid {
 						if !limiter.Allow(token) {
 							http.Error(w, `{"error":"rate limit exceeded — max 30 requests per minute"}`, http.StatusTooManyRequests)
 							return

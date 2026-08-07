@@ -4,6 +4,10 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Payments: zero-balance keys can authenticate (buy_credits bootstrap fix) — 2026-08-07
+
+Authentication was gated on `ValidateKey` (balance > 0), so a key that spent its credits to zero could no longer authenticate over any transport (MCP, A2A, SSE) — including to call `buy_credits` to top back up: a bootstrap deadlock. Split the two concerns: a new `CreditStore.KeyActive` (the key exists and is not suspended, ignoring balance) is now the authentication predicate at all five auth gates, while `ValidateKey` stays as the "has balance to spend" check. A zero-balance key now authenticates, can call free tools and `buy_credits`, and still fails paid `analyze` at the credit-deduction step (or must present a per-call x402/MPP payment) — payment is enforced at spend time, not at the door. Verified live: a zero-credit key reaches `buy_credits` (payment_required) and free tools; suspended and missing keys stay rejected.
+
 ### Payments: buy_credits over A2A + sub-dollar Test pack — 2026-08-07
 
 Wired the `account` tool into the A2A JSON-RPC dispatch (`gemot/account` action `buy_credits`) so it has parity with the other grouped tools — previously `buy_credits` was reachable only over MCP. The `CreditGate` is passed into `A2AHandler`, the action is write-gated/audited, and the challenge/settle result shape mirrors the MCP handler. Added a `$0.10` "Test" credit pack that sits below Stripe's 50¢ SPT floor (so it is usable only on the x402/USDC rail, not Stripe checkout), letting the live gate be verified for cents rather than dollars; it is a verification aid — decide keep/remove before enabling on prod. Verified live over A2A with no funds moved: call-1 self-mint returns the correct `accepts` for both Starter (`5000000`) and Test (`100000`).

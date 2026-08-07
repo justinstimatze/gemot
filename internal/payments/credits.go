@@ -267,3 +267,23 @@ func (s *CreditStore) CreditX402Settlement(nonce, key string, amount int) (int, 
 	}
 	return bal, true, nil
 }
+
+// KeyActive reports whether a key exists and is not suspended, IGNORING its
+// balance. This is the authentication predicate — "is this a real, usable
+// identity" — as distinct from ValidateKey's "does it have credits to spend".
+// Auth gates use this so a key at zero balance can still authenticate to call
+// free tools and, crucially, buy_credits to top itself back up; paid actions
+// remain gated on balance at Deduct (or on a per-call x402/MPP payment). Without
+// this split, a user who spent their credits to zero could no longer authenticate
+// to buy more — a bootstrap deadlock.
+func (s *CreditStore) KeyActive(key string) (bool, error) {
+	var suspended int
+	err := s.db.QueryRow(`SELECT COALESCE(suspended, 0) FROM api_keys WHERE key = $1`, key).Scan(&suspended)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return suspended == 0, nil
+}
