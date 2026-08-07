@@ -90,6 +90,22 @@ if command -v staticcheck &>/dev/null && [[ -n "$staged_go" ]]; then
   fi
 fi
 
+# 6b. golangci-lint: the full CI linter set (errcheck, unused, ...) that
+#     neither go vet nor staticcheck cover. A tx.Rollback / pg.Close errcheck
+#     reached CI-red because the local hook ran staticcheck but NOT this —
+#     staticcheck's SA checks don't include errcheck. House standard: run every
+#     check CI enforces (test.yml uses golangci-lint-action). Skipped when not
+#     installed (install: https://golangci-lint.run/welcome/install/).
+if command -v golangci-lint &>/dev/null && [[ -n "$staged_go" ]]; then
+  gcl_out=$(golangci-lint run ./... 2>&1 || true)
+  if echo "$gcl_out" | grep -qE "\.go:[0-9]+:[0-9]+:"; then
+    echo "❌ golangci-lint issues:"
+    echo "$gcl_out" | grep -E "\.go:[0-9]+:[0-9]+:|issues" | sed 's/^/    /'
+    echo "    Same linters CI enforces — fix before commit."
+    exit 1
+  fi
+fi
+
 # 7. gitleaks: secret scan, mirrored from the Security CI job. This one is
 #    diff-deterministic — a secret you commit here is one CI would flag — so
 #    catching it locally prevents a leaked credential from ever reaching the

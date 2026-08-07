@@ -234,7 +234,7 @@ func (s *CreditStore) CreditX402Settlement(nonce, key string, amount int) (int, 
 	if err != nil {
 		return 0, false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	res, err := tx.Exec(
 		`INSERT INTO x402_settlements (nonce, api_key, credits) VALUES ($1, $2, $3) ON CONFLICT (nonce) DO NOTHING`,

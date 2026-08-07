@@ -99,7 +99,7 @@ func cmdServe(httpMode bool, addr string) {
 			fmt.Fprintf(os.Stderr, "Error opening database: %v\n", err)
 			os.Exit(1)
 		}
-		defer pg.Close() //nolint:errcheck
+		defer func() { _ = pg.Close() }() //nolint:errcheck
 		backend = pg
 		rawDB = pg.RawDB()
 	}
@@ -379,7 +379,7 @@ func cmdAdminCreateAPIKey(email string, credits int) {
 		fmt.Fprintf(os.Stderr, "open db: %v\n", err)
 		os.Exit(1)
 	}
-	defer pg.Close()
+	defer func() { _ = pg.Close() }()
 	credStore, err := payments.NewCreditStore(pg.RawDB())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init credit store: %v\n", err)
