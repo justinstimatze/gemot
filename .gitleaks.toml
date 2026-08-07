@@ -1,18 +1,19 @@
 title = "gemot gitleaks configuration"
 
-# Start from gitleaks' built-in rule set, then add gemot-specific allowlists.
+# Start from gitleaks' built-in rule set, then add a tightly-scoped allowlist.
 [extend]
 useDefault = true
 
-# Public, view-only gemot share-token links embedded in the static demo page.
-# A share token grants read-only access to one deliberation group and is meant
-# to be shared (the create_share / lookup_share feature) — it is not a
-# credential, signing key, or payment secret. Allowlist the demo-link SHAPE
-# (not a blanket hex match) so an intentional public link doesn't perpetually
-# fail CI, while any real secret still trips the scan.
+# Allowlist EXACTLY ONE known value: a view-only gemot share token that appears
+# in a public demo link in the static landing page (internal/mcp/static/
+# index.html, git history). A share token grants read-only access to one
+# deliberation group and is meant to be shared (create_share / lookup_share) —
+# it is not a credential, signing key, or payment secret, and it is already
+# public. This matches the exact secret value (default regexTarget = "secret"),
+# NOT a line/URL shape, so it cannot be used to hide any other secret: every
+# real secret still trips the scan.
 [allowlist]
-description = "gemot public demo share-token links (view-only, intentional)"
-regexTarget = "line"
+description = "gemot public demo share token (view-only, already public, not a credential)"
 regexes = [
-  '''vis\.gemot\.dev/g/[a-z0-9._-]+\?token=[0-9a-f]{16,}''',
+  "9ca82cd59da10790bbff6ebc33757db3",
 ]
