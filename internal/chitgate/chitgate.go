@@ -36,9 +36,9 @@ import (
 // enough that abandoned challenges don't accumulate.
 const pendingTTL = 15 * time.Minute
 
-// Config configures the chit-backed merchant gate. MerchantID and
-// ConnectionToken are required; the token is a wallet-grade secret and must come
-// from the environment, never source.
+// Config configures the chit-backed merchant gate. Only MerchantID is required.
+// ConnectionToken is optional (see the field) and, when set, is a wallet-grade
+// secret that must come from the environment, never source.
 type Config struct {
 	// MerchantID is chit's "network:address" account id, e.g.
 	// "base:0x52440B7EF75B9329b84Fed88061e5665767b409B". It doubles as the
@@ -46,8 +46,10 @@ type Config struct {
 	// real payer — abuse controls key on the credential's signer instead).
 	MerchantID string
 
-	// ConnectionToken is the merchant's ATXP connection token (wallet-grade
-	// secret). From env only.
+	// ConnectionToken is the merchant's ATXP connection token. OPTIONAL: needed
+	// only for DCR-bound registration on OAuth-gated resources, NOT the bare-402
+	// x402 path buy_credits uses (a plain payout-address Destination suffices).
+	// When set it is a wallet-grade secret — env only.
 	ConnectionToken string
 
 	// PayeeName labels the merchant in challenges. Optional.
@@ -66,9 +68,10 @@ func New(cfg Config) (payments.CreditGate, error) {
 	if cfg.MerchantID == "" {
 		return nil, errors.New("chitgate: MerchantID is required (network:address)")
 	}
-	if cfg.ConnectionToken == "" {
-		return nil, errors.New("chitgate: ConnectionToken is required (merchant wallet-grade secret)")
-	}
+	// ConnectionToken is NOT required for the bare-402 x402 path buy_credits
+	// uses: chit's server.Config only strictly needs a Destination. The token is
+	// for DCR-bound registration on OAuth-gated resources, which this flow is
+	// not — so pass it through only when set (a plain payout address suffices).
 	m, err := chit.New(chit.Config{
 		Destination:     chit.StaticDestination{ID: cfg.MerchantID},
 		ConnectionToken: cfg.ConnectionToken,

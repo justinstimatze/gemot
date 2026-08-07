@@ -58,10 +58,10 @@ func (s *server) handleAccount(ctx context.Context, _ *sdkmcp.CallToolRequest, a
 				// The invoice, not a failure — surface it so the agent can pay
 				// and retry with payment_credential set.
 				return jsonResult(map[string]any{
-					"status":  "payment_required",
-					"code":    pr.Challenge.Code,
-					"message": pr.Challenge.Message,
-					"accepts": pr.Challenge.Data,
+					"status":    "payment_required",
+					"code":      pr.Challenge.Code,
+					"message":   pr.Challenge.Message,
+					"challenge": pr.Challenge.Data,
 				})
 			}
 			return errResult(err)

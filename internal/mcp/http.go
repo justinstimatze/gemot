@@ -109,13 +109,16 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 	// abuse signal emerges.
 	sandboxQuota := payments.NewSandboxQuota(20, 24*time.Hour)
 
-	// account:buy_credits x402 gate (ATXP rail). Enabled only when the
-	// merchant's account id AND its wallet-grade connection token are both in
-	// the environment — never in source. Absent either, the tool stays off and
+	// account:buy_credits x402 gate (ATXP rail). Enabled when the merchant's
+	// account id (a "network:address" payout destination) is set in the
+	// environment. GEMOT_ATXP_CONNECTION_TOKEN is optional — it is only needed
+	// for DCR on OAuth-gated resources, not the bare-402 x402 path this uses, so
+	// a plain payout address suffices; when set it is a wallet-grade secret and
+	// stays in env, never source. Absent the merchant id, the tool stays off and
 	// refuses (nil gate). A generous per-payer-address policy bounds abuse
 	// without blocking legitimate use, keyed on the verified EIP-3009 signer.
 	var creditGate payments.CreditGate
-	if merchantID, token := os.Getenv("GEMOT_ATXP_MERCHANT_ID"), os.Getenv("GEMOT_ATXP_CONNECTION_TOKEN"); merchantID != "" && token != "" {
+	if merchantID, token := os.Getenv("GEMOT_ATXP_MERCHANT_ID"), os.Getenv("GEMOT_ATXP_CONNECTION_TOKEN"); merchantID != "" {
 		policy, err := payments.NewPayerPolicy(nil, 20000 /* $200/day */, 500 /* settles/day */, 24*time.Hour)
 		if err != nil {
 			return fmt.Errorf("configuring buy_credits payer policy: %w", err)

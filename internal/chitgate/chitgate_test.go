@@ -98,7 +98,9 @@ func TestNew_RequiresConfig(t *testing.T) {
 	if _, err := New(Config{ConnectionToken: "tok"}); err == nil {
 		t.Error("expected error when MerchantID is empty")
 	}
-	if _, err := New(Config{MerchantID: "base:0xabc"}); err == nil {
-		t.Error("expected error when ConnectionToken is empty")
+	// ConnectionToken is optional — the bare-402 x402 path needs only a
+	// Destination, so a MerchantID alone builds a valid gate.
+	if _, err := New(Config{MerchantID: "base:0x948eB1Bc3fb960D97EA7AFc0FAca9F6625352594"}); err != nil {
+		t.Errorf("MerchantID alone should build a gate (token optional): %v", err)
 	}
 }
