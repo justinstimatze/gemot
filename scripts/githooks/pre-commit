@@ -90,4 +90,22 @@ if command -v staticcheck &>/dev/null && [[ -n "$staged_go" ]]; then
   fi
 fi
 
+# 7. gitleaks: secret scan, mirrored from the Security CI job. This one is
+#    diff-deterministic — a secret you commit here is one CI would flag — so
+#    catching it locally prevents a leaked credential from ever reaching the
+#    public remote (unlike govulncheck, whose findings are time-dependent on
+#    newly-disclosed CVEs and so can't be pre-empted at commit time; that stays
+#    CI-only). Scans staged changes only, so the hook stays fast. Skipped when
+#    gitleaks isn't installed (install: https://github.com/gitleaks/gitleaks).
+if command -v gitleaks &>/dev/null; then
+  if ! gitleaks protect --staged --config .gitleaks.toml --no-banner --redact > /tmp/gemot-gitleaks.log 2>&1; then
+    echo "❌ gitleaks found a secret in staged changes:"
+    sed 's/^/    /' /tmp/gemot-gitleaks.log
+    rm -f /tmp/gemot-gitleaks.log
+    echo "    Remove the secret (and rotate it if it was ever real) before committing."
+    exit 1
+  fi
+  rm -f /tmp/gemot-gitleaks.log
+fi
+
 exit 0
