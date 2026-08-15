@@ -3,8 +3,8 @@ module github.com/justinstimatze/gemot
 go 1.26.5
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.61.0
-	github.com/consensys/gnark-crypto v0.20.1
+	github.com/anthropics/anthropic-sdk-go v1.63.0
+	github.com/consensys/gnark-crypto v0.21.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/justinstimatze/chit v0.1.2
@@ -16,7 +16,7 @@ require (
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
-	github.com/bits-and-blooms/bitset v1.24.4 // indirect
+	github.com/bits-and-blooms/bitset v1.24.6 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
@@ -35,8 +35,8 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
-	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.39.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 )
