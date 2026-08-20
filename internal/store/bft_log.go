@@ -114,3 +114,29 @@ func (s *PostgresLogStore) HighestHeight(ctx context.Context) (bft.Height, error
 	}
 	return bft.Height(h.Int64), nil
 }
+
+// WithLock runs fn while holding the cluster-wide BFT append advisory lock,
+// serializing the propose→append→commit round across every gemot machine
+// sharing this Postgres log. Implements bft.ClusterLocker.
+//
+// The lock is acquired and released on a single dedicated pooled connection
+// (session-level pg_advisory_lock is per-connection, so acquire and release
+// MUST use the same one), and that connection returns to the pool only after
+// the unlock. If the holding process dies mid-round, Postgres drops the
+// session and releases the lock automatically — a crash can never wedge the
+// cluster. The unlock runs on context.Background so a canceled request ctx
+// still releases the lock before the connection is reused.
+func (s *PostgresLogStore) WithLock(ctx context.Context, key int64, fn func() error) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("bft: acquire advisory-lock conn: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", key); err != nil {
+		return fmt.Errorf("bft: pg_advisory_lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", key)
+	}()
+	return fn()
+}

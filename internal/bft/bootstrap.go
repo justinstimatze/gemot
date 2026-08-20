@@ -5,17 +5,6 @@ import (
 	"fmt"
 )
 
-// BootstrapSingleNode constructs a ready-to-serve single-node BFT engine:
-// builds and recovers the replica from the durable stores (see
-// buildSingleNodeReplica), then returns an engine that retains those stores so
-// it can resync from the log if a concurrent instance forks an append.
-//
-// Passing a durable keyStore (e.g., PostgresReplicaKeyStore) is required for
-// QCs to remain verifiable across restarts — session 5b's fresh-per-boot keys
-// broke that contract, and session 5c fixes it via persisted keys. A nil
-// keyStore falls back to a process-local in-memory store — test-only, and
-// reproduces the pre-5c behavior where QCs from a prior boot cannot be
-// verified after restart.
 func BootstrapSingleNode(ctx context.Context, log LogStore, voteHist VoteHistoryStore, keyStore ReplicaKeyStore) (*Engine, error) {
 	replica, transport, err := buildSingleNodeReplica(ctx, log, voteHist, keyStore)
 	if err != nil {
@@ -26,6 +15,13 @@ func BootstrapSingleNode(ctx context.Context, log LogStore, voteHist VoteHistory
 	engine.log = log
 	engine.voteHist = voteHist
 	engine.keyStore = keyStore
+	// If the log backend provides cluster-wide serialization (Postgres
+	// advisory lock), install it so a multi-machine deployment sharing this
+	// log can't fork it. In-memory logs don't implement ClusterLocker, so a
+	// single-process engine gets a nil lock and relies on the engine mutex.
+	if cl, ok := log.(ClusterLocker); ok {
+		engine.clusterLock = cl
+	}
 	engine.RestoreChainState()
 	return engine, nil
 }

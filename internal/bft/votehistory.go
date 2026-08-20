@@ -2,6 +2,7 @@ package bft
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -54,7 +55,7 @@ func (s *InMemoryVoteHistoryStore) SaveVote(_ context.Context, v View) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v < s.lastVoted {
-		return fmt.Errorf("bft: vote history regression: save %d < stored %d", v, s.lastVoted)
+		return fmt.Errorf("%w: vote save %d < stored %d", ErrHistoryRegression, v, s.lastVoted)
 	}
 	s.lastVoted = v
 	return nil
@@ -64,7 +65,7 @@ func (s *InMemoryVoteHistoryStore) SaveProposal(_ context.Context, v View) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if v < s.lastProposed {
-		return fmt.Errorf("bft: proposal history regression: save %d < stored %d", v, s.lastProposed)
+		return fmt.Errorf("%w: proposal save %d < stored %d", ErrHistoryRegression, v, s.lastProposed)
 	}
 	s.lastProposed = v
 	return nil
@@ -75,3 +76,13 @@ func (s *InMemoryVoteHistoryStore) Load(_ context.Context) (View, View, error) {
 	defer s.mu.Unlock()
 	return s.lastVoted, s.lastProposed, nil
 }
+
+// ErrHistoryRegression fires when a monotonic counter save would move the
+// stored view backward. In single-process operation this signals a stale retry;
+// when multiple single-node engines share one replica identity (a multi-machine
+// deployment sharing one durable store) it signals the proposer is behind a peer
+// that already advanced the shared counter. The engine treats it as a
+// resync-and-retry trigger, exactly like a log fork. PostgresVoteHistoryStore
+// instead clamps via GREATEST and never returns this — both satisfy the "never
+// regress the stored value" contract, and the engine tolerates either.
+var ErrHistoryRegression = errors.New("bft: vote/proposal history regression")

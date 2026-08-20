@@ -8,28 +8,6 @@ import (
 	"sync"
 )
 
-// Engine drives the HotStuff state machine for the current gemot
-// deployment. Session 5b ships a single-node configuration (N=1,
-// F=0): the engine is both leader and sole voter for every block, so
-// Submit drives propose → self-vote → QC formation synchronously in
-// one call. Multi-node support lands later — the N=1 quorum=1 case is
-// genuinely degenerate (trivial BFT), but the wiring exercised here
-// is the same shape a multi-node engine will use, and it gives the
-// service layer a concrete API to build against.
-//
-// Commit semantics: because HotStuff's two-chain commit rule requires
-// a QC on a block's successor, Submit returns a PREPARED QC (proof
-// that ≥2f+1 voted for this block) but does NOT wait for commit.
-// Commit fires when the NEXT Submit's proposal carries this QC as its
-// justify. A quiescent system leaves the last block uncommitted; a
-// heartbeat or explicit "close chain" op lands in a later session if
-// that becomes a practical problem.
-//
-// Thread safety: Submit is serialized via the engine mutex so a
-// single gemot process driving concurrent HTTP handlers produces a
-// coherent block chain. The replica's own mutex guards state; the
-// engine mutex additionally serializes the propose/vote/recv sequence
-// so two Submits cannot interleave mid-round.
 type Engine struct {
 	mu        sync.Mutex
 	replica   *Replica
@@ -48,6 +26,11 @@ type Engine struct {
 	log      LogStore
 	voteHist VoteHistoryStore
 	keyStore ReplicaKeyStore
+	// clusterLock serializes the propose→append→commit round across every
+	// process that shares this engine's durable log. nil in single-process /
+	// in-memory deployments, where the engine mutex alone suffices. See
+	// ClusterLocker.
+	clusterLock ClusterLocker
 }
 
 // NewEngine constructs a single-node engine. Caller is responsible
@@ -86,29 +69,40 @@ func (e *Engine) RestoreChainState() {
 // propose→self-vote→commit round via submitOnce; if that round loses an
 // append race to another instance sharing the log (ErrLogForkDetected —
 // the height PRIMARY KEY guarantees one block per height, so a fork is a
-// rejected duplicate, never divergence), Submit resyncs this engine's
-// replica from the log and retries on the reconciled head. Bounded, so a
-// genuine pathology fails loudly instead of spinning.
+// rejected duplicate, never divergence), it resyncs this engine's replica
+// from the log and retries on the reconciled head.
+//
+// When a ClusterLocker is configured (multi-machine deployments sharing one
+// Postgres log), the entire round is held under the cluster-wide append lock
+// so no peer machine can interleave an append mid-round. That is what makes
+// the resync retry converge: without it, an active peer re-forks every retry
+// and the engine wedges (the height-4800 production incident). Single-process
+// engines pass clusterLock == nil and rely on the engine mutex alone.
 func (e *Engine) Submit(ctx context.Context, payload []byte) (QC, Block, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	const maxAttempts = 4
-	var forkErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		qc, blk, err := e.submitOnce(ctx, payload)
-		if err == nil {
-			return qc, blk, nil
-		}
-		if !errors.Is(err, ErrLogForkDetected) {
-			return QC{}, Block{}, err
-		}
-		forkErr = err
-		if rerr := e.resyncFromLog(ctx); rerr != nil {
-			return QC{}, Block{}, fmt.Errorf("bft: fork recovery failed: %w (fork: %v)", rerr, err)
-		}
+	if e.clusterLock == nil {
+		return e.submitLocked(ctx, payload)
 	}
-	return QC{}, Block{}, fmt.Errorf("bft: log fork persisted after %d resync+retry attempts: %w", maxAttempts, forkErr)
+	// Hold the cluster-wide append lock for the whole propose→append→commit
+	// round. fn's own error is returned verbatim; a non-nil lock error with
+	// fn success is a lock-infra failure (acquire/release) worth surfacing
+	// distinctly from a protocol error.
+	var qc QC
+	var blk Block
+	var innerErr error
+	lockErr := e.clusterLock.WithLock(ctx, BFTAppendLockKey, func() error {
+		qc, blk, innerErr = e.submitLocked(ctx, payload)
+		return innerErr
+	})
+	if innerErr != nil {
+		return QC{}, Block{}, innerErr
+	}
+	if lockErr != nil {
+		return QC{}, Block{}, fmt.Errorf("bft: cluster append lock: %w", lockErr)
+	}
+	return qc, blk, nil
 }
 
 // submitOnce proposes payload as the next block, drives the self-vote
@@ -256,9 +250,73 @@ func (e *Engine) resyncFromLog(ctx context.Context) error {
 	e.replica = replica
 	e.transport = transport
 	// Re-prime chain pointers from the rebuilt, log-derived committed head.
+	// CRITICAL: always reset to match the rebuilt replica — when the log has no
+	// commits yet, reset to genesis rather than leaving the discarded replica's
+	// pointers in place. A stale latestHash from the old replica references a
+	// block the fresh replica has never seen, so the next Propose fails with
+	// "parent block unknown". (This bites specifically when a resync fires
+	// before the two-chain rule has committed anything — e.g. the cluster
+	// staleness gate resyncing on an as-yet-uncommitted peer proposal.)
 	if committed := e.replica.Committed(); len(committed) > 1 {
 		e.latestHash = committed[len(committed)-1]
 		e.latestQC = e.replica.HighQC()
+	} else {
+		e.latestHash = Hash{}
+		e.latestQC = QC{}
 	}
 	return nil
+}
+
+// BFTAppendLockKey is the fixed advisory-lock key guarding the single shared
+// BFT log. One log ⇒ one key. Value is ASCII "gemotbft" so it is recognizable
+// in pg_locks during debugging.
+const BFTAppendLockKey int64 = 0x67656d6f74626674
+
+// ClusterLocker serializes the BFT append path across processes that share
+// one durable log. A single-node (N=1) engine assumes it is the SOLE writer
+// of the log — but when gemot runs on more than one machine (Fly autoscaling,
+// or the brief old+new overlap during any deploy) every machine runs its own
+// single-node engine against ONE shared Postgres log. Without cluster-wide
+// mutual exclusion, two machines append different blocks at the same height
+// and the log forks (ErrLogForkDetected); the shared anti-equivocation
+// counters then wedge the proposer with ErrDoublePropose. WithLock makes the
+// whole round atomic across machines: only one holds the lock at a time, so
+// the resync-on-fork retry runs UNCONTESTED and converges instead of
+// perpetually re-racing an active peer.
+//
+// Implemented by store.PostgresLogStore via pg_advisory_lock — a session lock
+// Postgres auto-releases if the holder's connection drops, so a crashed
+// machine can never wedge the cluster. nil for single-process/in-memory
+// engines.
+type ClusterLocker interface {
+	WithLock(ctx context.Context, key int64, fn func() error) error
+}
+
+// submitLocked drives the propose→append→commit round with a resync-on-conflict
+// retry. The caller holds e.mu; in a multi-machine deployment the caller also
+// holds the cluster append lock (see Submit) so the retry converges uncontested.
+// Two conflict classes are recoverable by adopting the shared log and retrying:
+// a log fork (a peer committed a different block at our target height) and a
+// vote-history regression (a peer advanced the shared anti-equivocation counter
+// past our view). Both mean "we're behind a peer" — resync from the log rebuilds
+// us at the reconciled head and view. Anything else is a genuine error. Bounded,
+// so a real pathology fails loudly instead of spinning.
+func (e *Engine) submitLocked(ctx context.Context, payload []byte) (QC, Block, error) {
+	const maxAttempts = 4
+	var lastConflict error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		qc, blk, err := e.submitOnce(ctx, payload)
+		if err == nil {
+			return qc, blk, nil
+		}
+		recoverable := errors.Is(err, ErrLogForkDetected) || errors.Is(err, ErrHistoryRegression)
+		if !recoverable {
+			return QC{}, Block{}, err
+		}
+		lastConflict = err
+		if rerr := e.resyncFromLog(ctx); rerr != nil {
+			return QC{}, Block{}, fmt.Errorf("bft: conflict recovery failed: %w (conflict: %v)", rerr, err)
+		}
+	}
+	return QC{}, Block{}, fmt.Errorf("bft: log conflict persisted after %d resync+retry attempts: %w", maxAttempts, lastConflict)
 }
