@@ -2,7 +2,6 @@ package tests
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -674,14 +673,4 @@ func TestManyAgentsManyVotes(t *testing.T) {
 	if result.VoteCount != voteCount {
 		t.Errorf("expected %d votes, got %d", voteCount, result.VoteCount)
 	}
-}
-
-// Helper to unmarshal JSON from analysis for inspection
-func mustJSON(t *testing.T, v any) string {
-	t.Helper()
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
 }

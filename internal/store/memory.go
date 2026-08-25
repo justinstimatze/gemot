@@ -1422,7 +1422,9 @@ func newID(prefix string) string {
 // errInDemoMode is returned by the few paths that genuinely don't make
 // sense without persistent state (currently unused; kept for future
 // methods that need to refuse rather than no-op).
-var errInDemoMode = errors.New("operation requires a persistent database (set DATABASE_URL)") //nolint:unused
+//
+//lint:ignore U1000 kept for future methods that need to refuse rather than no-op
+var errInDemoMode = errors.New("operation requires a persistent database (set DATABASE_URL)") //nolint:unused //nolint:unused
 
 // RecordCommitmentAccess appends a server-stamped downstream-access record.
 // Mirrors the Postgres adapter: id and created_at are filled here so the

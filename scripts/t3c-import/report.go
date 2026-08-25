@@ -1300,35 +1300,3 @@ func metricDeltaFloat(real, null float64) string {
 	pct := (real - null) / real * 100
 	return fmt.Sprintf("%+.0f%%", pct)
 }
-
-type cruxInfo struct {
-	Claim     string
-	Score     float64
-	NAgree    int
-	NDisagree int
-}
-
-func findNewCruxes(r1, r2 []struct {
-	Claim       string   `json:"crux_claim"`
-	Agree       []string `json:"agree_agents"`
-	Disagree    []string `json:"disagree_agents"`
-	Score       float64  `json:"controversy_score"`
-	Explanation string   `json:"explanation"`
-	Stances     []struct {
-		AgentID   string `json:"agent_id"`
-		Value     int    `json:"value"`
-		Qualifier string `json:"qualifier"`
-	} `json:"stances"`
-}) []cruxInfo {
-	r1Claims := map[string]bool{}
-	for _, c := range r1 {
-		r1Claims[c.Claim] = true
-	}
-	var newOnes []cruxInfo
-	for _, c := range r2 {
-		if !r1Claims[c.Claim] {
-			newOnes = append(newOnes, cruxInfo{Claim: c.Claim, Score: c.Score, NAgree: len(c.Agree), NDisagree: len(c.Disagree)})
-		}
-	}
-	return newOnes
-}

@@ -596,7 +596,10 @@ func (c *Council) Decide(ctx context.Context, run *Run, pos *chess.Position, lab
 	finalPick := map[string]string{}
 	for _, a := range c.Agents {
 		own := views[a.Personality.ID][ownMove(rec.Proposals, a.Personality.ID)]
-		pick := own.UCI
+		// pick is always assigned below before use — every branch overwrites
+		// it (own.UCI is only a fallback if Reconsider errors, not an initial
+		// value read anywhere).
+		var pick string
 		if c.llmMode == "full" && rec.Analysis != nil && a.llm != nil {
 			agentCtx := ""
 			if run.gemot != nil && rec.DeliberationID != "" {
