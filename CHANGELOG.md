@@ -4,6 +4,12 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### scripts/audit-prod-surfaces.sh: independent Is-Agentic readiness checks — 2026-08-25
+
+The third-party "Is Agentic" audit tool's rescan appeared to serve a cached report: identical evidence text (including specific claims already disproven live, like a missing `Vary: Accept` header) came back across multiple manual "rescan" clicks while the underlying conditions were being fixed and verified in between. Extended the existing prod-surface audit script with a self-contained section covering the 20 tracked items directly against gemot.dev — 404 negotiation, wrong-method 405s, markdown negotiation, MCP handshake shape, rate-limit headers, versioning policy, JSON-LD, trust-anchor pages — so this doesn't depend on that tool's cache to know the real state.
+
+Caught two of its own bugs while getting a clean run: `curl | grep -q` on a body large enough (~47KB homepage) to exceed the pipe buffer can SIGPIPE curl when grep exits early on a match, and `pipefail` then reports that nonzero exit for the whole pipeline even though grep found what it was looking for — a false failure on a genuinely-present tag. Fixed by matching on a captured variable with bash-native `[[ == *pattern* ]]` instead of piping through grep for anything sizable. Also stopped treating `/try`'s 429 as a failure — hitting its documented 3/IP/day sandbox limit from repeated test runs is expected, not drift.
+
 ### Agent-readiness round 3: MCP JSON-response mode, method-fallback 405s, formalized versioning — 2026-08-25
 
 Score went 56 → 92 → 93 across three re-crawls. Fixed the remaining concrete gaps:
