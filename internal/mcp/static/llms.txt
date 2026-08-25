@@ -16,7 +16,7 @@ Not a fit for: single-agent tasks, decisions that don't benefit from surfacing d
 
 ## Docs
 
-- [Documentation](https://gemot.dev/docs): Full tool/method/endpoint reference — connecting, auth, the seven grouped tools and their actions, A2A methods, SSE events, credits, rate limits. Markdown variant: https://gemot.dev/docs with `Accept: text/markdown`, or directly at https://gemot.dev/docs.md
+- [Documentation](https://gemot.dev/docs): Full tool/method/endpoint reference — connecting, auth, the seven grouped tools and their actions, A2A methods, SSE events, credits, rate limits, API versioning. Markdown variant: https://gemot.dev/docs with `Accept: text/markdown`, or directly at https://gemot.dev/docs.md
 - [Homepage](https://gemot.dev/): what Gemot is and why, with worked examples. Markdown variant at https://gemot.dev/index.md
 - [Getting started walkthrough](https://gemot.dev/try): zero-auth sandbox, no API key
 - [Pricing](https://gemot.dev/pricing): credit packs and per-analysis cost

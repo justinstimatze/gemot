@@ -2,6 +2,8 @@ package payments
 
 import (
 	"context"
+	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -74,4 +76,55 @@ func (r *RateLimiter) cleanup() {
 			delete(r.windows, key)
 		}
 	}
+}
+
+// SetRateLimitHeaders sets the IETF-draft RateLimit-* response headers
+// (RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset) on every response
+// from a rate-limited endpoint, plus Retry-After (RFC 9110 §10.2.3) when the
+// request was rejected — so an agent can self-throttle from the headers
+// alone instead of trial-and-error against 429s. Call once, right after the
+// Allow(key) check that decided allowed.
+func (r *RateLimiter) SetRateLimitHeaders(w http.ResponseWriter, key string, allowed bool) {
+	remaining, resetAt := r.Status(key)
+	resetSeconds := int(time.Until(resetAt).Seconds())
+	if resetSeconds < 0 {
+		resetSeconds = 0
+	}
+	h := w.Header()
+	h.Set("RateLimit-Limit", strconv.Itoa(r.limit))
+	h.Set("RateLimit-Remaining", strconv.Itoa(remaining))
+	h.Set("RateLimit-Reset", strconv.Itoa(resetSeconds))
+	if !allowed {
+		h.Set("Retry-After", strconv.Itoa(resetSeconds))
+	}
+}
+
+// Status returns the requests remaining in key's current window and when
+// that window resets (the moment the oldest in-window request ages out).
+// Read-only — does not mutate state or count as a request. Callers use this
+// to set the standard rate-limit response headers (see SetRateLimitHeaders)
+// so agents can self-throttle instead of guessing.
+func (r *RateLimiter) Status(key string) (remaining int, resetAt time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-r.window)
+	times := r.windows[key]
+	start := 0
+	for start < len(times) && times[start].Before(cutoff) {
+		start++
+	}
+	times = times[start:]
+
+	remaining = r.limit - len(times)
+	if remaining < 0 {
+		remaining = 0
+	}
+	if len(times) > 0 {
+		resetAt = times[0].Add(r.window)
+	} else {
+		resetAt = now
+	}
+	return remaining, resetAt
 }

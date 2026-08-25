@@ -124,7 +124,9 @@ func oauthAuthServerMetadataHandler(baseURL string) http.HandlerFunc {
 func oauthTokenHandler(creditStore *payments.CreditStore, limiter *payments.RateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := ClientIP(r)
-		if !limiter.Allow("oauth:" + ip) {
+		allowed := limiter.Allow("oauth:" + ip)
+		limiter.SetRateLimitHeaders(w, "oauth:"+ip, allowed)
+		if !allowed {
 			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 			return
 		}

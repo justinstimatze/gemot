@@ -4,6 +4,18 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Agent-readiness round 2: MCP transport JSON errors, rate-limit headers, API versioning — 2026-08-25
+
+Follow-up to the round-1 audit fixes (score went 56 → cached-92 → real re-crawl). Fixed the remaining gaps:
+
+- **JSON error responses (the real root cause)**: the MCP Go SDK's own request validation — a malformed JSON-RPC body, or an `Accept` header that omits either `application/json` or `text/event-stream` (Streamable HTTP requires both) — failed with a raw `http.Error` (`text/plain`), bypassing every JSON-error fix from round 1 because it happens inside the SDK's handler, before gemot's own code runs. Reproduced live: `POST /mcp` with `Accept: application/json` only returned `400 text/plain`. New `jsonErrorShim` wraps only the Streamable-HTTP path (not the SSE paths, which are gemot's own success-path code and already correct) with a buffering `ResponseWriter` that rewrites any non-2xx, non-JSON response into gemot's standard `{error, code, hint}` body — verified the real `initialize` handshake still succeeds unbuffered and unaffected.
+- **MCP protocol handshake**: the exact bug above was almost certainly what the audit's MCP client hit ("manifest found but protocol handshake failed") — same fix.
+- **Rate-limit response headers**: `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` (IETF draft) plus `Retry-After` on 429, via new `RateLimiter.Status`/`SetRateLimitHeaders`, wired into the REST-shaped endpoints (`/balance`, `/export`, `/join/{code}`, `/try`, `/try/{code}`, `/oauth/token`) — the ones a REST-focused crawler actually probes; MCP/A2A's own JSON-RPC error shapes were left alone.
+- **API versioning policy**: new `Gemot-Version` response header (date-stamped, Stripe-style — e.g. `2026-08-25`), set globally on every response, independent of the software release version. Deliberately NOT URL-path versioning (`/v1/`) — that would break every already-deployed MCP config pointed at `/mcp`. Documented the header plus the deprecation policy (90-day sunset, `Deprecation`/`Sunset` headers per RFC 8594) in `openapi.json` (a reusable `components.headers.GemotVersion`, referenced on `/health`, `/balance`, `/oauth/token`), `docs.md`/`docs.html`, and `llms.txt`.
+- New tests: `internal/mcp/errorshim_test.go` (rewrites a plain-text SDK error, leaves an already-JSON error alone, and — the safety-critical case — passes a streaming success response through byte-for-byte unbuffered) and `internal/payments/ratelimit_test.go` (header values, `Retry-After` only on rejection, `Status` never consumes budget).
+
+Confirmed via direct production diagnosis (no CDN, no cache headers, fresh `date` on every response, `robots.txt` wide open, no User-Agent-based content variance) that the identical 56/100 result on the first re-run was the audit tool replaying its own cached report, not stale gemot content — a second, genuine re-crawl scored 92/100 before this round's fixes even landed.
+
 ### Agent-readiness: machine-readable surface, JSON errors, OAuth facade, and cross-page fixes — 2026-08-24
 
 Response to a Vercel "Is Agentic" audit (56/100) of gemot.dev. Fixed every failing/partial item that was a genuine engineering gap (not a business/marketing decision):

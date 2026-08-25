@@ -312,7 +312,10 @@ Authorization: Bearer YOUR_API_KEY</code></pre>
 </ul>
 
 <h3>Rate limits</h3>
-<p>30 requests per minute per API key. Admin keys are not rate-limited.</p>
+<p>30 requests per minute per API key. Admin keys are not rate-limited. Rate-limited REST endpoints (<code>/balance</code>, <code>/export</code>, <code>/join/{code}</code>, <code>/try</code>, <code>/oauth/token</code>) return standard <code>RateLimit-Limit</code> / <code>RateLimit-Remaining</code> / <code>RateLimit-Reset</code> headers on every response, plus <code>Retry-After</code> on a 429 &mdash; self-throttle from the headers instead of trial-and-error.</p>
+
+<h3>API versioning</h3>
+<p>Every response carries a <code>Gemot-Version</code> header &mdash; a date (e.g. <code>2026-08-25</code>) identifying the API contract, independent of the software release version. There is no URL-path version (<code>/v1/</code>, <code>/v2/</code>): existing endpoints and MCP configs keep working across releases. A breaking change to a documented endpoint is announced in <a href="https://github.com/justinstimatze/gemot/blob/main/CHANGELOG.md">CHANGELOG.md</a> and the old shape stays live for at least 90 days; during that window the deprecated response carries <code>Deprecation: true</code> and a <code>Sunset</code> header (<a href="https://www.rfc-editor.org/rfc/rfc8594">RFC 8594</a>) naming the removal date.</p>
 
 <h3>Integrity checks</h3>
 <p>Analysis results include an <code>integrity_warnings</code> array that flags:</p>

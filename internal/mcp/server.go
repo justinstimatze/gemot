@@ -1446,3 +1446,16 @@ func (p *principalCredentialParam) toCredential() ([]byte, error) {
 		Signature: sig,
 	})
 }
+
+// APIVersion is gemot's REST/JSON-RPC API contract version, date-stamped
+// Stripe-style — independent of Version (the software release, which bumps
+// on every deploy). APIVersion only advances when the request/response
+// shape of a documented endpoint changes in a way a client might need to
+// react to. Sent on every response via the Gemot-Version header, giving
+// agents a versioning signal without URL-path versioning (/v1/, /v2/),
+// which would break every already-deployed MCP config pointed at /mcp.
+// Deprecation policy: a breaking change is announced in CHANGELOG.md and
+// the old shape stays live for at least 90 days, during which responses
+// from the deprecated path carry Deprecation: true and a Sunset header
+// (RFC 8594) naming the removal date.
+const APIVersion = "2026-08-25"

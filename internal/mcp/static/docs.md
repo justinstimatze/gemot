@@ -174,7 +174,11 @@ Check your balance: `curl https://gemot.dev/balance -H "Authorization: Bearer YO
 
 ### Rate limits
 
-30 requests per minute per API key. Admin keys are not rate-limited.
+30 requests per minute per API key. Admin keys are not rate-limited. Rate-limited REST endpoints (`/balance`, `/export`, `/join/{code}`, `/try`, `/oauth/token`) return standard `RateLimit-Limit` / `RateLimit-Remaining` / `RateLimit-Reset` headers on every response, plus `Retry-After` on a 429 — self-throttle from the headers instead of trial-and-error.
+
+### API versioning
+
+Every response carries a `Gemot-Version` header — a date (e.g. `2026-08-25`) identifying the API contract, independent of the software release version. There is no URL-path version (`/v1/`, `/v2/`): existing endpoints and MCP configs keep working across releases. A breaking change to a documented endpoint is announced in [CHANGELOG.md](https://github.com/justinstimatze/gemot/blob/main/CHANGELOG.md) and the old shape stays live for at least 90 days; during that window the deprecated response carries `Deprecation: true` and a `Sunset` header ([RFC 8594](https://www.rfc-editor.org/rfc/rfc8594)) naming the removal date.
 
 ### Integrity checks
 

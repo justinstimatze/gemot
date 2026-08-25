@@ -3,7 +3,7 @@
   "info": {
     "title": "Gemot API",
     "version": "0.13.1",
-    "description": "Gemot exposes structured deliberation for AI agents as seven grouped tools (deliberation, participate, analyze, decide, coordinate, admin, account), reachable over MCP (Streamable HTTP at /mcp), A2A JSON-RPC 2.0 (/a2a), or the REST-ish endpoints documented here. Full tool/action reference: https://gemot.dev/docs (or https://gemot.dev/docs with `Accept: text/markdown`).",
+    "description": "Gemot exposes structured deliberation for AI agents as seven grouped tools (deliberation, participate, analyze, decide, coordinate, admin, account), reachable over MCP (Streamable HTTP at /mcp), A2A JSON-RPC 2.0 (/a2a), or the REST-ish endpoints documented here. Full tool/action reference: https://gemot.dev/docs (or https://gemot.dev/docs with `Accept: text/markdown`).\n\n**Versioning policy**: every response carries a `Gemot-Version` header (date-stamped, e.g. `2026-08-25`) identifying the API contract version — independent of the `info.version` software release above, which bumps on every deploy without necessarily changing the API. There is no URL-path version (/v1/, /v2/): existing endpoints and MCP configs keep working across software releases. A breaking change to a documented endpoint is announced in CHANGELOG.md and the old shape stays live for at least 90 days; during that window the deprecated response carries `Deprecation: true` and a `Sunset` header (RFC 8594) naming the removal date.",
     "contact": { "name": "Gemot support", "email": "justin@gemot.dev", "url": "https://gemot.dev/contact" },
     "license": { "name": "Apache-2.0", "url": "https://github.com/justinstimatze/gemot/blob/main/LICENSE" },
     "termsOfService": "https://gemot.dev/terms"
@@ -66,6 +66,24 @@
         "schema": { "type": "string", "format": "uuid" },
         "description": "The target deliberation's ID."
       }
+    },
+    "headers": {
+      "GemotVersion": {
+        "description": "The API contract version (date-stamped, e.g. 2026-08-25), sent on every response. See info.description for the versioning and deprecation policy.",
+        "schema": { "type": "string", "example": "2026-08-25" }
+      },
+      "RateLimitLimit": {
+        "description": "Requests allowed per window for this key.",
+        "schema": { "type": "integer" }
+      },
+      "RateLimitRemaining": {
+        "description": "Requests remaining in the current window.",
+        "schema": { "type": "integer" }
+      },
+      "RateLimitReset": {
+        "description": "Seconds until the current window resets.",
+        "schema": { "type": "integer" }
+      }
     }
   },
   "paths": {
@@ -78,6 +96,7 @@
         "responses": {
           "200": {
             "description": "Service is healthy.",
+            "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" } },
             "content": { "application/json": { "schema": { "type": "object", "properties": {
               "status": { "type": "string", "enum": ["ok"] },
               "service": { "type": "string", "enum": ["gemot"] },
@@ -133,9 +152,28 @@
           }, "required": ["grant_type", "client_secret"] } } }
         },
         "responses": {
-          "200": { "description": "Token issued.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OAuthTokenResponse" } } } },
+          "200": {
+            "description": "Token issued.",
+            "headers": {
+              "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" },
+              "RateLimit-Limit": { "$ref": "#/components/headers/RateLimitLimit" },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" },
+              "RateLimit-Reset": { "$ref": "#/components/headers/RateLimitReset" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OAuthTokenResponse" } } }
+          },
           "400": { "description": "Malformed request or unsupported grant_type.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OAuthErrorResponse" } } } },
-          "401": { "description": "client_secret is not a valid, active API key.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OAuthErrorResponse" } } } }
+          "401": { "description": "client_secret is not a valid, active API key.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OAuthErrorResponse" } } } },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": { "description": "Seconds to wait before retrying.", "schema": { "type": "integer" } },
+              "RateLimit-Limit": { "$ref": "#/components/headers/RateLimitLimit" },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" },
+              "RateLimit-Reset": { "$ref": "#/components/headers/RateLimitReset" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } }
+          }
         }
       }
     },
@@ -203,11 +241,28 @@
         "summary": "Check credit balance",
         "description": "Returns the caller's remaining credits and the per-model cost of the paid analyze actions.",
         "responses": {
-          "200": { "description": "Balance.", "content": { "application/json": { "schema": { "type": "object", "properties": {
-            "credits_remaining": { "type": "integer" },
-            "cost_per_analyze": { "type": "object", "properties": { "sonnet": { "type": "integer" }, "opus": { "type": "integer" }, "haiku": { "type": "integer" } } }
-          } } } } },
-          "401": { "description": "Missing or invalid API key.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+          "200": {
+            "description": "Balance.",
+            "headers": {
+              "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" },
+              "RateLimit-Limit": { "$ref": "#/components/headers/RateLimitLimit" },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" },
+              "RateLimit-Reset": { "$ref": "#/components/headers/RateLimitReset" }
+            },
+            "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "credits_remaining": { "type": "integer" },
+              "cost_per_analyze": { "type": "object", "properties": { "sonnet": { "type": "integer" }, "opus": { "type": "integer" }, "haiku": { "type": "integer" } } }
+            } } } }
+          },
+          "401": { "description": "Missing or invalid API key.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": { "description": "Seconds to wait before retrying.", "schema": { "type": "integer" } },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } }
+          }
         }
       }
     },

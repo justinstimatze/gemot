@@ -285,7 +285,12 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 			mcpSSEWithKeepalive.ServeHTTP(w, r)
 			return
 		}
-		mcpStreamHandler.ServeHTTP(w, r)
+		// jsonErrorShim only: the streamable-HTTP path is where the MCP SDK's
+		// own validation (malformed JSON-RPC, a non-conforming Accept header)
+		// can fail with a plain-text http.Error before gemot's own handlers
+		// ever run. The SSE branches above are left untouched — they're
+		// gemot's own success-path streaming and don't hit that failure mode.
+		jsonErrorShim(mcpStreamHandler).ServeHTTP(w, r)
 	})
 	// Payment runs first so the request context carries ContextKeyKeyID by the
 	// time the envelope middleware scopes the agent_id for key lookup. SSE GET
@@ -300,7 +305,9 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 	mux.HandleFunc("/join/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Vary", "Accept")
 		ip := ClientIP(r)
-		if !endpointLimiter.Allow("join:" + ip) {
+		allowed := endpointLimiter.Allow("join:" + ip)
+		endpointLimiter.SetRateLimitHeaders(w, "join:"+ip, allowed)
+		if !allowed {
 			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 			return
 		}
@@ -540,7 +547,9 @@ No API key needed — the join code is your credential.
 		// Balance check (authenticated, rate-limited)
 		mux.HandleFunc("/balance", func(w http.ResponseWriter, r *http.Request) {
 			ip := ClientIP(r)
-			if !endpointLimiter.Allow("balance:" + ip) {
+			allowed := endpointLimiter.Allow("balance:" + ip)
+			endpointLimiter.SetRateLimitHeaders(w, "balance:"+ip, allowed)
+			if !allowed {
 				jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 				return
 			}
@@ -617,7 +626,9 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 	// CSV export (authenticated, rate-limited) — T3C-compatible format
 	mux.HandleFunc("/export", func(w http.ResponseWriter, r *http.Request) {
 		ip := ClientIP(r)
-		if !endpointLimiter.Allow("export:" + ip) {
+		allowed := endpointLimiter.Allow("export:" + ip)
+		endpointLimiter.SetRateLimitHeaders(w, "export:"+ip, allowed)
+		if !allowed {
 			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 			return
 		}
@@ -743,7 +754,9 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 
 		// Rate limit by IP
 		ip := ClientIP(r)
-		if !tryLimiter.Allow("try:" + ip) {
+		allowed := tryLimiter.Allow("try:" + ip)
+		tryLimiter.SetRateLimitHeaders(w, "try:"+ip, allowed)
+		if !allowed {
 			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limited — max 3 sandbox deliberations per day", "retry tomorrow, or get an API key at /pricing for unlimited use")
 			return
 		}
@@ -812,7 +825,9 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		// (same bucket as other read endpoints) is plenty for a real
 		// user and blocks enumeration.
 		ip := ClientIP(r)
-		if !endpointLimiter.Allow("try-get:" + ip) {
+		allowed := endpointLimiter.Allow("try-get:" + ip)
+		endpointLimiter.SetRateLimitHeaders(w, "try-get:"+ip, allowed)
+		if !allowed {
 			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 			return
 		}
@@ -917,6 +932,10 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		w.Header().Set("Content-Security-Policy", csp)
+		// Gemot-Version: the API contract version (see APIVersion), sent on
+		// every response so a client can detect drift without URL-path
+		// versioning. Independent of the software release version.
+		w.Header().Set("Gemot-Version", APIVersion)
 		mux.ServeHTTP(w, r)
 	})
 
