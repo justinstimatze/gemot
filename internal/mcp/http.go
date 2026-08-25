@@ -198,7 +198,17 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 	}
 
 	mcpSSEHandler := sdkmcp.NewSSEHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
-	mcpStreamHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, nil)
+	// JSONResponse: true so a POST carrying a single JSON-RPC message (e.g.
+	// initialize) gets a plain application/json body instead of an
+	// SSE-wrapped one (spec §2.1.5 explicitly allows either; the dual
+	// application/json + text/event-stream Accept requirement exists so a
+	// client can handle whichever the server picks). A long-lived call
+	// (subscriptions/listen) is unaffected — the SDK forces SSE for those
+	// regardless — and server-pushed notifications during a call still reach
+	// the standalone GET SSE stream real clients keep open. This is aimed at
+	// simple MCP clients/probes that only know how to parse a synchronous
+	// JSON body, without changing anything for SSE-capable clients.
+	mcpStreamHandler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return srv }, &sdkmcp.StreamableHTTPOptions{JSONResponse: true})
 
 	baseURL := os.Getenv("GEMOT_BASE_URL")
 	if baseURL == "" {
@@ -442,11 +452,13 @@ No API key needed — the join code is your credential.
 	a2aAuth := A2AAuthMiddleware(apiSecret, creditStore, a2aLimiter, svc, a2aSandboxLimiter, mppCfg.RequireAuth)
 	a2aHandler := A2AHandler(svc, creditStore, backend, backend, creditGate)
 	mux.Handle("POST /a2a", a2aAuth(envelopeMiddleware(a2aHandler)))
+	mux.Handle("/a2a", methodNotAllowedJSON("POST"))
 
 	// SSE event stream — real-time deliberation state changes
 	eventBus := deliberation.NewEventBus()
 	svc.SetEventBus(eventBus)
 	mux.HandleFunc("GET /events", EventsHandler(svc, creditStore, apiSecret, a2aLimiter))
+	mux.Handle("/events", methodNotAllowedJSON("GET"))
 
 	// Stripe Checkout — purchase credit packs (public, IP rate-limited)
 	checkoutLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
@@ -475,6 +487,7 @@ No API key needed — the join code is your credential.
 			}
 			webhookHandler(w, r)
 		})
+		mux.Handle("/webhook/stripe", methodNotAllowedJSON("POST"))
 	}
 
 	// Agent card (A2A discovery) — generated from the Version constant so it
@@ -508,6 +521,7 @@ No API key needed — the join code is your credential.
 	// physical schema. In demo mode the in-memory backend has no
 	// equivalent counters and the route stays unregistered.
 	if !demoMode {
+		mux.Handle("/metrics", methodNotAllowedJSON("GET"))
 		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			auth := r.Header.Get("Authorization")
@@ -889,6 +903,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 	mux.HandleFunc("/.well-known/oauth-authorization-server", oauthAuthServerMetadataHandler(baseURL))
 	oauthLimiter := payments.NewRateLimiter(ctx, 30, time.Minute)
 	mux.HandleFunc("POST /oauth/token", oauthTokenHandler(creditStore, oauthLimiter))
+	mux.Handle("/oauth/token", methodNotAllowedJSON("POST"))
 
 	// Landing page
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

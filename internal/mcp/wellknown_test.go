@@ -218,8 +218,13 @@ func TestMachineReadableFilesAreWellFormed(t *testing.T) {
 			t.Fatalf("reading openapi.json: %v", err)
 		}
 		var spec struct {
-			OpenAPI string                    `json:"openapi"`
-			Paths   map[string]map[string]any `json:"paths"`
+			OpenAPI          string                    `json:"openapi"`
+			Paths            map[string]map[string]any `json:"paths"`
+			VersioningPolicy struct {
+				Strategy string `json:"strategy"`
+				Header   string `json:"header"`
+				Current  string `json:"current"`
+			} `json:"x-versioning-policy"`
 		}
 		if err := json.Unmarshal(data, &spec); err != nil {
 			t.Fatalf("openapi.json is not valid JSON: %v", err)
@@ -231,6 +236,20 @@ func TestMachineReadableFilesAreWellFormed(t *testing.T) {
 			if _, ok := spec.Paths[want]; !ok {
 				t.Errorf("openapi.json missing path %q", want)
 			}
+		}
+		// Item 4 of the audit wants the versioning/deprecation policy
+		// FORMALIZED in the spec, not just described in prose.
+		if spec.VersioningPolicy.Strategy != "header" {
+			t.Errorf("x-versioning-policy.strategy = %q, want header", spec.VersioningPolicy.Strategy)
+		}
+		if spec.VersioningPolicy.Header != "Gemot-Version" {
+			t.Errorf("x-versioning-policy.header = %q, want Gemot-Version", spec.VersioningPolicy.Header)
+		}
+		if spec.VersioningPolicy.Current == "" {
+			t.Error("x-versioning-policy.current is empty")
+		}
+		if _, ok := spec.Paths["/health"]["get"].(map[string]any)["responses"].(map[string]any)["200"].(map[string]any)["headers"].(map[string]any)["Gemot-Version"]; !ok {
+			t.Error("GET /health's 200 response doesn't reference the Gemot-Version header component")
 		}
 		// Every operation must have a unique operationId (item 13/14: API schema
 		// complexity + function-calling compatibility both key off this).
@@ -389,4 +408,38 @@ func TestStaticFileHandler(t *testing.T) {
 			t.Errorf("status = %d, want 404", rec.Code)
 		}
 	})
+}
+
+// TestMethodNotAllowedJSON is the regression for a real production gap: a
+// request to a documented, method-restricted API path (e.g. GET /a2a, which
+// is POST-only) using the wrong method didn't match ANY registered mux
+// pattern and fell through to the generic 404 handler, which defaults to a
+// markdown body absent an Accept header — reading as "not a JSON API" to a
+// naive discovery probe. The fix registers this as the any-method fallback
+// alongside the method-specific pattern (Go's enhanced ServeMux convention).
+func TestMethodNotAllowedJSON(t *testing.T) {
+	h := methodNotAllowedJSON("POST")
+	rec := httptest.NewRecorder()
+	// No Accept header at all — the exact naive-probe case that used to fall
+	// through to the markdown-default 404.
+	h(rec, httptest.NewRequest(http.MethodGet, "/a2a", nil))
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+	if allow := rec.Header().Get("Allow"); allow != "POST" {
+		t.Errorf("Allow = %q, want POST", allow)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("content-type = %q, want application/json regardless of Accept header", ct)
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not valid JSON: %v", err)
+	}
+	if body.Code != "method_not_allowed" {
+		t.Errorf("code = %q, want method_not_allowed", body.Code)
+	}
 }

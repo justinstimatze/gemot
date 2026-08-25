@@ -4,6 +4,17 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Agent-readiness round 3: MCP JSON-response mode, method-fallback 405s, formalized versioning — 2026-08-25
+
+Score went 56 → 92 → 93 across three re-crawls. Fixed the remaining concrete gaps:
+
+- **MCP protocol handshake**: enabled the Go SDK's `StreamableHTTPOptions.JSONResponse` mode, so a POST carrying a single JSON-RPC message (`initialize`, most tool calls) now gets a plain `application/json` body instead of an SSE-wrapped one — spec §2.1.5 explicitly allows either, and this is aimed at simple/strict MCP clients that only parse a synchronous JSON response. Verified a full session live: `initialize` → `notifications/initialized` → `tools/list` all round-trip correctly in the new mode, and the GET/SSE path real persistent clients (Claude Code, Cursor) use is completely unaffected — the SDK forces SSE regardless for genuinely long-lived calls (`subscriptions/listen`), and mid-call server notifications still route to the standalone SSE stream.
+- **JSON error responses (the actual remaining gap)**: found that every POST-only/GET-only API route (`/a2a`, `/oauth/token`, `/webhook/stripe`, `/events`, `/metrics`) returned a bare **404 with a markdown body** when hit with the wrong method and no `Accept` header — Go's `ServeMux` doesn't match a method-qualified pattern to the wrong method, so the request fell through to the generic 404 handler instead of a 405. That's exactly the shape of a naive API-discovery probe (`GET /a2a`, no special headers). Fixed via Go's documented dual-registration pattern: a bare any-method fallback (`methodNotAllowedJSON`) alongside each method-specific route, returning a proper `405` with an `Allow` header and a JSON body.
+- **REST versioning, formalized in the spec (not just prose)**: added a top-level `x-versioning-policy` object to `openapi.json` (strategy, header name, current value, explicit no-URL-path-versioning rationale, deprecation signal headers and minimum notice period) plus `Deprecation`/`Sunset` header components, and broadened the `Gemot-Version` header reference across every documented 200 response (previously only 3 of 13 paths had it referenced, even though the runtime header was already global).
+- New tests: `TestMethodNotAllowedJSON` (the 405 fallback, including the no-Accept-header case that used to leak markdown), and `TestMachineReadableFilesAreWellFormed` extended to assert `x-versioning-policy` is structurally present, not just described.
+
+Not further actionable by code (unchanged from round 2, re-confirmed): brand/developer-resource discoverability is index-time-dependent; Organization address and CLI publishing stay declined per earlier decisions; "onboarding not verified live" and one rate-limit-header finding ("not observed... API requires authentication") both read as limitations of the audit's own probe methodology (it apparently can't or doesn't authenticate, and picked an auth-required endpoint rather than the already-public, already-header-emitting `/try`) rather than a real gap — rate-limit headers are confirmed present on `/try`'s live, unauthenticated 200 response.
+
 ### Agent-readiness round 2: MCP transport JSON errors, rate-limit headers, API versioning — 2026-08-25
 
 Follow-up to the round-1 audit fixes (score went 56 → cached-92 → real re-crawl). Fixed the remaining gaps:

@@ -3,7 +3,7 @@
   "info": {
     "title": "Gemot API",
     "version": "0.13.1",
-    "description": "Gemot exposes structured deliberation for AI agents as seven grouped tools (deliberation, participate, analyze, decide, coordinate, admin, account), reachable over MCP (Streamable HTTP at /mcp), A2A JSON-RPC 2.0 (/a2a), or the REST-ish endpoints documented here. Full tool/action reference: https://gemot.dev/docs (or https://gemot.dev/docs with `Accept: text/markdown`).\n\n**Versioning policy**: every response carries a `Gemot-Version` header (date-stamped, e.g. `2026-08-25`) identifying the API contract version — independent of the `info.version` software release above, which bumps on every deploy without necessarily changing the API. There is no URL-path version (/v1/, /v2/): existing endpoints and MCP configs keep working across software releases. A breaking change to a documented endpoint is announced in CHANGELOG.md and the old shape stays live for at least 90 days; during that window the deprecated response carries `Deprecation: true` and a `Sunset` header (RFC 8594) naming the removal date.",
+    "description": "Gemot exposes structured deliberation for AI agents as seven grouped tools (deliberation, participate, analyze, decide, coordinate, admin, account), reachable over MCP (Streamable HTTP at /mcp), A2A JSON-RPC 2.0 (/a2a), or the REST-ish endpoints documented here. Full tool/action reference: https://gemot.dev/docs (or https://gemot.dev/docs with `Accept: text/markdown`).\n\n**Versioning policy** (formalized in `x-versioning-policy` below, not just here): every response carries a `Gemot-Version` header (date-stamped, e.g. `2026-08-25`) identifying the API contract version — independent of the `info.version` software release above, which bumps on every deploy without necessarily changing the API. There is no URL-path version (/v1/, /v2/): existing endpoints and MCP configs keep working across software releases. A breaking change to a documented endpoint is announced in CHANGELOG.md and the old shape stays live for at least 90 days; during that window the deprecated response carries `Deprecation: true` and a `Sunset` header (RFC 8594) naming the removal date.",
     "contact": { "name": "Gemot support", "email": "justin@gemot.dev", "url": "https://gemot.dev/contact" },
     "license": { "name": "Apache-2.0", "url": "https://github.com/justinstimatze/gemot/blob/main/LICENSE" },
     "termsOfService": "https://gemot.dev/terms"
@@ -11,6 +11,21 @@
   "servers": [ { "url": "https://gemot.dev", "description": "Hosted production" } ],
   "externalDocs": { "description": "Full tool reference and deliberation flow", "url": "https://gemot.dev/docs" },
   "security": [ { "bearerAuth": [] }, { "oauth2ClientCredentials": [] }, {} ],
+  "x-versioning-policy": {
+    "strategy": "header",
+    "header": "Gemot-Version",
+    "current": "2026-08-25",
+    "format": "date (YYYY-MM-DD)",
+    "url_path_versioning": false,
+    "url_path_versioning_reason": "would break every already-deployed MCP config pointed at /mcp",
+    "software_version_is_independent": "info.version above tracks the software release and bumps on every deploy; x-versioning-policy.current only advances when a documented endpoint's request/response shape changes.",
+    "deprecation_signal": {
+      "headers": ["Deprecation", "Sunset"],
+      "sunset_header_format": "RFC 8594 (HTTP-date)",
+      "minimum_notice_days": 90,
+      "announced_in": "https://github.com/justinstimatze/gemot/blob/main/CHANGELOG.md"
+    }
+  },
   "components": {
     "securitySchemes": {
       "bearerAuth": {
@@ -69,8 +84,16 @@
     },
     "headers": {
       "GemotVersion": {
-        "description": "The API contract version (date-stamped, e.g. 2026-08-25), sent on every response. See info.description for the versioning and deprecation policy.",
+        "description": "The API contract version (date-stamped, e.g. 2026-08-25), sent on every response. See x-versioning-policy and info.description.",
         "schema": { "type": "string", "example": "2026-08-25" }
+      },
+      "Deprecation": {
+        "description": "Present (value true) only on a response from an endpoint/shape in its 90-day sunset window. Absent otherwise — nothing is currently deprecated. See x-versioning-policy.deprecation_signal.",
+        "schema": { "type": "boolean" }
+      },
+      "Sunset": {
+        "description": "Present alongside Deprecation: true — the HTTP-date (RFC 8594 / RFC 9110 §5.6.7) the deprecated shape will be removed.",
+        "schema": { "type": "string", "format": "date-time" }
       },
       "RateLimitLimit": {
         "description": "Requests allowed per window for this key.",
@@ -119,7 +142,7 @@
         "summary": "A2A Agent Card",
         "description": "Agent-to-agent discovery metadata per the A2A protocol: server identity, capabilities, and skills.",
         "security": [],
-        "responses": { "200": { "description": "Agent Card JSON.", "content": { "application/json": { "schema": { "type": "object" } } } } }
+        "responses": { "200": { "description": "Agent Card JSON.", "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" } }, "content": { "application/json": { "schema": { "type": "object" } } } } }
       }
     },
     "/.well-known/oauth-authorization-server": {
@@ -128,7 +151,7 @@
         "summary": "OAuth 2.0 Authorization Server Metadata (RFC 8414)",
         "description": "Advertises the client_credentials grant only — gemot has no user-account/consent system, so no authorization_code flow is offered. The client_secret in the token exchange is an existing gmt_ API key; this does not mint new credentials.",
         "security": [],
-        "responses": { "200": { "description": "Authorization server metadata.", "content": { "application/json": { "schema": { "type": "object", "properties": {
+        "responses": { "200": { "description": "Authorization server metadata.", "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" } }, "content": { "application/json": { "schema": { "type": "object", "properties": {
           "issuer": { "type": "string", "format": "uri" },
           "token_endpoint": { "type": "string", "format": "uri" },
           "grant_types_supported": { "type": "array", "items": { "type": "string" } },
@@ -183,7 +206,7 @@
         "summary": "MCP server manifest",
         "description": "Best-effort discovery manifest for MCP-aware crawlers and directories: transport, endpoint URL, and the seven grouped tools with short descriptions.",
         "security": [],
-        "responses": { "200": { "description": "MCP manifest JSON.", "content": { "application/json": { "schema": { "type": "object" } } } } }
+        "responses": { "200": { "description": "MCP manifest JSON.", "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" } }, "content": { "application/json": { "schema": { "type": "object" } } } } }
       }
     },
     "/a2a": {
@@ -213,12 +236,16 @@
           }, "required": ["jsonrpc", "method"] } } }
         },
         "responses": {
-          "200": { "description": "JSON-RPC 2.0 response (result or error object).", "content": { "application/json": { "schema": { "type": "object", "properties": {
-            "jsonrpc": { "type": "string", "enum": ["2.0"] },
-            "id": {},
-            "result": { "type": "object" },
-            "error": { "type": "object", "properties": { "code": { "type": "integer" }, "message": { "type": "string" } } }
-          } } } } }
+          "200": {
+            "description": "JSON-RPC 2.0 response (result or error object).",
+            "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" } },
+            "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "jsonrpc": { "type": "string", "enum": ["2.0"] },
+              "id": {},
+              "result": { "type": "object" },
+              "error": { "type": "object", "properties": { "code": { "type": "integer" }, "message": { "type": "string" } } }
+            } } } }
+          }
         }
       }
     },
@@ -232,7 +259,7 @@
           { "name": "share_token", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Alternative to a Bearer token: read-only access to a group's deliberations." },
           { "name": "token", "in": "query", "required": false, "schema": { "type": "string" }, "description": "API key, for clients that cannot set an Authorization header." }
         ],
-        "responses": { "200": { "description": "text/event-stream of JSON event payloads.", "content": { "text/event-stream": { "schema": { "type": "string" } } } } }
+        "responses": { "200": { "description": "text/event-stream of JSON event payloads.", "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" } }, "content": { "text/event-stream": { "schema": { "type": "string" } } } } }
       }
     },
     "/balance": {
@@ -273,11 +300,19 @@
         "description": "Talk to the City-compatible CSV export of a deliberation's positions and vote counts.",
         "parameters": [ { "$ref": "#/components/parameters/DeliberationId" } ],
         "responses": {
-          "200": { "description": "CSV file.", "content": { "text/csv": { "schema": { "type": "string" } } } },
+          "200": { "description": "CSV file.", "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" }, "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" } }, "content": { "text/csv": { "schema": { "type": "string" } } } },
           "400": { "description": "Missing deliberation_id.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
           "401": { "description": "Missing or invalid API key.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
           "403": { "description": "Access denied (private deliberation).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
-          "404": { "description": "Deliberation not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+          "404": { "description": "Deliberation not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": { "description": "Seconds to wait before retrying.", "schema": { "type": "integer" } },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } }
+          }
         }
       }
     },
@@ -301,7 +336,10 @@
         "description": "GET with no Accept header returns the HTML creation form. GET with Accept: application/json and a topic query param behaves like POST — creates the sandbox directly and returns its join code.",
         "security": [],
         "parameters": [ { "name": "topic", "in": "query", "required": false, "schema": { "type": "string", "maxLength": 200 } } ],
-        "responses": { "200": { "description": "Sandbox form or created-sandbox JSON." }, "303": { "description": "Redirect to the sandbox page (HTML client)." } }
+        "responses": {
+          "200": { "description": "Sandbox form or created-sandbox JSON.", "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" } } },
+          "303": { "description": "Redirect to the sandbox page (HTML client)." }
+        }
       },
       "post": {
         "operationId": "createSandboxDeliberation",
@@ -310,11 +348,29 @@
         "security": [],
         "requestBody": { "required": false, "content": { "application/x-www-form-urlencoded": { "schema": { "type": "object", "properties": { "topic": { "type": "string", "maxLength": 200 } } } } } },
         "responses": {
-          "200": { "description": "Created (JSON, when Accept: application/json).", "content": { "application/json": { "schema": { "type": "object", "properties": {
-            "deliberation_id": { "type": "string" }, "join_code": { "type": "string" }, "join_url": { "type": "string" }, "expires_at": { "type": "string", "format": "date-time" }
-          } } } } },
+          "200": {
+            "description": "Created (JSON, when Accept: application/json).",
+            "headers": {
+              "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" },
+              "RateLimit-Limit": { "$ref": "#/components/headers/RateLimitLimit" },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" },
+              "RateLimit-Reset": { "$ref": "#/components/headers/RateLimitReset" }
+            },
+            "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "deliberation_id": { "type": "string" }, "join_code": { "type": "string" }, "join_url": { "type": "string" }, "expires_at": { "type": "string", "format": "date-time" }
+            } } } }
+          },
           "303": { "description": "Redirect to the sandbox page (HTML client)." },
-          "429": { "description": "Rate limited.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": { "description": "Seconds to wait before retrying.", "schema": { "type": "integer" } },
+              "RateLimit-Limit": { "$ref": "#/components/headers/RateLimitLimit" },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" },
+              "RateLimit-Reset": { "$ref": "#/components/headers/RateLimitReset" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } }
+          }
         }
       }
     },
@@ -326,8 +382,16 @@
         "security": [],
         "parameters": [ { "name": "code", "in": "path", "required": true, "schema": { "type": "string" } } ],
         "responses": {
-          "200": { "description": "Sandbox status page." },
-          "404": { "description": "Invalid or expired code.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+          "200": { "description": "Sandbox status page.", "headers": { "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" }, "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" } } },
+          "404": { "description": "Invalid or expired code.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": { "description": "Seconds to wait before retrying.", "schema": { "type": "integer" } },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } }
+          }
         }
       }
     },
@@ -339,14 +403,33 @@
         "security": [],
         "parameters": [ { "name": "code", "in": "path", "required": true, "schema": { "type": "string" } } ],
         "responses": {
-          "200": { "description": "Join-code metadata.", "content": { "application/json": { "schema": { "type": "object", "properties": {
-            "code": { "type": "string" }, "deliberation_id": { "type": "string" }, "topic": { "type": "string" },
-            "role": { "type": "string" }, "expires_at": { "type": "string", "format": "date-time" },
-            "expired": { "type": "boolean" }, "full": { "type": "boolean" }, "use_count": { "type": "integer" }, "max_uses": { "type": "integer" },
-            "join_endpoint": { "type": "string" }, "join_tool": { "type": "string" },
-            "join_params": { "type": "object", "properties": { "action": { "type": "string" }, "code": { "type": "string" }, "agent_id": { "type": "string" } } }
-          } } } } },
-          "404": { "description": "Invalid or expired join code.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } }
+          "200": {
+            "description": "Join-code metadata.",
+            "headers": {
+              "Gemot-Version": { "$ref": "#/components/headers/GemotVersion" },
+              "RateLimit-Limit": { "$ref": "#/components/headers/RateLimitLimit" },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" },
+              "RateLimit-Reset": { "$ref": "#/components/headers/RateLimitReset" }
+            },
+            "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "code": { "type": "string" }, "deliberation_id": { "type": "string" }, "topic": { "type": "string" },
+              "role": { "type": "string" }, "expires_at": { "type": "string", "format": "date-time" },
+              "expired": { "type": "boolean" }, "full": { "type": "boolean" }, "use_count": { "type": "integer" }, "max_uses": { "type": "integer" },
+              "join_endpoint": { "type": "string" }, "join_tool": { "type": "string" },
+              "join_params": { "type": "object", "properties": { "action": { "type": "string" }, "code": { "type": "string" }, "agent_id": { "type": "string" } } }
+            } } } }
+          },
+          "404": { "description": "Invalid or expired join code.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } } },
+          "429": {
+            "description": "Rate limited.",
+            "headers": {
+              "Retry-After": { "description": "Seconds to wait before retrying.", "schema": { "type": "integer" } },
+              "RateLimit-Limit": { "$ref": "#/components/headers/RateLimitLimit" },
+              "RateLimit-Remaining": { "$ref": "#/components/headers/RateLimitRemaining" },
+              "RateLimit-Reset": { "$ref": "#/components/headers/RateLimitReset" }
+            },
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ApiError" } } }
+          }
         }
       }
     }

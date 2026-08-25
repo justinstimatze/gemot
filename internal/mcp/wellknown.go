@@ -173,3 +173,21 @@ func writeOAuthError(w http.ResponseWriter, status int, code, description string
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": description})
 }
+
+// methodNotAllowedJSON returns a handler for the any-method fallback pattern
+// registered alongside a method-specific one (Go's enhanced ServeMux: e.g.
+// "POST /a2a" plus a bare "/a2a" — the method-specific pattern wins for its
+// method, and everything else falls through to the bare one). Without this,
+// a request to a documented API endpoint using the wrong method doesn't
+// match ANY registered pattern and falls through to the generic 404
+// (markdown by default) instead of a 405 that correctly signals "this
+// endpoint exists, wrong method" — the exact naive-crawler probe (GET on a
+// POST-only API path, no Accept header) an "is this a real JSON API"
+// check is likely to run.
+func methodNotAllowedJSON(allowed ...string) http.HandlerFunc {
+	allow := strings.Join(allowed, ", ")
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Allow", allow)
+		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", "use "+allow)
+	}
+}
