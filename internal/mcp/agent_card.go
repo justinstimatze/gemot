@@ -200,12 +200,12 @@ func AgentCardJSON() ([]byte, error) {
 func AgentCardHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", "use GET or HEAD")
 		return
 	}
 	body, err := AgentCardJSON()
 	if err != nil {
-		http.Error(w, "failed to render agent card", http.StatusInternalServerError)
+		jsonError(w, http.StatusInternalServerError, "internal_error", "failed to render agent card", "")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

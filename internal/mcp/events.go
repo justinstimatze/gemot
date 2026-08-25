@@ -12,21 +12,11 @@ import (
 	"github.com/justinstimatze/gemot/internal/payments"
 )
 
-// EventsHandler returns an SSE endpoint that streams deliberation events.
-//
-// Query params:
-//
-//	deliberation_id — filter to a specific deliberation (optional)
-//	token           — Bearer token (alternative to Authorization header, for browser EventSource)
-//	join_code       — join code for anonymous read-only access (scoped to one deliberation)
-//
-// Auth: Bearer token via header or query param, OR join_code query param.
-// Connection limit enforced by SubscribeIfUnder (max 100 concurrent).
 func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore, apiSecret string, rateLimiter *payments.RateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		events := svc.Events()
 		if events == nil {
-			http.Error(w, "events not enabled", http.StatusServiceUnavailable)
+			jsonError(w, http.StatusServiceUnavailable, "events_disabled", "events not enabled", "")
 			return
 		}
 
@@ -41,7 +31,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		if jc := r.URL.Query().Get("join_code"); jc != "" {
 			_, d, err := svc.LookupJoinCode(ctx, jc)
 			if err != nil || d == nil {
-				http.Error(w, "invalid or expired join code", http.StatusNotFound)
+				jsonError(w, http.StatusNotFound, "join_code_not_found", "invalid or expired join code", "request a new join code")
 				return
 			}
 			filterDelibID = d.ID
@@ -50,12 +40,12 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			// Auth path 2: share_token query param (anonymous, scoped to a group of deliberations)
 			groupID, err := svc.LookupShareToken(ctx, st)
 			if err != nil || groupID == "" {
-				http.Error(w, "invalid or expired share token", http.StatusNotFound)
+				jsonError(w, http.StatusNotFound, "share_token_not_found", "invalid or expired share token", "")
 				return
 			}
 			delibs, err := svc.ListByGroup(ctx, groupID, 500, 0, "")
 			if err != nil || len(delibs) == 0 {
-				http.Error(w, "group not found", http.StatusNotFound)
+				jsonError(w, http.StatusNotFound, "group_not_found", "group not found", "")
 				return
 			}
 			groupDelibIDs = make(map[string]bool, len(delibs))
@@ -75,17 +65,17 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 				// Dev mode: no auth required
 				isAdmin = true
 			} else if token == "" {
-				http.Error(w, "authorization required (Bearer header, ?token=, or ?join_code=)", http.StatusUnauthorized)
+				jsonError(w, http.StatusUnauthorized, "missing_credential", "authorization required (Bearer header, ?token=, or ?join_code=)", "")
 				return
 			} else {
 				isAdmin = subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
 				if !isAdmin {
 					if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
-						http.Error(w, "invalid API key", http.StatusUnauthorized)
+						jsonError(w, http.StatusUnauthorized, "invalid_api_key", "invalid API key", "")
 						return
 					}
 					if valid, _ := creditStore.KeyActive(token); !valid {
-						http.Error(w, "invalid or expired API key", http.StatusUnauthorized)
+						jsonError(w, http.StatusUnauthorized, "invalid_api_key", "invalid or expired API key", "")
 						return
 					}
 					keyID = payments.KeyID(token)
@@ -95,7 +85,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			// Rate limit: initial check only (SSE is long-lived)
 			if !isAdmin && keyID != "" {
 				if !rateLimiter.Allow(keyID) {
-					http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+					jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 					return
 				}
 			}
@@ -103,14 +93,14 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			jsonError(w, http.StatusInternalServerError, "streaming_unsupported", "streaming unsupported", "")
 			return
 		}
 
 		// If filtering to a specific deliberation, verify access upfront (skip for join_code — already scoped)
 		if filterDelibID != "" && !isAdmin && !preScopedAuth {
 			if err := svc.CheckAccess(ctx, filterDelibID, keyID); err != nil {
-				http.Error(w, "access denied", http.StatusForbidden)
+				jsonError(w, http.StatusForbidden, "access_denied", "access denied", "")
 				return
 			}
 		}
@@ -138,7 +128,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 		// Atomically check limit and subscribe in one lock acquisition (no TOCTOU race).
 		ch, unsub, err := events.SubscribeIfUnder(100, 64)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			jsonError(w, http.StatusServiceUnavailable, "connection_limit", err.Error(), "retry shortly, or use a share_token stream")
 			return
 		}
 		defer unsub()

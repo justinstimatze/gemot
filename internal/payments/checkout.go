@@ -56,14 +56,14 @@ func CheckoutHandler(store *CreditStore, baseURL string) http.HandlerFunc {
 			}
 		}
 		if pack == nil {
-			http.Error(w, `{"error":"invalid pack — use starter, standard, or pro"}`, http.StatusBadRequest)
+			WriteJSONError(w, http.StatusBadRequest, "invalid_pack", "invalid pack — use Starter, Standard, or Pro", "see /pricing for available packs")
 			return
 		}
 		// Sub-floor packs (below Stripe's card minimum) are x402/USDC-only: they
 		// exist for buy_credits over the ATXP rail, and Stripe would reject a
 		// session below its 50c minimum anyway.
 		if pack.PriceUSD < MPPSPTMinimumCents {
-			http.Error(w, `{"error":"this pack is available only via buy_credits (x402/USDC), not card checkout"}`, http.StatusBadRequest)
+			WriteJSONError(w, http.StatusBadRequest, "pack_requires_x402", "this pack is available only via buy_credits (x402/USDC), not card checkout", "call the account tool's buy_credits action instead")
 			return
 		}
 
@@ -106,7 +106,7 @@ func CheckoutHandler(store *CreditStore, baseURL string) http.HandlerFunc {
 		s, err := session.New(params)
 		if err != nil {
 			slog.Error("stripe checkout error", "error", err)
-			http.Error(w, `{"error":"failed to create checkout session"}`, http.StatusInternalServerError)
+			WriteJSONError(w, http.StatusInternalServerError, "checkout_session_failed", "failed to create checkout session", "retry, or report at https://gemot.dev/contact")
 			return
 		}
 
@@ -123,7 +123,7 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
 		if err != nil {
-			http.Error(w, "read error", http.StatusBadRequest)
+			WriteJSONError(w, http.StatusBadRequest, "read_error", "could not read request body", "")
 			return
 		}
 
@@ -131,13 +131,13 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 
 		if webhookSecret == "" {
 			slog.Error("webhook: STRIPE_WEBHOOK_SECRET not set, rejecting event")
-			http.Error(w, "webhook not configured", http.StatusServiceUnavailable)
+			WriteJSONError(w, http.StatusServiceUnavailable, "webhook_not_configured", "webhook not configured", "")
 			return
 		}
 		event, err = webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), webhookSecret)
 		if err != nil {
 			slog.Error("webhook signature verification failed", "error", err)
-			http.Error(w, "invalid signature", http.StatusBadRequest)
+			WriteJSONError(w, http.StatusBadRequest, "invalid_signature", "invalid signature", "")
 			return
 		}
 
@@ -145,7 +145,7 @@ func WebhookHandler(store *CreditStore) http.HandlerFunc {
 			var sess stripe.CheckoutSession
 			if err := json.Unmarshal(event.Data.Raw, &sess); err != nil {
 				slog.Error("webhook parse error", "error", err)
-				http.Error(w, "parse error", http.StatusBadRequest)
+				WriteJSONError(w, http.StatusBadRequest, "parse_error", "could not parse event payload", "")
 				return
 			}
 
@@ -220,7 +220,7 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID := r.URL.Query().Get("session_id")
 		if sessionID == "" {
-			http.Error(w, "missing session_id", http.StatusBadRequest)
+			WriteJSONError(w, http.StatusBadRequest, "missing_session_id", "missing session_id", "pass ?session_id=<stripe_checkout_session_id>")
 			return
 		}
 
@@ -229,7 +229,7 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
 		s, err := session.Get(sessionID, nil)
 		if err != nil {
 			slog.Warn("success page: invalid session", "session_prefix", sessionID[:min(len(sessionID), 20)]+"...", "remote_addr", r.RemoteAddr)
-			http.Error(w, "invalid session", http.StatusBadRequest)
+			WriteJSONError(w, http.StatusBadRequest, "invalid_session", "invalid session", "")
 			return
 		}
 
@@ -343,7 +343,7 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
 <div class="snippet"><div class="snippet-label">Claude Code .mcp.json</div><pre>{
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "http",
       "url": "https://gemot.dev/mcp",
       "headers": {
         "Authorization": "Bearer %s"
@@ -352,9 +352,9 @@ func SuccessHandler(store *CreditStore) http.HandlerFunc {
   }
 }</pre></div>
 
-<div class="step"><div class="step-num">2</div><div class="step-text">Your agent can now call gemot's tools: <code>create_deliberation</code>, <code>submit_position</code>, <code>vote</code>, <code>analyze</code>, and more.</div></div>
+<div class="step"><div class="step-num">2</div><div class="step-text">Your agent can now call gemot's seven grouped tools: <code>deliberation</code>, <code>participate</code>, <code>analyze</code>, <code>decide</code>, <code>coordinate</code>, <code>admin</code>, <code>account</code>. Full reference at <a href="/docs">/docs</a>.</div></div>
 
-<div class="step"><div class="step-num">3</div><div class="step-text">Each <code>analyze</code> call costs 50 credits (Sonnet) or 200 credits (Opus). Check your balance anytime:</div></div>
+<div class="step"><div class="step-num">3</div><div class="step-text">Each <code>analyze</code> call costs 60 credits (Sonnet) or 300 credits (Opus). Check your balance anytime:</div></div>
 <div class="snippet"><div class="snippet-label">curl</div><pre>curl https://gemot.dev/balance -H "Authorization: Bearer %s"</pre></div>
 
 <div class="footer">

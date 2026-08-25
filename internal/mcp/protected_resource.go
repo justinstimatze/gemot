@@ -74,7 +74,7 @@ func ProtectedResourceHandler(baseURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", "use GET or HEAD")
 			return
 		}
 		protectedResourceOnce.Do(func() {
@@ -86,7 +86,7 @@ func ProtectedResourceHandler(baseURL string) http.HandlerFunc {
 			}
 		})
 		if protectedResourceErr != nil {
-			http.Error(w, "failed to render protected resource metadata", http.StatusInternalServerError)
+			jsonError(w, http.StatusInternalServerError, "internal_error", "failed to render protected resource metadata", "")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

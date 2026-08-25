@@ -241,10 +241,10 @@ func EnvelopeMiddleware(svc *deliberation.Service, cache auth.NonceCache, mode E
 	}
 }
 
-// envelopeReject returns a uniform 401 Unauthorized. The reason is logged but
+// envelopeReject returns a uniform 401 Unauthorized. The reason is logged and
 // also surfaced in the response body for dev-ergonomics — production deployments
 // behind a reverse proxy may still want to strip the body.
 func envelopeReject(w http.ResponseWriter, reason string) {
 	slog.Info("envelope: rejected", "reason", reason)
-	http.Error(w, "envelope: "+reason, http.StatusUnauthorized)
+	jsonError(w, http.StatusUnauthorized, "envelope_rejected", "envelope: "+reason, "see the envelope signature requirements in COMPOSING.md")
 }

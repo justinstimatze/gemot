@@ -298,20 +298,21 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 
 	// Join page — content-negotiated landing for join codes (IP rate-limited)
 	mux.HandleFunc("/join/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Vary", "Accept")
 		ip := ClientIP(r)
 		if !endpointLimiter.Allow("join:" + ip) {
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 			return
 		}
 		code := strings.TrimPrefix(r.URL.Path, "/join/")
 		if code == "" {
-			http.Error(w, "join code required", http.StatusBadRequest)
+			jsonError(w, http.StatusBadRequest, "missing_join_code", "join code required", "include the code as the path segment, e.g. /join/abcd-1234")
 			return
 		}
 
 		jc, d, err := svc.LookupJoinCode(r.Context(), code)
 		if err != nil {
-			http.Error(w, "invalid join code", http.StatusNotFound)
+			jsonError(w, http.StatusNotFound, "join_code_not_found", "invalid or expired join code", "request a new join code, or see https://gemot.dev/docs")
 			return
 		}
 
@@ -402,7 +403,7 @@ pre code{background:none;padding:0;}
 <pre><code>{
   "mcpServers": {
     "gemot": {
-      "type": "sse",
+      "type": "http",
       "url": "https://gemot.dev/mcp"
     }
   }
@@ -446,7 +447,7 @@ No API key needed — the join code is your credential.
 		return func(w http.ResponseWriter, r *http.Request) {
 			ip := ClientIP(r)
 			if !checkoutLimiter.Allow("checkout:" + ip) {
-				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 				return
 			}
 			next(w, r)
@@ -462,7 +463,7 @@ No API key needed — the join code is your credential.
 		mux.HandleFunc("POST /webhook/stripe", func(w http.ResponseWriter, r *http.Request) {
 			ip := ClientIP(r)
 			if !endpointLimiter.Allow("webhook:" + ip) {
-				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 				return
 			}
 			webhookHandler(w, r)
@@ -505,7 +506,7 @@ No API key needed — the join code is your credential.
 			auth := r.Header.Get("Authorization")
 			token := strings.TrimPrefix(auth, "Bearer ")
 			if apiSecret != "" && (!strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1) {
-				http.Error(w, `{"error":"admin access required"}`, http.StatusUnauthorized)
+				jsonError(w, http.StatusUnauthorized, "admin_required", "admin access required", "provide the admin secret as a Bearer token")
 				return
 			}
 			var stats struct {
@@ -540,19 +541,19 @@ No API key needed — the join code is your credential.
 		mux.HandleFunc("/balance", func(w http.ResponseWriter, r *http.Request) {
 			ip := ClientIP(r)
 			if !endpointLimiter.Allow("balance:" + ip) {
-				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+				jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
 			auth := r.Header.Get("Authorization")
 			if !strings.HasPrefix(auth, "Bearer gmt_") {
-				http.Error(w, `{"error":"provide API key as Bearer token"}`, http.StatusUnauthorized)
+				jsonError(w, http.StatusUnauthorized, "missing_api_key", "provide API key as Bearer token", "add an Authorization: Bearer gmt_<key> header, or get one at /pricing")
 				return
 			}
 			key := strings.TrimPrefix(auth, "Bearer ")
 			balance, err := creditStore.GetBalance(key)
 			if err != nil {
-				http.Error(w, `{"error":"invalid API key"}`, http.StatusUnauthorized)
+				jsonError(w, http.StatusUnauthorized, "invalid_api_key", "invalid API key", "check the key or get a new one at /pricing")
 				return
 			}
 			_, _ = fmt.Fprintf(w, `{"credits_remaining":%d,"cost_per_analyze":{"sonnet":%d,"opus":%d,"haiku":%d}}`,
@@ -617,7 +618,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 	mux.HandleFunc("/export", func(w http.ResponseWriter, r *http.Request) {
 		ip := ClientIP(r)
 		if !endpointLimiter.Allow("export:" + ip) {
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 			return
 		}
 		// Extract token for access control (used later even without auth)
@@ -631,20 +632,20 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 				validKey, _ = creditStore.KeyActive(token)
 			}
 			if !validAdmin && !validKey {
-				http.Error(w, `{"error":"provide API key as Bearer token"}`, http.StatusUnauthorized)
+				jsonError(w, http.StatusUnauthorized, "missing_api_key", "provide API key as Bearer token", "add an Authorization: Bearer gmt_<key> header")
 				return
 			}
 		}
 
 		deliberationID := r.URL.Query().Get("deliberation_id")
 		if deliberationID == "" {
-			http.Error(w, `{"error":"deliberation_id required"}`, http.StatusBadRequest)
+			jsonError(w, http.StatusBadRequest, "missing_deliberation_id", "deliberation_id required", "pass ?deliberation_id=<uuid>")
 			return
 		}
 
 		d, err := svc.GetDeliberation(r.Context(), deliberationID)
 		if err != nil {
-			http.Error(w, `{"error":"deliberation not found"}`, http.StatusNotFound)
+			jsonError(w, http.StatusNotFound, "deliberation_not_found", "deliberation not found", "check the deliberation_id")
 			return
 		}
 		// Access control for private deliberations
@@ -653,13 +654,13 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			exportKeyID = payments.KeyID(token)
 		}
 		if err := svc.CheckAccess(r.Context(), deliberationID, exportKeyID); err != nil {
-			http.Error(w, `{"error":"access denied"}`, http.StatusForbidden)
+			jsonError(w, http.StatusForbidden, "access_denied", "access denied", "this deliberation is private; use a key on its ACL")
 			return
 		}
 
 		positions, err := svc.GetPositions(r.Context(), deliberationID, nil, nil)
 		if err != nil {
-			http.Error(w, `{"error":"failed to get positions"}`, http.StatusInternalServerError)
+			jsonError(w, http.StatusInternalServerError, "internal_error", "failed to get positions", "retry, or report at https://gemot.dev/contact")
 			return
 		}
 
@@ -698,37 +699,52 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		_ = d // used for filename
 	})
 
-	// Policy pages (public)
-	for _, page := range []struct{ path, file string }{
-		{"/privacy", "static/privacy.html"},
-		{"/terms", "static/terms.html"},
-		{"/content-policy", "static/content-policy.html"},
-		{"/docs", "static/docs.html"},
+	// Policy & documentation pages (public). mdFile empty means HTML-only;
+	// non-empty enables Accept: text/markdown negotiation (see
+	// negotiateContent) for the pages worth serving to agents directly.
+	for _, page := range []struct{ path, file, mdFile string }{
+		{"/privacy", "static/privacy.html", ""},
+		{"/terms", "static/terms.html", ""},
+		{"/content-policy", "static/content-policy.html", ""},
+		{"/docs", "static/docs.html", "static/docs.md"},
+		{"/about", "static/about.html", "static/about.md"},
+		{"/contact", "static/contact.html", "static/contact.md"},
 	} {
-		file := page.file
+		file, mdFile := page.file, page.mdFile
 		mux.HandleFunc(page.path, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			data, err := staticFS.ReadFile(file)
 			if err != nil {
 				http.NotFound(w, r)
 				return
 			}
-			w.Write(data) //nolint:errcheck
+			if mdFile == "" {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write(data) //nolint:errcheck
+				return
+			}
+			mdData, err := staticFS.ReadFile(mdFile)
+			if err != nil {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write(data) //nolint:errcheck
+				return
+			}
+			negotiateContent(w, r, data, mdData)
 		})
 	}
 
 	// Sandbox — zero-auth trial deliberations
 	tryLimiter := payments.NewRateLimiter(ctx, 3, 24*time.Hour) // 3 per IP per day
 	mux.HandleFunc("/try", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Vary", "Accept")
 		if r.Method != http.MethodPost && r.Method != http.MethodGet {
-			http.Error(w, "GET or POST", http.StatusMethodNotAllowed)
+			jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST", "")
 			return
 		}
 
 		// Rate limit by IP
 		ip := ClientIP(r)
 		if !tryLimiter.Allow("try:" + ip) {
-			http.Error(w, "Rate limited — max 3 sandbox deliberations per day", http.StatusTooManyRequests)
+			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limited — max 3 sandbox deliberations per day", "retry tomorrow, or get an API key at /pricing for unlimited use")
 			return
 		}
 
@@ -756,7 +772,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		)
 		if err != nil {
 			slog.Error("sandbox creation failed", "error", err)
-			http.Error(w, "Failed to create sandbox — please try again", http.StatusInternalServerError)
+			jsonError(w, http.StatusInternalServerError, "internal_error", "failed to create sandbox", "please try again")
 			return
 		}
 
@@ -764,7 +780,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		jc, err := svc.GenerateJoinCode(r.Context(), d.ID, "participant", 48*time.Hour, 10)
 		if err != nil {
 			slog.Error("join code generation failed", "error", err)
-			http.Error(w, "Failed to generate join code — please try again", http.StatusInternalServerError)
+			jsonError(w, http.StatusInternalServerError, "internal_error", "failed to generate join code", "please try again")
 			return
 		}
 
@@ -797,7 +813,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		// user and blocks enumeration.
 		ip := ClientIP(r)
 		if !endpointLimiter.Allow("try-get:" + ip) {
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
 			return
 		}
 
@@ -813,7 +829,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		// Look up the join code and show the sandbox page
 		jc, d, err := svc.LookupJoinCode(r.Context(), code)
 		if err != nil {
-			http.Error(w, "Invalid or expired sandbox code", http.StatusNotFound)
+			jsonError(w, http.StatusNotFound, "sandbox_not_found", "invalid or expired sandbox code", "start a new sandbox at /try")
 			return
 		}
 		topic := ""
@@ -833,7 +849,7 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			Topic: topic, Code: jc.Code, HoursLeft: hoursLeft,
 		}); err != nil {
 			slog.Error("try-code template render failed", "code", jc.Code, "error", err)
-			http.Error(w, "sandbox page unavailable", http.StatusInternalServerError)
+			jsonError(w, http.StatusInternalServerError, "internal_error", "sandbox page unavailable", "please try again")
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -842,19 +858,41 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 		_, _ = w.Write([]byte(buf.String()))
 	})
 
+	// Machine-readable surface: plain files served verbatim.
+	mux.HandleFunc("/llms.txt", staticFileHandler("static/llms.txt", "text/markdown; charset=utf-8"))
+	mux.HandleFunc("/robots.txt", staticFileHandler("static/robots.txt", "text/plain; charset=utf-8"))
+	mux.HandleFunc("/sitemap.xml", staticFileHandler("static/sitemap.xml", "application/xml; charset=utf-8"))
+	mux.HandleFunc("/openapi.json", staticFileHandler("static/openapi.json", "application/json; charset=utf-8"))
+	mux.HandleFunc("/og-image.png", staticFileHandler("static/og-image.png", "image/png"))
+	mux.HandleFunc("/index.md", staticFileHandler("static/index.md", "text/markdown; charset=utf-8"))
+	mux.HandleFunc("/docs.md", staticFileHandler("static/docs.md", "text/markdown; charset=utf-8"))
+	mux.HandleFunc("/.well-known/mcp.json", staticFileHandler("static/mcp-manifest.json", "application/json; charset=utf-8"))
+
+	// OAuth 2.0 client_credentials facade over existing API keys (RFC 8414 +
+	// RFC 6749 §4.4). See oauthAuthServerMetadataHandler and oauthTokenHandler
+	// in wellknown.go for what this does and does not claim to support.
+	mux.HandleFunc("/.well-known/oauth-authorization-server", oauthAuthServerMetadataHandler(baseURL))
+	oauthLimiter := payments.NewRateLimiter(ctx, 30, time.Minute)
+	mux.HandleFunc("POST /oauth/token", oauthTokenHandler(creditStore, oauthLimiter))
+
 	// Landing page
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
-			http.NotFound(w, r)
+			notFoundHandler(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		indexHTML, err := staticFS.ReadFile("static/index.html")
 		if err != nil {
 			http.Redirect(w, r, "https://github.com/justinstimatze/gemot", http.StatusFound)
 			return
 		}
-		w.Write(indexHTML) //nolint:errcheck
+		indexMD, err := staticFS.ReadFile("static/index.md")
+		if err != nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(indexHTML) //nolint:errcheck
+			return
+		}
+		negotiateContent(w, r, indexHTML, indexMD)
 	})
 
 	// Security headers for all responses. CSP uses 'unsafe-inline' for
@@ -956,4 +994,10 @@ func csvSafe(s string) string {
 		s = "'" + s
 	}
 	return s
+}
+
+// jsonError is an alias for payments.WriteJSONError (single canonical
+// implementation, same pattern as ClientIP below).
+func jsonError(w http.ResponseWriter, status int, code, message, hint string) {
+	payments.WriteJSONError(w, status, code, message, hint)
 }

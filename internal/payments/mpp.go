@@ -92,7 +92,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 					if strings.HasPrefix(auth, "Bearer ") && cs != nil && strings.HasPrefix(token, "gmt_") {
 						if valid, _ := cs.KeyActive(token); valid {
 							if !limiter.Allow(token) {
-								http.Error(w, `{"error":"rate limit exceeded — max 30 requests per minute"}`, http.StatusTooManyRequests)
+								WriteJSONError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded — max 30 requests per minute", "retry after a short delay")
 								return
 							}
 							ctx := context.WithValue(r.Context(), ContextKeyAPIKey{}, token)
@@ -112,14 +112,14 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				// Allow unauthenticated MCP connections for sandbox mode,
 				// unless RequireAuth is set (private/self-hosted posture).
 				if cfg.RequireAuth {
-					http.Error(w, `{"error":"Authorization: Bearer gmt_<api_key> required"}`, http.StatusUnauthorized)
+					WriteJSONError(w, http.StatusUnauthorized, "missing_api_key", "Authorization: Bearer gmt_<api_key> required", "add an Authorization: Bearer gmt_<key> header, or get one at /pricing")
 					return
 				}
 				// Rate-limit by IP (30 req/min) AND plumb IP into ctx so
 				// downstream handlers can throttle via SandboxQuota.
 				ip := ClientIP(r)
 				if !limiter.Allow("sandbox:" + ip) {
-					http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)
+					WriteJSONError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded for sandbox mode", "retry after a short delay, or get an API key at /pricing")
 					return
 				}
 				ctx := context.WithValue(r.Context(), ContextKeySandbox{}, true)
@@ -142,7 +142,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				if cs != nil && strings.HasPrefix(token, "gmt_") {
 					if valid, _ := cs.KeyActive(token); valid {
 						if !limiter.Allow(token) {
-							http.Error(w, `{"error":"rate limit exceeded — max 30 requests per minute"}`, http.StatusTooManyRequests)
+							WriteJSONError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded — max 30 requests per minute", "retry after a short delay")
 							return
 						}
 						ctx := context.WithValue(r.Context(), ContextKeyAPIKey{}, token)
@@ -178,7 +178,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 			// No valid auth — allow sandbox mode for free tools,
 			// unless RequireAuth is set (private/self-hosted posture).
 			if cfg.RequireAuth {
-				http.Error(w, `{"error":"Authorization: Bearer gmt_<api_key> or Payment credential required"}`, http.StatusUnauthorized)
+				WriteJSONError(w, http.StatusUnauthorized, "missing_credential", "Authorization: Bearer gmt_<api_key> or Payment credential required", "add an API key, or an MPP payment credential")
 				return
 			}
 			// Rate-limit by IP (30 req/min for sandbox) AND plumb the IP
@@ -186,7 +186,7 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 			// checks against it (SandboxQuota).
 			ip := ClientIP(r)
 			if !limiter.Allow("sandbox:" + ip) {
-				http.Error(w, `{"error":"rate limit exceeded for sandbox mode"}`, http.StatusTooManyRequests)
+				WriteJSONError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded for sandbox mode", "retry after a short delay, or get an API key at /pricing")
 				return
 			}
 			ctx := context.WithValue(r.Context(), ContextKeySandbox{}, true)
