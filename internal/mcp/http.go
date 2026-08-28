@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -533,9 +532,7 @@ No API key needed — the join code is your credential.
 		mux.Handle("/metrics", methodNotAllowedJSON("GET"))
 		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			auth := r.Header.Get("Authorization")
-			token := strings.TrimPrefix(auth, "Bearer ")
-			if apiSecret != "" && (!strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) != 1) {
+			if !isAdminToken(bearerToken(r.Header.Get("Authorization")), apiSecret) {
 				jsonError(w, http.StatusUnauthorized, "admin_required", "admin access required", "provide the admin secret as a Bearer token")
 				return
 			}
@@ -656,13 +653,12 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			return
 		}
 		// Extract token for access control (used later even without auth)
-		auth := r.Header.Get("Authorization")
-		token := strings.TrimPrefix(auth, "Bearer ")
+		token := bearerToken(r.Header.Get("Authorization"))
 		// Auth check: skip in dev mode (no apiSecret), require valid token otherwise
 		if apiSecret != "" {
-			validAdmin := strings.HasPrefix(auth, "Bearer ") && subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
+			validAdmin := isAdminToken(token, apiSecret)
 			validKey := false
-			if !validAdmin && creditStore != nil && strings.HasPrefix(auth, "Bearer ") {
+			if !validAdmin && creditStore != nil && token != "" {
 				validKey, _ = creditStore.KeyActive(token)
 			}
 			if !validAdmin && !validKey {

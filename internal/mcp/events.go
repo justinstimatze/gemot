@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -54,12 +53,19 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			}
 			preScopedAuth = true // reuse the "pre-scoped" flag to skip per-event access checks
 		} else {
-			// Auth path 3: Bearer token from header or ?token= query param
-			token := ""
-			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-				token = strings.TrimPrefix(auth, "Bearer ")
-			} else if t := r.URL.Query().Get("token"); t != "" {
-				token = t
+			// Auth path 3: Bearer token from header, or an API key (only, never
+			// the admin secret) via ?token= for browser EventSource clients
+			// that can't set custom headers. The admin secret is accepted
+			// ONLY from the Authorization header, deliberately never from a
+			// query parameter: a query string ends up in server access logs,
+			// browser history, and any Referer header a client sends onward
+			// -- an acceptable exposure for a scoped, revocable API key, not
+			// for the one credential that grants admin access to everything.
+			headerToken := bearerToken(r.Header.Get("Authorization"))
+			queryToken := r.URL.Query().Get("token")
+			token := headerToken
+			if token == "" {
+				token = queryToken
 			}
 			if apiSecret == "" {
 				// Dev mode: no auth required
@@ -68,7 +74,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 				jsonError(w, http.StatusUnauthorized, "missing_credential", "authorization required (Bearer header, ?token=, or ?join_code=)", "")
 				return
 			} else {
-				isAdmin = subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1
+				isAdmin = headerToken != "" && isAdminToken(headerToken, apiSecret)
 				if !isAdmin {
 					if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
 						jsonError(w, http.StatusUnauthorized, "invalid_api_key", "invalid API key", "")
@@ -150,7 +156,15 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 
 		for {
 			select {
-			case event := <-ch:
+			case event, ok := <-ch:
+				if !ok {
+					// Event bus shut down (or, for a plain Subscribe caller,
+					// explicitly closed) -- without this check, reading from
+					// a closed channel never blocks and returns the zero
+					// Event forever, busy-spinning this loop until the
+					// request context ends instead of ending the stream now.
+					return
+				}
 				if filterDelibID != "" && event.DeliberationID != filterDelibID {
 					continue
 				}

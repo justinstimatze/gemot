@@ -41,12 +41,7 @@ func (eb *EventBus) Subscribe(bufSize int) (<-chan Event, func()) {
 	eb.clients[ch] = struct{}{}
 	eb.mu.Unlock()
 
-	return ch, func() {
-		eb.mu.Lock()
-		delete(eb.clients, ch)
-		close(ch)
-		eb.mu.Unlock()
-	}
+	return ch, func() { eb.closeAndRemove(ch) }
 }
 
 // SubscribeIfUnder atomically checks the client count and subscribes in one
@@ -61,12 +56,7 @@ func (eb *EventBus) SubscribeIfUnder(limit, bufSize int) (<-chan Event, func(), 
 	eb.clients[ch] = struct{}{}
 	eb.mu.Unlock()
 
-	return ch, func() {
-		eb.mu.Lock()
-		delete(eb.clients, ch)
-		close(ch)
-		eb.mu.Unlock()
-	}, nil
+	return ch, func() { eb.closeAndRemove(ch) }, nil
 }
 
 // Emit sends an event to all subscribers. Non-blocking: drops events for slow clients.
@@ -100,7 +90,10 @@ func (eb *EventBus) ClientCount() int {
 }
 
 // Shutdown sends a shutdown event to all clients and closes their channels.
-// Clients reading from the channel will receive the event then see channel close.
+// Clients reading from the channel will receive the event then see channel
+// close. Closing happens under the same lock a subscriber's own
+// closeAndRemove uses, and only for channels still present in the client
+// set -- see closeAndRemove's doc comment for why that matters.
 func (eb *EventBus) Shutdown() {
 	shutdownEvent := Event{
 		Type:      "server_shutdown",
@@ -121,4 +114,22 @@ func (eb *EventBus) Shutdown() {
 // MarshalEvent serializes an event to JSON.
 func MarshalEvent(e Event) ([]byte, error) {
 	return json.Marshal(e)
+}
+
+// closeAndRemove closes ch and removes it from the client set, but only if
+// it is still present. Shutdown and a subscriber's own unsubscribe function
+// (typically deferred in an SSE handler) can race to close the same
+// channel -- e.g. a graceful server shutdown fires while a request's defer
+// also runs -- and closing an already-closed channel panics. Both paths
+// funnel through here (or, for Shutdown, an equivalent inline check under
+// the same lock) so exactly one of them wins; the loser's delete is then a
+// safe no-op.
+func (eb *EventBus) closeAndRemove(ch chan Event) {
+	eb.mu.Lock()
+	defer eb.mu.Unlock()
+	if _, ok := eb.clients[ch]; !ok {
+		return
+	}
+	delete(eb.clients, ch)
+	close(ch)
 }

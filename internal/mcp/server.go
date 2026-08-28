@@ -889,6 +889,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			if apiKey != "" && creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
 			}
+			s.refundSandboxQuota(ctx, mppReceipt, apiKey)
 			return errResult(err)
 		}
 		s.audit(ctx, "analyze:propose_compromise", args.DeliberationID, "")
@@ -906,12 +907,37 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		return result, nil, nil
 
 	case "reframe":
+		// Same MPP/sandbox gate every other paid analyze action gets — this
+		// one used to skip straight to CoreReframe, letting an
+		// unauthenticated caller (no apiKey, no MPP credential) trigger a
+		// real LLM call for free, bounded only by the generic IP rate
+		// limit instead of the 20/day sandbox quota.
+		reframeScope := payments.ChallengeScope{
+			Tool:           "analyze",
+			Action:         "reframe",
+			Model:          resolveModel(args.Model),
+			DeliberationID: args.DeliberationID,
+		}
+		mppReceipt, err := s.checkMPPCredential(ctx, req, reframeScope)
+		if err != nil {
+			return nil, nil, fmt.Errorf("MPP credential verification failed: %w", err)
+		}
 		apiKey, _ := ctx.Value(payments.ContextKeyAPIKey{}).(string)
+		if mppReceipt == nil && apiKey == "" {
+			if err := s.gateSandbox(ctx, reframeScope, fmt.Sprintf("analyze:reframe for deliberation %s (model %s)", args.DeliberationID, reframeScope.Model)); err != nil {
+				return nil, nil, err
+			}
+		}
 		result, err := CoreReframe(ctx, s.svc, s.credits, args.DeliberationID, args.PositionID, args.Model, keyID, false, apiKey)
 		if err != nil {
+			s.refundSandboxQuota(ctx, mppReceipt, apiKey)
 			return errResult(err)
 		}
-		return jsonResult(result)
+		res, _, resErr := jsonResult(result)
+		if mppReceipt != nil && res != nil {
+			res.Meta = payments.ReceiptMeta(mppReceipt)
+		}
+		return res, nil, resErr
 
 	case "challenge":
 		args.AgentID = scopeAgentID(ctx, args.AgentID)
@@ -972,6 +998,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			if creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
 			}
+			s.refundSandboxQuota(ctx, mppReceipt, apiKey)
 			return errResult(err)
 		}
 		// Trigger analysis async — panel creation and position submission are already done
@@ -1034,6 +1061,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 			if creditCost > 0 && s.credits != nil {
 				_, _ = s.credits.AddCredits(apiKey, creditCost)
 			}
+			s.refundSandboxQuota(ctx, mppReceipt, apiKey)
 			return errResult(err)
 		}
 		s.audit(ctx, "analyze:follow_up", result.DeliberationID, "")
@@ -1459,3 +1487,21 @@ func (p *principalCredentialParam) toCredential() ([]byte, error) {
 // from the deprecated path carry Deprecation: true and a Sunset header
 // (RFC 8594) naming the removal date.
 const APIVersion = "2026-08-25"
+
+// refundSandboxQuota returns the daily sandbox call gateSandbox already
+// consumed for this request, but only when this was actually a sandbox
+// call (no apiKey, no MPP receipt) -- matching gateSandbox's own
+// precondition exactly, so a paying caller's credit/MPP accounting is
+// never touched here.
+//
+// Call this from the same downstream-failure branch that already refunds
+// credits via AddCredits: a failed paid action must not permanently cost
+// an unauthenticated caller one of their 20 free calls/day any more than it
+// should permanently cost a paying caller their credits.
+func (s *server) refundSandboxQuota(ctx context.Context, mppReceipt *payments.Receipt, apiKey string) {
+	if s.sandboxQuota == nil || mppReceipt != nil || apiKey != "" {
+		return
+	}
+	ip, _ := ctx.Value(payments.ContextKeyClientIP{}).(string)
+	s.sandboxQuota.Refund(ip)
+}

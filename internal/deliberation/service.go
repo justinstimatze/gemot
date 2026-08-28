@@ -608,20 +608,6 @@ func (s *Service) ProposeCompromise(ctx context.Context, deliberationID string) 
 	return s.compromiser.GenerateCompromise(ctx, d.Topic, result)
 }
 
-// ProposeCompromiseWithChoiceAndVotes is the forced-choice variant used
-// by the calibration runner. The configured compromiser must also
-// implement ChoiceCompromiseGenerator; if not, returns an error. Returns
-// the compromise statement AND the LLM's selected option (one of the
-// entries in `options`). optionVotes is the per-option agent choice
-// distribution, surfaced to the compromise LLM as a strong prior so
-// option-level consensus isn't overridden by claim-level rationale
-// noise (the 2026-06-05 Haiku failure mode).
-//
-// The "no cruxes detected" guard the prior signature had has been
-// removed: the runner now short-circuits unanimous cases before
-// calling this, so reaching here implies real disagreement worth
-// asking the LLM to resolve even if cruxes haven't crystallized at
-// the analysis layer.
 func (s *Service) ProposeCompromiseWithChoiceAndVotes(ctx context.Context, deliberationID string, options []string, optionVotes map[string]int) (string, string, error) {
 	if s.compromiser == nil {
 		return "", "", fmt.Errorf("compromise generation not available")
@@ -640,8 +626,33 @@ func (s *Service) ProposeCompromiseWithChoiceAndVotes(ctx context.Context, delib
 	if err != nil {
 		return "", "", fmt.Errorf("no analysis results — run analyze first: %w", err)
 	}
+	if result == nil {
+		// MemoryStore's "no analysis yet" contract is (nil, nil), unlike
+		// Postgres's (nil, err) — both must be checked, matching the guard
+		// ReframePosition (and every mcp-package caller) already uses.
+		return "", "", fmt.Errorf("no analysis results — run analyze first")
+	}
 
-	return choicer.GenerateCompromiseWithChoice(ctx, d.Topic, result, options, optionVotes)
+	// Sanitize free-text options before they reach the LLM prompt: these
+	// are agent-supplied text (e.g. calibration answer-key labels), not
+	// references to already-sanitized position content, so nothing strips
+	// PII or flags injection patterns in them without this — unlike
+	// SubmitPositionWithSigningID's content, which always goes through
+	// sanitize.Position. optionVotes is rekeyed through the same
+	// sanitization (summed on collision) so vote counts stay aligned with
+	// the sanitized text GenerateCompromiseWithChoice actually displays.
+	sanitizedOptions := make([]string, len(options))
+	sanitizedVotes := make(map[string]int, len(optionVotes))
+	for i, opt := range options {
+		sanitized := sanitize.Position(opt)
+		for _, w := range sanitized.Warnings {
+			fmt.Fprintf(os.Stderr, "gemot: PII sanitization warning for compromise option in %s: %s\n", deliberationID, w)
+		}
+		sanitizedOptions[i] = sanitized.Text
+		sanitizedVotes[sanitized.Text] += optionVotes[opt]
+	}
+
+	return choicer.GenerateCompromiseWithChoice(ctx, d.Topic, result, sanitizedOptions, sanitizedVotes)
 }
 
 // DeliberationOption configures optional fields on a deliberation.
@@ -2019,10 +2030,13 @@ func (s *Service) ReframePosition(ctx context.Context, deliberationID, positionI
 		otherSummary = "No other positions submitted yet."
 	}
 
-	// Get cruxes if available
+	// Get cruxes if available. result can be (nil, nil) -- MemoryStore's
+	// "no analysis yet" contract differs from Postgres's (nil, err) one --
+	// so both must be checked, matching the guard every other caller of
+	// GetLatestAnalysisResult across the mcp package already uses.
 	var cruxSummary string
 	result, err := s.store.GetLatestAnalysisResult(ctx, deliberationID)
-	if err == nil {
+	if err == nil && result != nil {
 		for _, c := range result.Cruxes {
 			cruxSummary += fmt.Sprintf("- %s (agree: %v, disagree: %v)\n", c.Claim, c.AgreeAgents, c.DisagreeAgents)
 		}

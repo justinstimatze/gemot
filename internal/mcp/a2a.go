@@ -3,7 +3,6 @@ package mcp
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -162,7 +161,7 @@ func A2AAuthMiddleware(
 			token := strings.TrimPrefix(authHdr, "Bearer ")
 
 			// Admin secret — unlimited access.
-			if subtle.ConstantTimeCompare([]byte(token), []byte(apiSecret)) == 1 {
+			if isAdminToken(token, apiSecret) {
 				ctx = context.WithValue(ctx, payments.ContextKeyIsAdmin{}, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
