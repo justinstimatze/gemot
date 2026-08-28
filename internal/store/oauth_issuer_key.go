@@ -22,39 +22,35 @@ func NewPostgresOAuthIssuerKeyStore(db *DB) *PostgresOAuthIssuerKeyStore {
 // equivalent to gemot's authority to mint a delegation credential for
 // anyone who ever proves control of a gmt_ key.
 func (s *PostgresOAuthIssuerKeyStore) LoadOrGenerate(ctx context.Context, issuerName string) (pub, priv []byte, err error) {
-	// Fast path: the row already exists.
-	if pub, priv, ok, err := s.tryLoad(ctx, issuerName); err != nil {
+	type keypair struct{ pub, priv []byte }
+	kp, err := loadOrGenerateKeypair(
+		func() (keypair, bool, error) {
+			pub, priv, ok, err := s.tryLoad(ctx, issuerName)
+			return keypair{pub, priv}, ok, err
+		},
+		func() (keypair, error) {
+			candidatePub, candidatePriv, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				return keypair{}, fmt.Errorf("oauth: generate candidate issuer keypair: %w", err)
+			}
+			return keypair{[]byte(candidatePub), []byte(candidatePriv)}, nil
+		},
+		func(k keypair) error {
+			_, err := s.db.ExecContext(ctx, `
+				INSERT INTO oauth_issuer_keys (issuer_name, private_key, public_key)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (issuer_name) DO NOTHING
+			`, issuerName, k.priv, k.pub)
+			if err != nil {
+				return fmt.Errorf("oauth: insert issuer keypair: %w", err)
+			}
+			return nil
+		},
+	)
+	if err != nil {
 		return nil, nil, err
-	} else if ok {
-		return pub, priv, nil
 	}
-
-	// Generate a candidate and attempt to persist. ON CONFLICT DO NOTHING
-	// means concurrent callers race to be the one whose candidate gets
-	// stored; the winner's row is then read back by every caller.
-	candidatePub, candidatePriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("oauth: generate candidate issuer keypair: %w", err)
-	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO oauth_issuer_keys (issuer_name, private_key, public_key)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (issuer_name) DO NOTHING
-	`, issuerName, []byte(candidatePriv), []byte(candidatePub))
-	if err != nil {
-		return nil, nil, fmt.Errorf("oauth: insert issuer keypair: %w", err)
-	}
-
-	// Re-read to get whichever keypair won the race. Guaranteed to exist
-	// after the insert above.
-	pub, priv, ok, err := s.tryLoad(ctx, issuerName)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !ok {
-		return nil, nil, fmt.Errorf("oauth: issuer key for %q vanished after insert", issuerName)
-	}
-	return pub, priv, nil
+	return kp.pub, kp.priv, nil
 }
 
 func (s *PostgresOAuthIssuerKeyStore) tryLoad(ctx context.Context, issuerName string) (pub, priv []byte, ok bool, err error) {

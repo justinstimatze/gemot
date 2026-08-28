@@ -1,9 +1,9 @@
 package mcp
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -120,6 +120,12 @@ func oauthAuthorizeGetHandler(svc *deliberation.Service, tmpl *template.Template
 		}
 
 		if _, _, err := svc.GetActiveAgentKey(r.Context(), clientID); err != nil {
+			// A real infra error (not just "no key registered yet") looks
+			// identical to the caller either way — the response must not leak
+			// which — but it must not vanish from the logs either.
+			if !errors.Is(err, deliberation.ErrAgentKeyNotFound) {
+				slog.Error("oauth authorize: GetActiveAgentKey failed", "client_id", clientID, "error", err)
+			}
 			jsonError(w, http.StatusBadRequest, "invalid_client", "unknown client_id", "this agent must call participate action:register_key before requesting authorization")
 			return
 		}
@@ -154,17 +160,23 @@ func oauthAuthorizePostHandler(svc *deliberation.Service, creditStore *payments.
 			jsonError(w, http.StatusBadRequest, "unavailable", "OAuth consent is unavailable in demo mode", "")
 			return
 		}
-		ip := ClientIP(r)
-		if !limiter.Allow("ip:" + ip) {
-			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
-			return
-		}
 		if err := r.ParseForm(); err != nil {
 			jsonError(w, http.StatusBadRequest, "invalid_request", "could not parse form body", "")
 			return
 		}
 
+		ip := ClientIP(r)
 		clientID := r.FormValue("client_id")
+		// Same reasoning as the GET handler above: this is the endpoint that
+		// actually validates a submitted API key, so it needs the same
+		// per-victim-client_id bound, not just a per-IP one.
+		allowedIP := limiter.Allow("ip:" + ip)
+		allowedClient := clientID == "" || limiter.Allow("client:"+clientID)
+		if !allowedIP || !allowedClient {
+			jsonError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", "retry after a short delay")
+			return
+		}
+
 		codeChallenge := r.FormValue("code_challenge")
 		codeChallengeMethod := r.FormValue("code_challenge_method")
 		scope := r.FormValue("scope")
@@ -179,6 +191,9 @@ func oauthAuthorizePostHandler(svc *deliberation.Service, creditStore *payments.
 		// Defense in depth: the agent's key could have been revoked between
 		// the GET and this POST.
 		if _, _, err := svc.GetActiveAgentKey(r.Context(), clientID); err != nil {
+			if !errors.Is(err, deliberation.ErrAgentKeyNotFound) {
+				slog.Error("oauth authorize: GetActiveAgentKey failed", "client_id", clientID, "error", err)
+			}
 			jsonError(w, http.StatusBadRequest, "invalid_client", "unknown client_id", "this agent must call participate action:register_key before requesting authorization")
 			return
 		}
@@ -231,24 +246,25 @@ func oauthAuthorizePostHandler(svc *deliberation.Service, creditStore *payments.
 	}
 }
 
-// generateOAuthCode mints a high-entropy authorization code. Prefixed
-// distinctly from gmt_ API keys (payments.randomKey's shape) so the two are
-// never confusable in logs or if a human pastes one into the wrong field.
+// generateOAuthCode mints a high-entropy authorization code via the same
+// shared helper payments API keys use, but with a distinct "gac_" prefix so
+// the two are never confusable in logs or if a human pastes one into the
+// wrong field.
 func generateOAuthCode() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return "gac_" + hex.EncodeToString(b), nil
+	return payments.RandomKey("gac_")
 }
 
 // oauthPrincipalFromKey derives a stable, non-reversible principal identity
 // from a gmt_ API key -- never the key's associated email, per the principal
-// package's hard "no personal data" constraint. "oauthkey:" is distinct from
-// schema.sql's reputation-graph "key:<agent_keys.id>" vertex-naming
-// convention, which is a different table with no functional collision today,
-// but a distinct prefix avoids a future one.
+// package's hard "no personal data" constraint. The full SHA-256 digest is
+// kept (not truncated): this identity is permanent and durable, feeding
+// straight into the credential/reputation graph, so it must stay
+// collision-free as the population of oauthkey: principals grows.
+// "oauthkey:" is distinct from schema.sql's reputation-graph
+// "key:<agent_keys.id>" vertex-naming convention, which is a different table
+// with no functional collision today, but a distinct prefix avoids a future
+// one.
 func oauthPrincipalFromKey(apiKey string) string {
 	sum := sha256.Sum256([]byte(apiKey))
-	return "oauthkey:" + hex.EncodeToString(sum[:8])
+	return "oauthkey:" + hex.EncodeToString(sum[:])
 }

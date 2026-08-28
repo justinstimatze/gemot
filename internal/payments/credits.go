@@ -22,7 +22,7 @@ func NewCreditStore(db *sql.DB) (*CreditStore, error) {
 
 // GenerateKey creates a new API key with the given credits.
 func (s *CreditStore) GenerateKey(email, stripeCustomerID, stripeSessionID string, credits int) (string, error) {
-	key, err := randomKey()
+	key, err := RandomKey("gmt_")
 	if err != nil {
 		return "", err
 	}
@@ -34,6 +34,7 @@ func (s *CreditStore) GenerateKey(email, stripeCustomerID, stripeSessionID strin
 	if err != nil {
 		return "", err
 	}
+
 	return key, nil
 }
 
@@ -151,14 +152,6 @@ func (s *CreditStore) SuspendKey(key string) error {
 func (s *CreditStore) UnsuspendKey(key string) error {
 	_, err := s.db.Exec(`UPDATE api_keys SET suspended = 0 WHERE key = $1`, key)
 	return err
-}
-
-func randomKey() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return "gmt_" + hex.EncodeToString(b), nil
 }
 
 // Credit pack definitions
@@ -286,4 +279,16 @@ func (s *CreditStore) KeyActive(key string) (bool, error) {
 		return false, err
 	}
 	return suspended == 0, nil
+}
+
+// RandomKey generates a high-entropy, prefixed opaque token: 32 random bytes
+// via crypto/rand, hex-encoded. Exported so every part of gemot that mints a
+// bearer-shaped identifier (API keys here, OAuth authorization codes in
+// internal/mcp) agrees on entropy size and encoding in exactly one place.
+func RandomKey(prefix string) (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return prefix + hex.EncodeToString(b), nil
 }

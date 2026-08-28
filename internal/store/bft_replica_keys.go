@@ -33,42 +33,28 @@ func NewPostgresReplicaKeyStore(db *DB) *PostgresReplicaKeyStore {
 // database — treat access to this table like any other secret.
 func (s *PostgresReplicaKeyStore) LoadOrGenerate(ctx context.Context, replicaID bft.ReplicaID) (bft.BLSKeypair, error) {
 	replicaStr := fmt.Sprintf("%d", replicaID)
-
-	// Fast path: the row already exists.
-	if kp, ok, err := s.tryLoad(ctx, replicaStr); err != nil {
-		return bft.BLSKeypair{}, err
-	} else if ok {
-		return kp, nil
-	}
-
-	// Generate a candidate and attempt to persist. ON CONFLICT DO
-	// NOTHING means concurrent callers race to be the one whose
-	// candidate gets stored; the winner's row is then read back by
-	// every caller.
-	candidate, err := bft.GenerateBLSKeypair()
-	if err != nil {
-		return bft.BLSKeypair{}, fmt.Errorf("bft: generate candidate keypair: %w", err)
-	}
-	privBytes, pubBytes := candidate.Marshal()
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO bft_replica_keys (replica_id, private_key, public_key)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (replica_id) DO NOTHING
-	`, replicaStr, privBytes, pubBytes)
-	if err != nil {
-		return bft.BLSKeypair{}, fmt.Errorf("bft: insert replica keypair: %w", err)
-	}
-
-	// Re-read to get whichever keypair won the race. Guaranteed to
-	// exist after the insert above.
-	kp, ok, err := s.tryLoad(ctx, replicaStr)
-	if err != nil {
-		return bft.BLSKeypair{}, err
-	}
-	if !ok {
-		return bft.BLSKeypair{}, fmt.Errorf("bft: replica key for %s vanished after insert", replicaStr)
-	}
-	return kp, nil
+	return loadOrGenerateKeypair(
+		func() (bft.BLSKeypair, bool, error) { return s.tryLoad(ctx, replicaStr) },
+		func() (bft.BLSKeypair, error) {
+			kp, err := bft.GenerateBLSKeypair()
+			if err != nil {
+				return bft.BLSKeypair{}, fmt.Errorf("bft: generate candidate keypair: %w", err)
+			}
+			return kp, nil
+		},
+		func(kp bft.BLSKeypair) error {
+			privBytes, pubBytes := kp.Marshal()
+			_, err := s.db.ExecContext(ctx, `
+				INSERT INTO bft_replica_keys (replica_id, private_key, public_key)
+				VALUES ($1, $2, $3)
+				ON CONFLICT (replica_id) DO NOTHING
+			`, replicaStr, privBytes, pubBytes)
+			if err != nil {
+				return fmt.Errorf("bft: insert replica keypair: %w", err)
+			}
+			return nil
+		},
+	)
 }
 
 func (s *PostgresReplicaKeyStore) tryLoad(ctx context.Context, replicaStr string) (bft.BLSKeypair, bool, error) {

@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -114,21 +115,33 @@ func oauthAuthServerMetadataHandler(baseURL string, minter *principal.Minter) ht
 	return func(w http.ResponseWriter, r *http.Request) {
 		grantTypes := []string{"client_credentials"}
 		responseTypes := []string{}
+		// "deliberate" is the coarse, always-valid full-access scope the
+		// client_credentials facade grants (it just hands back the API key
+		// itself). The two entries added below when minter is enabled are
+		// PATTERNS, not literal scope strings — RFC 8414 has no notation for a
+		// parameterized scope, so these are illustrative of the syntax
+		// oauthScopeDescription actually parses (ScopeDeliberationPrefix /
+		// ScopeGroupPrefix), not an exhaustive enumeration.
+		scopes := []string{"deliberate"}
 		meta := map[string]any{
 			"issuer":                                baseURL,
 			"token_endpoint":                        baseURL + "/oauth/token",
 			"token_endpoint_auth_methods_supported": []string{"client_secret_post"},
-			"scopes_supported":                      []string{"deliberate"},
 			"service_documentation":                 baseURL + "/docs",
 		}
 		if minter != nil {
 			grantTypes = append(grantTypes, "authorization_code")
 			responseTypes = append(responseTypes, "code")
+			scopes = append(scopes,
+				principal.ScopeDeliberationPrefix+"<deliberation_id>",
+				principal.ScopeGroupPrefix+"<group_id>",
+			)
 			meta["authorization_endpoint"] = baseURL + "/oauth/authorize"
 			meta["code_challenge_methods_supported"] = []string{"S256"}
 		}
 		meta["grant_types_supported"] = grantTypes
 		meta["response_types_supported"] = responseTypes
+		meta["scopes_supported"] = scopes
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(meta)
 	}
@@ -213,6 +226,24 @@ func oauthAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request, svc *de
 		return
 	}
 
+	// Re-resolve the agent's CURRENT key BEFORE consuming the code (rather
+	// than trusting a snapshot from authorize time, and never accepting a
+	// client-submitted pubkey here). Checking this first — instead of after
+	// consuming — means a key revoked in the narrow window between
+	// /oauth/authorize and this exchange leaves the code intact: the agent
+	// can re-register a key and retry with the SAME code rather than
+	// restarting the whole human-consent flow. A real infra error (not just
+	// "no key registered") is logged, since the response to the caller must
+	// collapse both into the same invalid_grant either way.
+	agentKey, _, err := svc.GetActiveAgentKey(r.Context(), clientID)
+	if err != nil {
+		if !errors.Is(err, deliberation.ErrAgentKeyNotFound) {
+			slog.Error("oauth authorization_code: GetActiveAgentKey failed", "client_id", clientID, "error", err)
+		}
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "client_id has no registered key")
+		return
+	}
+
 	// Atomically consumes the code exactly once, and only for the matching
 	// client_id (RFC 6749 client-confusion guard, folded into the same
 	// atomic UPDATE — see AccessStore.ConsumeOAuthAuthorizationCode).
@@ -226,20 +257,16 @@ func oauthAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request, svc *de
 
 	// PKCE S256: base64url(sha256(verifier)) must match the challenge stored
 	// at /oauth/authorize time. Constant-time compare — same pattern http.go
-	// already uses for bearer-token comparisons.
+	// already uses for bearer-token comparisons. A wrong verifier burns the
+	// code (already consumed above) rather than leaving it retryable — that
+	// is deliberate, unlike the key-check above: PKCE failing is a signal the
+	// code may have been intercepted, so immediately invalidating it (rather
+	// than letting an attacker keep guessing verifiers against a live code)
+	// is the actual anti-replay property PKCE exists for.
 	sum := sha256.Sum256([]byte(verifier))
 	computed := base64.RawURLEncoding.EncodeToString(sum[:])
 	if subtle.ConstantTimeCompare([]byte(computed), []byte(oc.CodeChallenge)) != 1 {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "code_verifier does not match code_challenge")
-		return
-	}
-
-	// Re-resolve the agent's CURRENT key rather than trusting a snapshot from
-	// authorize time — tolerates key rotation in the narrow window between
-	// the two calls, and never accepts a client-submitted pubkey here.
-	agentKey, _, err := svc.GetActiveAgentKey(r.Context(), clientID)
-	if err != nil {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "client_id no longer has a registered key")
 		return
 	}
 
@@ -267,10 +294,12 @@ func oauthAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request, svc *de
 // oauthClientCredentialsGrant implements RFC 6749 §4.4 as a thin facade
 // over gemot's existing API keys: client_secret must be an existing, active
 // gmt_ key (checked the same way /export and /balance check Bearer tokens),
-// and the returned access_token is that SAME key. No new credential is
-// minted — gemot's only key-minting path stays Stripe checkout (anti-abuse:
-// no agent-facing key mint), matching what oauthAuthServerMetadataHandler
-// advertises.
+// and the returned access_token is that SAME key. This path itself mints
+// nothing new — gemot's only *key*-minting path stays Stripe checkout
+// (anti-abuse: no agent-facing API key mint). oauthAuthorizationCodeGrant
+// above IS a second minting path, but it mints a scoped, time-limited
+// delegation Credential from an already-registered agent key, never a new
+// bearer API key — a materially different capability from this one.
 func oauthClientCredentialsGrant(w http.ResponseWriter, r *http.Request, creditStore *payments.CreditStore) {
 	secret := r.FormValue("client_secret")
 	if secret == "" {

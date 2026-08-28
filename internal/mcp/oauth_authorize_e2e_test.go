@@ -302,3 +302,99 @@ func oauthE2EDSN() string {
 	}
 	return "postgres://gemot:gemot@localhost:5432/gemot?sslmode=disable"
 }
+
+// TestOAuthAuthorizationCodeGrant_RevokedKeyLeavesCodeRetryable is the
+// regression test for the code-review finding that oauthAuthorizationCodeGrant
+// used to consume the authorization code BEFORE checking whether the
+// client's key was still registered: if the key was revoked in the narrow
+// window between /oauth/authorize and this exchange, the exchange failed
+// AND permanently burned the single-use code, forcing the whole
+// human-consent flow to restart. The fix re-checks the key first, so a
+// revoked-then-re-registered key can retry with the SAME code.
+func TestOAuthAuthorizationCodeGrant_RevokedKeyLeavesCodeRetryable(t *testing.T) {
+	db := oauthE2EDB(t)
+	svc := deliberation.NewService(db, nil)
+	ctx := context.Background()
+
+	const agentID = "revoke-retry-agent"
+	agentPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("agent keygen: %v", err)
+	}
+	if err := svc.RegisterAgentKey(ctx, agentID, agentPub, "ed25519"); err != nil {
+		t.Fatalf("RegisterAgentKey: %v", err)
+	}
+
+	_, issuerPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("issuer keygen: %v", err)
+	}
+	minter := principal.NewMinter("gemot-oauth", issuerPriv)
+	limiter := payments.NewRateLimiter(ctx, 1000, time.Minute)
+	tokenHandler := oauthTokenHandler(svc, nil, minter, limiter)
+
+	verifierBytes := make([]byte, 32)
+	if _, err := rand.Read(verifierBytes); err != nil {
+		t.Fatalf("verifier random: %v", err)
+	}
+	verifier := base64.RawURLEncoding.EncodeToString(verifierBytes)
+	challengeSum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(challengeSum[:])
+
+	// Mint the code directly (bypassing the HTTP /oauth/authorize dance,
+	// which is already covered end to end above) so this test isolates the
+	// token-exchange behavior under test.
+	code := "gac_" + strings.TrimRight(verifier, "=")
+	if err := svc.CreateOAuthAuthorizationCode(ctx, &deliberation.OAuthAuthorizationCode{
+		Code: code, AgentID: agentID, Principal: "oauthkey:test",
+		CodeChallenge: challenge, CodeChallengeMethod: "S256",
+		ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("CreateOAuthAuthorizationCode: %v", err)
+	}
+
+	exchange := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {code},
+			"code_verifier": {verifier},
+			"client_id":     {agentID},
+		}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		tokenHandler(rec, req)
+		return rec
+	}
+
+	// Revoke the key, then attempt the exchange: must fail, and must NOT
+	// burn the code.
+	if err := svc.RevokeAgentKey(ctx, agentID); err != nil {
+		t.Fatalf("RevokeAgentKey: %v", err)
+	}
+	rec := exchange()
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("exchange with revoked key: status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Re-register a key for the same agent (simulating recovery) and retry
+	// with the SAME code: this must now succeed, proving the earlier
+	// failure did not consume it.
+	newPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("replacement keygen: %v", err)
+	}
+	if err := svc.RegisterAgentKey(ctx, agentID, newPub, "ed25519"); err != nil {
+		t.Fatalf("re-RegisterAgentKey: %v", err)
+	}
+	rec = exchange()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retry after re-registering key: status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// A second retry must now fail: the successful exchange above consumed
+	// the code for real.
+	rec = exchange()
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("second retry after a successful exchange: status = %d, want 400 (code should now be consumed), body=%s", rec.Code, rec.Body.String())
+	}
+}

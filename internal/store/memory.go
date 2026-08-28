@@ -1473,10 +1473,11 @@ func (m *MemoryStore) ConsumeOAuthAuthorizationCode(_ context.Context, code, cli
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	oc, ok := m.oauthAuthCodes[code]
-	if !ok || oc.AgentID != clientID || !oc.ConsumedAt.IsZero() || time.Now().UTC().After(oc.ExpiresAt) {
+	if !ok || oc.AgentID != clientID || oc.ConsumedAt != nil || time.Now().UTC().After(oc.ExpiresAt) {
 		return nil, fmt.Errorf("invalid, expired, or already-used authorization code")
 	}
-	oc.ConsumedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	oc.ConsumedAt = &now
 	clone := *oc
 	return &clone, nil
 }

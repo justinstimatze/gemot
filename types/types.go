@@ -228,10 +228,6 @@ type CommitmentSignals struct {
 	StakesLevel    string `json:"stakes_level"` // normal | high (high iff DependentCount >= 1)
 }
 
-// OAuthAuthorizationCode is a short-lived, single-use code minted by
-// GET/POST /oauth/authorize and redeemed at POST /oauth/token
-// (grant_type=authorization_code). See internal/principal/mint.go for
-// what it's ultimately traded for.
 type OAuthAuthorizationCode struct {
 	Code                string    `json:"code"`
 	AgentID             string    `json:"agent_id"`
@@ -240,6 +236,9 @@ type OAuthAuthorizationCode struct {
 	CodeChallenge       string    `json:"code_challenge"`
 	CodeChallengeMethod string    `json:"code_challenge_method"`
 	ExpiresAt           time.Time `json:"expires_at"`
-	ConsumedAt          time.Time `json:"consumed_at,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
+	// ConsumedAt is a pointer, not a bare time.Time: omitempty is a documented
+	// no-op on struct-typed fields, so a bare zero-value time.Time would never
+	// actually be omitted from JSON. nil means "not yet consumed".
+	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
