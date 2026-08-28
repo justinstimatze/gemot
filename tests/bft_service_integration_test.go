@@ -224,3 +224,52 @@ func TestReplicaKeyStoreReturnsSameKey(t *testing.T) {
 		t.Fatalf("replica 0 and replica 1 produced identical private keys — not isolated by replica_id")
 	}
 }
+
+// TestTamperEvidentLogSurvivesPipeInAgentID is the regression test for a
+// log-corruption bug: orderAction pipe-joined fields with no escaping, so
+// an agent_id containing a literal "|" shifted every subsequent field's
+// position when GetTamperEvidentLog split the payload back apart,
+// misattributing (or truncating) that entry's recorded agent_id.
+func TestTamperEvidentLogSurvivesPipeInAgentID(t *testing.T) {
+	db := tempDB(t)
+	svc := deliberation.NewService(db, &mockAnalyzer{})
+
+	ctx := context.Background()
+	log := store.NewPostgresLogStore(db)
+	voteHist := store.NewPostgresVoteHistoryStore(db, bft.ReplicaID(0))
+	keys := store.NewPostgresReplicaKeyStore(db)
+	engine, err := bft.BootstrapSingleNode(ctx, log, voteHist, keys)
+	if err != nil {
+		t.Fatalf("BootstrapSingleNode: %v", err)
+	}
+	svc.SetBFTEngine(engine)
+
+	d, err := svc.CreateDeliberation(ctx, "pipe in agent_id", "")
+	if err != nil {
+		t.Fatalf("CreateDeliberation: %v", err)
+	}
+
+	const trickyAgentID = "evil|attacker"
+	if _, err := svc.SubmitPosition(ctx, d.ID, trickyAgentID, "hello"); err != nil {
+		t.Fatalf("SubmitPosition: %v", err)
+	}
+	// A second write advances the two-chain rule far enough to commit the
+	// first (the position with the tricky agent_id).
+	if _, err := svc.SubmitPosition(ctx, d.ID, "bob", "flush"); err != nil {
+		t.Fatalf("SubmitPosition (flush): %v", err)
+	}
+
+	entries, err := svc.GetTamperEvidentLog(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("GetTamperEvidentLog: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected at least one committed entry")
+	}
+	if entries[0].AgentID != trickyAgentID {
+		t.Errorf("AgentID = %q, want %q (unmangled by the pipe in it)", entries[0].AgentID, trickyAgentID)
+	}
+	if entries[0].ActionType != "submit_position" {
+		t.Errorf("ActionType = %q, want submit_position (should not have shifted)", entries[0].ActionType)
+	}
+}

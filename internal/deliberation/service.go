@@ -429,7 +429,7 @@ func (s *Service) GetTamperEvidentLog(ctx context.Context, deliberationID string
 	}
 	out := make([]AuditLogEntry, 0, len(entries))
 	for _, e := range entries {
-		parts := strings.Split(string(e.Block.Payload), "|")
+		parts := splitEscapedPipe(string(e.Block.Payload))
 		// Canonical payloads always carry deliberation_id as the
 		// second field (after action_type) except for any hypothetical
 		// server-initiated actions, which have none.
@@ -457,17 +457,18 @@ func (s *Service) GetTamperEvidentLog(ctx context.Context, deliberationID string
 // so it lands in the tamper-evident log before the domain-table
 // write. Every service mutation that should be audit-orderable
 // (positions, votes, commitments, disputes) calls this. Payload is
-// a pipe-joined canonical string so a later verify path can
-// regenerate and match it byte-for-byte.
+// a pipe-joined canonical string, with each field escaped via
+// escapePipePart so a caller-controlled field can never be mistaken
+// for the delimiter when GetTamperEvidentLog splits it back apart.
 //
 // Returns an error that callers wrap with their own context. The
 // domain write should NOT proceed if this returns an error — the
 // log is the source of truth for "did this action happen."
 func (s *Service) orderAction(ctx context.Context, opType string, parts ...string) error {
-	payload := []byte(opType)
+	payload := []byte(escapePipePart(opType))
 	for _, p := range parts {
 		payload = append(payload, '|')
-		payload = append(payload, p...)
+		payload = append(payload, escapePipePart(p)...)
 	}
 	if _, _, err := s.bftEngine.Submit(ctx, payload); err != nil {
 		return fmt.Errorf("order %s: %w", opType, err)
@@ -3251,4 +3252,49 @@ func (s *Service) ConsumeOAuthAuthorizationCode(ctx context.Context, code, clien
 // every other store-backed operation.
 func (s *Service) CreateOAuthAuthorizationCode(ctx context.Context, oc *OAuthAuthorizationCode) error {
 	return s.store.CreateOAuthAuthorizationCode(ctx, oc)
+}
+
+// escapePipePart escapes backslashes and pipes in a single tamper-evident
+// log field before orderAction joins it with others using "|" as the
+// delimiter -- without this, a caller-controlled field (agent_id, a
+// commitment statement, a dispute correction) containing a literal "|"
+// would shift every subsequent field's position when the payload is split
+// back apart in GetTamperEvidentLog. Pairs with splitEscapedPipe.
+func escapePipePart(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "|", `\|`)
+	return s
+}
+
+// splitEscapedPipe splits s on "|" delimiters written by escapePipePart,
+// treating a backslash as an escape character for both "\|" and "\\" so an
+// escaped literal pipe inside a field is never mistaken for the delimiter.
+//
+// Payloads committed before this fix existed were written without any
+// escaping. For the overwhelming common case (no backslash or pipe inside
+// any field) this parses identically either way. The one edge case that
+// can differ is a pre-fix entry whose field happened to contain the exact
+// two-byte sequence \| -- but any pre-fix entry with a raw pipe in a field
+// was already ambiguous/corrupted under the old unescaped scheme, so this
+// doesn't turn a previously-correct parse into an incorrect one.
+func splitEscapedPipe(s string) []string {
+	var parts []string
+	var cur strings.Builder
+	escaped := false
+	for _, r := range s {
+		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case r == '|':
+			parts = append(parts, cur.String())
+			cur.Reset()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	parts = append(parts, cur.String())
+	return parts
 }

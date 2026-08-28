@@ -15,7 +15,13 @@ A full-repository `/code-review` pass (broader than the OAuth-flow diff review a
 - **`propose_compromise` options reached the LLM prompt unsanitized**: free-text options (never sanitized like position content) now go through `sanitize.Position` before the prompt is built. A follow-up review pass caught that this broke exact-match scoring against raw ground truth (e.g. the calibration runner) and could merge two different options that sanitize to identical text — the selected option is now mapped back to its original, unsanitized text before returning.
 - **Two more `(nil, nil)`-vs-`(nil, err)` nil-dereference panics**: `ProposeCompromise` and `GetContext` had the identical `MemoryStore`-vs-Postgres contract mismatch already fixed for `ReframePosition`/`ProposeCompromiseWithChoiceAndVotes` earlier in this pass.
 
-Deferred (memory'd for one-by-one consideration, not fixed this pass): an unescaped `|` delimiter in the tamper-evident log, a purge job that silently no-ops on an FK violation, ACL-granted deliberations invisible in list queries, an MPP scope bound to a hardcoded model string instead of `GEMOT_MODEL`, and `MemoryStore`'s delegation table not upserting like Postgres does.
+Deferred (memory'd for one-by-one consideration, not fixed this pass): a purge job that silently no-ops on an FK violation, ACL-granted deliberations invisible in list queries, an MPP scope bound to a hardcoded model string instead of `GEMOT_MODEL`, and `MemoryStore`'s delegation table not upserting like Postgres does.
+
+### Tamper-evident log: escape the `|` payload delimiter — 2026-08-28
+
+The sixth deferred finding above, picked up individually as planned: `orderAction` pipe-joined caller-controlled fields (agent_id, commitment statements, dispute corrections) with no escaping, and `GetTamperEvidentLog` parsed them back via fixed-index `strings.Split`. An `agent_id` containing a literal `|` (nothing strips it — `scopeAgentID` only replaces `:`) shifted every subsequent field's position, silently misattributing or truncating that entry when the log was read back — corrupting the audit trail the mechanism exists to make trustworthy, and reachable via an ordinary `submit_position`/`vote`/`commit` call.
+
+Fixed with a backslash-escaping scheme (`escapePipePart`/`splitEscapedPipe`) applied to every field at write time, not just `agent_id` — so any future field this format starts reading back is protected the same way. Payloads committed before this fix parse identically under the new scheme for the overwhelming common case (no backslash or pipe in any field); the only entries that could parse differently are ones that already contained a raw pipe, which were already ambiguous/corrupted under the old unescaped scheme — this doesn't turn a previously-correct parse into an incorrect one.
 
 ### Hosted OAuth2 authorization_code + PKCE consent flow — 2026-08-28
 
