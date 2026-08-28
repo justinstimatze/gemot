@@ -4,6 +4,14 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Hosted OAuth2 authorization_code + PKCE consent flow — 2026-08-28
+
+Adds a hosted way for a human to approve a specific agent without hand-rolling a client-side signing tool: visit `/oauth/authorize`, present an existing `gmt_` API key, approve — the agent then exchanges the resulting code at `/oauth/token` (`grant_type=authorization_code`, PKCE S256) for a signed `principal.Credential`, gemot's existing delegation format. Gated by `GEMOT_OAUTH_CONSENT` (default off).
+
+Gemot mints as its own `principal.RemoteIssuer` ("gemot-oauth"), reusing the already-shipped `RoutingVerifier`/`IssuerVerifier` machinery rather than a new verifier type — this is gemot's first time signing a credential server-side. Self-issuer trust is wired unconditionally whenever minting is enabled (never operator-configurable), so a deployment can't turn on minting and forget to trust what it mints. `provePossession` is untouched: a minted credential still can't be replayed as a bearer token without the agent's own key. The principal identity is a hashed API key (`oauthkey:<hash>`), never the associated email.
+
+This narrows — without retracting — the prior "gemot has no user-account/consent system" stance in `wellknown.go`, `protected_resource.go`, and `COMPOSING.md`: still not a general OAuth deployment or identity provider, but no longer categorically without a consent path. `/.well-known/oauth-authorization-server` only advertises `authorization_code` when the feature is actually enabled. Out of scope for this pass: loopback-redirect support (RFC 8252 §7.3) for real OAuth-discovering clients, and any migration to Ory Hydra or a second issuer (WorkOS) — deferred until a concrete need shows up.
+
 ### scripts/audit-prod-surfaces.sh: independent Is-Agentic readiness checks — 2026-08-25
 
 The third-party "Is Agentic" audit tool's rescan appeared to serve a cached report: identical evidence text (including specific claims already disproven live, like a missing `Vary: Accept` header) came back across multiple manual "rescan" clicks while the underlying conditions were being fixed and verified in between. Extended the existing prod-surface audit script with a self-contained section covering the 20 tracked items directly against gemot.dev — 404 negotiation, wrong-method 405s, markdown negotiation, MCP handshake shape, rate-limit headers, versioning policy, JSON-LD, trust-anchor pages — so this doesn't depend on that tool's cache to know the real state.
