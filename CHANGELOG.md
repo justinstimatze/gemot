@@ -15,7 +15,13 @@ A full-repository `/code-review` pass (broader than the OAuth-flow diff review a
 - **`propose_compromise` options reached the LLM prompt unsanitized**: free-text options (never sanitized like position content) now go through `sanitize.Position` before the prompt is built. A follow-up review pass caught that this broke exact-match scoring against raw ground truth (e.g. the calibration runner) and could merge two different options that sanitize to identical text — the selected option is now mapped back to its original, unsanitized text before returning.
 - **Two more `(nil, nil)`-vs-`(nil, err)` nil-dereference panics**: `ProposeCompromise` and `GetContext` had the identical `MemoryStore`-vs-Postgres contract mismatch already fixed for `ReframePosition`/`ProposeCompromiseWithChoiceAndVotes` earlier in this pass.
 
-Deferred (memory'd for one-by-one consideration, not fixed this pass): a purge job that silently no-ops on an FK violation, ACL-granted deliberations invisible in list queries, an MPP scope bound to a hardcoded model string instead of `GEMOT_MODEL`, and `MemoryStore`'s delegation table not upserting like Postgres does.
+Deferred (memory'd for one-by-one consideration, not fixed this pass): ACL-granted deliberations invisible in list queries, an MPP scope bound to a hardcoded model string instead of `GEMOT_MODEL`, and `MemoryStore`'s delegation table not upserting like Postgres does.
+
+### Purge silently failed for deliberations with jobs or commitment access rows — 2026-08-28
+
+The seventh deferred finding, picked up next: `hardDeleteDeliberation`'s delete-table list omitted `commitment_access` (added for the payment-mesh ledger), whose FK to `commitments` has no `ON DELETE CASCADE`. A schema audit while fixing this found a SECOND, more commonly-hit gap: `jobs` (async analysis tracking) has the identical unguarded FK to `deliberations` and was ALSO missing — meaning any deliberation that ever ran `analyze:run` or similar would already fail to purge, not just the newer payment-mesh feature. Every individual `Exec` in the delete transaction discarded its error, and `purgeByQuery`'s caller counted every *candidate* found as "cleaned up" regardless of whether the delete actually succeeded — so a purge job would report success while the rows silently remained forever.
+
+Fixed by adding both missing tables (with `commitment_access` deleted via a join through `commitments`, since it has no `deliberation_id` column of its own), checking every delete's error instead of discarding it, and changing `purgeByQuery` to return the actual number deleted rather than the candidate count.
 
 ### Tamper-evident log: escape the `|` payload delimiter — 2026-08-28
 

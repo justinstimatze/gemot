@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -1085,7 +1086,11 @@ func (s *DB) LogAuditEvent(keyID, ip, method, deliberationID, agentID string) {
 	)
 }
 
-// purgeByQuery finds deliberation IDs matching the query and hard-deletes them.
+// purgeByQuery finds deliberation IDs matching the query and hard-deletes
+// them. Returns the number ACTUALLY deleted, not the number of candidates
+// found -- a candidate whose hardDeleteDeliberation fails (e.g. an FK
+// violation from a table this purge forgot) is logged and skipped rather
+// than silently counted as cleaned up while its rows remain forever.
 func (s *DB) purgeByQuery(query string, args ...any) (int, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
@@ -1100,10 +1105,15 @@ func (s *DB) purgeByQuery(query string, args ...any) (int, error) {
 		}
 		ids = append(ids, id)
 	}
+	deleted := 0
 	for _, id := range ids {
-		s.hardDeleteDeliberation(id) //nolint:errcheck
+		if err := s.hardDeleteDeliberation(id); err != nil {
+			fmt.Fprintf(os.Stderr, "gemot: WARNING: failed to purge deliberation %s: %v\n", id, err)
+			continue
+		}
+		deleted++
 	}
-	return len(ids), nil
+	return deleted, nil
 }
 
 // DeleteExpiredSandboxDeliberations hard-deletes old sandbox deliberations.
@@ -1175,20 +1185,38 @@ func (s *DB) DeleteDelegationsByAgent(ctx context.Context, deliberationID, agent
 	return err
 }
 
-// hardDeleteDeliberation permanently removes a deliberation and all related data.
 func (s *DB) hardDeleteDeliberation(id string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck
+	// commitment_access has no deliberation_id column of its own (only
+	// commitment_id, FK'd to commitments with no ON DELETE CASCADE) -- it
+	// must be deleted via its parent commitments, and BEFORE commitments
+	// itself, or the commitments delete below fails its own FK check and
+	// silently rolls back this deliberation's ENTIRE purge (every other
+	// table's delete in this same transaction reverts too).
+	if _, err := tx.Exec(`DELETE FROM commitment_access WHERE commitment_id IN (SELECT id FROM commitments WHERE deliberation_id = $1)`, id); err != nil {
+		return fmt.Errorf("deleting commitment_access: %w", err)
+	}
 	for _, table := range []string{
 		"analysis_results", "votes", "positions", "commitments",
 		"delegations", "disputes", "invitations", "join_codes", "deliberation_acl",
+		// jobs: added later for async analysis tracking, also FK'd to
+		// deliberations with no ON DELETE CASCADE, and missing from this
+		// list originally — any deliberation that ever ran analyze:run (or
+		// any async action) has a row here and would fail to purge without
+		// it, exactly like commitment_access above.
+		"jobs",
 	} {
-		tx.Exec("DELETE FROM "+table+" WHERE deliberation_id = $1", id) //nolint:errcheck
+		if _, err := tx.Exec("DELETE FROM "+table+" WHERE deliberation_id = $1", id); err != nil {
+			return fmt.Errorf("deleting from %s: %w", table, err)
+		}
 	}
-	tx.Exec("DELETE FROM deliberations WHERE id = $1", id) //nolint:errcheck
+	if _, err := tx.Exec("DELETE FROM deliberations WHERE id = $1", id); err != nil {
+		return fmt.Errorf("deleting deliberation: %w", err)
+	}
 	return tx.Commit()
 }
 
