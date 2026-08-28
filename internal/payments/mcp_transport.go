@@ -45,9 +45,16 @@ func PaymentRequiredError(cfg Config, scope ChallengeScope, description string) 
 	now := time.Now().UTC()
 	expires := now.Add(5 * time.Minute).Format(time.RFC3339)
 
-	// Defensive: never emit a model-unbound credential.
+	// Defensive: never emit a model-unbound credential. Prefer the
+	// deployment's actual configured default (cfg.DefaultModel, set from
+	// GEMOT_MODEL) over the hardcoded literal, so this fallback can't
+	// silently diverge from what the LLM call layer actually invokes.
 	if scope.Model == "" {
-		scope.Model = "claude-sonnet-4-6"
+		if cfg.DefaultModel != "" {
+			scope.Model = cfg.DefaultModel
+		} else {
+			scope.Model = "claude-sonnet-4-6"
+		}
 	}
 
 	var challenges []challenge

@@ -564,3 +564,34 @@ func TestReserveChallengeID_PrunesExpired(t *testing.T) {
 		t.Fatal("aged ID should be re-reservable after prune sweep")
 	}
 }
+
+// TestPaymentRequiredErrorUsesConfiguredDefaultModel is the regression test
+// for the code-review finding that PaymentRequiredError's defensive
+// empty-scope.Model fallback hardcoded "claude-sonnet-4-6" instead of
+// preferring the deployment's actual configured default.
+func TestPaymentRequiredErrorUsesConfiguredDefaultModel(t *testing.T) {
+	cfg := Config{DefaultModel: "claude-opus-4-6", StripeProfileID: "profile_test_x", HMACSecret: "test-secret", Realm: "test"}
+	rpcErr := PaymentRequiredError(cfg, ChallengeScope{Tool: "analyze", Action: "run"}, "test")
+
+	var body struct {
+		Challenges []challenge `json:"challenges"`
+	}
+	if err := json.Unmarshal(rpcErr.Data, &body); err != nil {
+		t.Fatalf("unmarshaling rpcErr.Data: %v", err)
+	}
+	if len(body.Challenges) == 0 {
+		t.Fatal("expected at least one challenge")
+	}
+
+	reqJSON, err := base64.RawURLEncoding.DecodeString(body.Challenges[0].Request)
+	if err != nil {
+		t.Fatalf("decoding challenge request: %v", err)
+	}
+	var req paymentRequest
+	if err := json.Unmarshal(reqJSON, &req); err != nil {
+		t.Fatalf("unmarshaling payment request: %v", err)
+	}
+	if req.Scope.Model != "claude-opus-4-6" {
+		t.Errorf("scope.Model = %q, want the configured DefaultModel %q, not the hardcoded literal", req.Scope.Model, "claude-opus-4-6")
+	}
+}

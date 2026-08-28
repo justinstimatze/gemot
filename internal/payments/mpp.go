@@ -22,7 +22,6 @@ import (
 	"github.com/stripe/stripe-go/v82"
 )
 
-// Config holds payment configuration.
 type Config struct {
 	StripeSecretKey string // Stripe secret key (sk_live_... or sk_test_...)
 	StripeProfileID string // Stripe profile ID used as networkId for SPT (profile_... live, profile_test_... sandbox)
@@ -37,6 +36,13 @@ type Config struct {
 	// the port is already inside the perimeter and the sandbox path
 	// is a footgun. Public gemot.dev runs with this false.
 	RequireAuth bool
+	// DefaultModel is the model an empty ChallengeScope.Model resolves to
+	// (see PaymentRequiredError) -- set from the same GEMOT_MODEL value the
+	// LLM call layer itself falls back to, so MPP scope binding never
+	// silently diverges from what actually gets invoked. Empty means
+	// "caller didn't wire this" and PaymentRequiredError uses its own
+	// hardcoded last-resort default instead.
+	DefaultModel string
 }
 
 // ContextKeyAPIKey is the context key for the customer API key set by middleware.

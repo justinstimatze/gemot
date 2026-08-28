@@ -97,11 +97,20 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 	// SPT, and GEMOT_API_SECRET as the HMAC secret that binds challenge IDs to
 	// their parameters. With any one missing we'd advertise challenges that can
 	// never validate, so Enabled requires all three.
+	// Same default GEMOT_MODEL falls back to at the LLM call layer
+	// (internal/config.Load) — kept in sync here so MPP scope binding
+	// (resolveModel, PaymentRequiredError) can never silently diverge from
+	// what actually gets invoked.
+	defaultModel := os.Getenv("GEMOT_MODEL")
+	if defaultModel == "" {
+		defaultModel = "claude-sonnet-4-6"
+	}
 	mppCfg := payments.Config{
 		StripeSecretKey: os.Getenv("STRIPE_SECRET_KEY"),
 		StripeProfileID: os.Getenv("STRIPE_PROFILE_ID"),
 		HMACSecret:      os.Getenv("GEMOT_API_SECRET"),
 		Realm:           "gemot.dev",
+		DefaultModel:    defaultModel,
 		PricePerAnalyze: 50, // $0.50
 		Currency:        "usd",
 		Enabled: os.Getenv("STRIPE_SECRET_KEY") != "" &&

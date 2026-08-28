@@ -15,7 +15,13 @@ A full-repository `/code-review` pass (broader than the OAuth-flow diff review a
 - **`propose_compromise` options reached the LLM prompt unsanitized**: free-text options (never sanitized like position content) now go through `sanitize.Position` before the prompt is built. A follow-up review pass caught that this broke exact-match scoring against raw ground truth (e.g. the calibration runner) and could merge two different options that sanitize to identical text — the selected option is now mapped back to its original, unsanitized text before returning.
 - **Two more `(nil, nil)`-vs-`(nil, err)` nil-dereference panics**: `ProposeCompromise` and `GetContext` had the identical `MemoryStore`-vs-Postgres contract mismatch already fixed for `ReframePosition`/`ProposeCompromiseWithChoiceAndVotes` earlier in this pass.
 
-Deferred (memory'd for one-by-one consideration, not fixed this pass): an MPP scope bound to a hardcoded model string instead of `GEMOT_MODEL`, and `MemoryStore`'s delegation table not upserting like Postgres does.
+Deferred (memory'd for one-by-one consideration, not fixed this pass): `MemoryStore`'s delegation table not upserting like Postgres does.
+
+### MPP scope binding now follows GEMOT_MODEL, not a hardcoded literal — 2026-08-28
+
+The ninth deferred finding: `resolveModel()` and `PaymentRequiredError`'s empty-scope fallback both hardcoded `"claude-sonnet-4-6"` for MPP scope binding, independent of `config.Config.Model` (`GEMOT_MODEL`) — dormant today (nothing overrides the default), but a silent mispricing/misscoping landmine the day that env var is ever changed, since the actually-invoked model would follow `GEMOT_MODEL` while the payment credential stayed bound to the stale literal.
+
+Added `payments.Config.DefaultModel`, set from `GEMOT_MODEL` in `RunHTTP` (same default value `config.Load()` itself falls back to) and threaded through `resolveModel` (now a `*server` method) and `PaymentRequiredError`. Both still fall back to the hardcoded literal as a final safety net when `DefaultModel` was never wired (the stdio transport, which doesn't configure MPP at all).
 
 ### ACL-granted private deliberations were invisible in list queries — 2026-08-28
 

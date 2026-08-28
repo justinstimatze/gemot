@@ -734,7 +734,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		runScope := payments.ChallengeScope{
 			Tool:           "analyze",
 			Action:         "run",
-			Model:          resolveModel(args.Model),
+			Model:          s.resolveModel(args.Model),
 			DeliberationID: args.DeliberationID,
 		}
 		mppReceipt, err := s.checkMPPCredential(ctx, req, runScope)
@@ -858,7 +858,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		proposeScope := payments.ChallengeScope{
 			Tool:           "analyze",
 			Action:         "propose_compromise",
-			Model:          resolveModel(args.Model),
+			Model:          s.resolveModel(args.Model),
 			DeliberationID: args.DeliberationID,
 		}
 		mppReceipt, err := s.checkMPPCredential(ctx, req, proposeScope)
@@ -930,7 +930,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		reframeScope := payments.ChallengeScope{
 			Tool:           "analyze",
 			Action:         "reframe",
-			Model:          resolveModel(args.Model),
+			Model:          s.resolveModel(args.Model),
 			DeliberationID: args.DeliberationID,
 		}
 		mppReceipt, err := s.checkMPPCredential(ctx, req, reframeScope)
@@ -991,7 +991,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		panelScope := payments.ChallengeScope{
 			Tool:   "analyze",
 			Action: "expert_panel",
-			Model:  resolveModel(args.Model),
+			Model:  s.resolveModel(args.Model),
 		}
 		mppReceipt, err := s.checkMPPCredential(ctx, req, panelScope)
 		if err != nil {
@@ -1054,7 +1054,7 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		followUpScope := payments.ChallengeScope{
 			Tool:           "analyze",
 			Action:         "follow_up",
-			Model:          resolveModel(args.Model),
+			Model:          s.resolveModel(args.Model),
 			DeliberationID: args.DeliberationID,
 		}
 		mppReceipt, err := s.checkMPPCredential(ctx, req, followUpScope)
@@ -1405,19 +1405,6 @@ func (s *server) gateSandbox(ctx context.Context, scope payments.ChallengeScope,
 	return fmt.Errorf("sandbox daily quota exceeded (20 calls/day) — fund credits at https://gemot.dev/pricing or pay per-call via MPP")
 }
 
-// resolveModel returns the model name to use for scope binding and pricing.
-// Empty args.Model means "server default" — at the LLM call layer this
-// becomes Sonnet (or whatever GEMOT_MODEL is set to). For MPP scope binding
-// we resolve to "claude-sonnet-4-6" so the credential is bound to a
-// concrete model rather than the empty string. The actual downstream LLM
-// call honors args.Model verbatim; we don't propagate the resolution.
-func resolveModel(model string) string {
-	if model == "" {
-		return "claude-sonnet-4-6"
-	}
-	return model
-}
-
 func textResult(text string) *sdkmcp.CallToolResult {
 	return &sdkmcp.CallToolResult{
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
@@ -1523,4 +1510,21 @@ func (s *server) refundSandboxQuota(ctx context.Context, mppReceipt *payments.Re
 	}
 	ip, _ := ctx.Value(payments.ContextKeyClientIP{}).(string)
 	s.sandboxQuota.Refund(ip)
+}
+
+// resolveModel returns the model name to use for scope binding and
+// pricing. Empty model means "server default" — resolves to
+// s.mppCfg.DefaultModel (set from GEMOT_MODEL in RunHTTP) so MPP scope
+// binding can never silently diverge from what the LLM call layer itself
+// falls back to. Falls back further to the hardcoded literal only when
+// DefaultModel was never wired (e.g. the stdio transport, which doesn't
+// set mppCfg at all and never reaches a real MPP-scope-binding call).
+func (s *server) resolveModel(model string) string {
+	if model != "" {
+		return model
+	}
+	if s.mppCfg.DefaultModel != "" {
+		return s.mppCfg.DefaultModel
+	}
+	return "claude-sonnet-4-6"
 }
