@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemot — Authorize {{.ClientID}}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Inter',system-ui,sans-serif;background:#fafaf8;color:#0f172a;line-height:1.6;}
+.container{max-width:520px;margin:0 auto;padding:3rem 1.5rem;}
+h1{font-family:'IM Fell English SC',serif;font-size:2rem;margin-bottom:0.25rem;}
+.subtitle{color:#64748b;font-size:0.9rem;margin-bottom:2rem;}
+code{font-family:'SF Mono',Monaco,monospace;font-size:0.85em;background:#f1f5f9;padding:0.15rem 0.4rem;border-radius:4px;}
+.card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;}
+.client{font-family:'SF Mono',Monaco,monospace;font-size:1.05rem;font-weight:700;color:#4f46e5;word-break:break-all;}
+.scope{color:#475569;font-size:0.9rem;margin-top:0.75rem;}
+.warning{background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:0.85rem 1rem;margin-top:0.75rem;color:#92400e;font-size:0.85rem;font-weight:600;}
+.ttl{color:#94a3b8;font-size:0.8rem;margin-top:0.75rem;}
+.error{background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:0.85rem 1rem;margin-bottom:1.25rem;color:#991b1b;font-size:0.88rem;}
+label{display:block;font-size:0.85rem;font-weight:600;color:#0f172a;margin-bottom:0.4rem;}
+input[type=password]{width:100%;padding:0.65rem 0.85rem;border:1px solid #e2e8f0;border-radius:8px;font-family:'SF Mono',Monaco,monospace;font-size:0.88rem;margin-bottom:0.5rem;}
+.hint{color:#94a3b8;font-size:0.78rem;margin-bottom:1.25rem;}
+button{background:#4f46e5;color:#fff;border:none;padding:0.75rem 1.5rem;border-radius:8px;font-size:0.95rem;font-weight:600;cursor:pointer;width:100%;}
+button:hover{background:#4338ca;}
+.footer{margin-top:2rem;color:#94a3b8;font-size:0.78rem;}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Gemot</h1>
+<p class="subtitle">Authorize an agent to act on your behalf</p>
+
+{{if .ErrorMessage}}<div class="error">{{.ErrorMessage}}</div>{{end}}
+
+<div class="card">
+  <div>Agent requesting access:</div>
+  <div class="client">{{.ClientID}}</div>
+  <div class="scope">{{.ScopeDescription}}</div>
+  {{if not .HasScope}}<div class="warning">⚠ Unscoped: this agent will be able to act as you in ANY deliberation.</div>{{end}}
+  <div class="ttl">Access expires in {{.TTLDescription}}.</div>
+</div>
+
+<form method="POST" action="/oauth/authorize">
+  <input type="hidden" name="client_id" value="{{.ClientID}}">
+  <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
+  <input type="hidden" name="code_challenge_method" value="{{.CodeChallengeMethod}}">
+  <input type="hidden" name="scope" value="{{.Scope}}">
+  <input type="hidden" name="state" value="{{.State}}">
+
+  <label for="api_key">Your gemot API key</label>
+  <input type="password" id="api_key" name="api_key" placeholder="gmt_..." autocomplete="off" required>
+  <p class="hint">Only use your own key here — approving creates a durable record that you delegated to this agent. Get a key at <a href="/pricing">gemot.dev/pricing</a> if you don't have one.</p>
+
+  <button type="submit">Approve</button>
+</form>
+
+<p class="footer">Not you? Just close this page — nothing happens until you approve.</p>
+</div>
+</body>
+</html>

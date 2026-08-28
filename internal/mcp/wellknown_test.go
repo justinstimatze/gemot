@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"encoding/xml"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/justinstimatze/gemot/internal/payments"
+	"github.com/justinstimatze/gemot/internal/principal"
 )
 
 // TestNotFoundHandler covers the agent-friendly 404 (item 1 of the Is
@@ -123,49 +126,101 @@ func TestNegotiateContent(t *testing.T) {
 }
 
 // TestOAuthAuthServerMetadataHandler covers item 3 of the audit: RFC 8414
-// metadata must be published, and — the load-bearing honesty check, matching
-// TestProtectedResourceOmitsAuthorizationServers's stance — must advertise
-// ONLY client_credentials, never an authorization_code flow gemot can't
-// service (no user-account/consent system exists).
+// metadata must be published. With minter == nil (feature disabled) it must
+// advertise ONLY client_credentials — the load-bearing honesty check,
+// matching TestProtectedResourceOmitsAuthorizationServers's stance — never a
+// grant type gemot can't service. With a minter configured, authorization_code
+// must appear alongside it.
 func TestOAuthAuthServerMetadataHandler(t *testing.T) {
-	h := oauthAuthServerMetadataHandler("https://gemot.dev")
-	rec := httptest.NewRecorder()
-	h(rec, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
+	type meta struct {
+		Issuer                        string   `json:"issuer"`
+		TokenEndpoint                 string   `json:"token_endpoint"`
+		AuthorizationEndpoint         string   `json:"authorization_endpoint"`
+		GrantTypesSupported           []string `json:"grant_types_supported"`
+		ResponseTypesSupported        []string `json:"response_types_supported"`
+		AuthMethodsSupported          []string `json:"token_endpoint_auth_methods_supported"`
+		CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
 	}
-	var meta struct {
-		Issuer               string   `json:"issuer"`
-		TokenEndpoint        string   `json:"token_endpoint"`
-		GrantTypesSupported  []string `json:"grant_types_supported"`
-		AuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
-		t.Fatalf("body is not valid JSON: %v", err)
-	}
-	if meta.Issuer != "https://gemot.dev" {
-		t.Errorf("issuer = %q, want https://gemot.dev", meta.Issuer)
-	}
-	if meta.TokenEndpoint != "https://gemot.dev/oauth/token" {
-		t.Errorf("token_endpoint = %q, want https://gemot.dev/oauth/token", meta.TokenEndpoint)
-	}
-	if len(meta.GrantTypesSupported) != 1 || meta.GrantTypesSupported[0] != "client_credentials" {
-		t.Errorf("grant_types_supported = %v, want exactly [client_credentials] — gemot has no authorization_code flow to advertise", meta.GrantTypesSupported)
-	}
-	if len(meta.AuthMethodsSupported) != 1 || meta.AuthMethodsSupported[0] != "client_secret_post" {
-		t.Errorf("token_endpoint_auth_methods_supported = %v, want exactly [client_secret_post] (must match what postOAuthToken actually implements)", meta.AuthMethodsSupported)
-	}
+
+	t.Run("minter disabled: advertises client_credentials only", func(t *testing.T) {
+		h := oauthAuthServerMetadataHandler("https://gemot.dev", nil)
+		rec := httptest.NewRecorder()
+		h(rec, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		var m meta
+		if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+			t.Fatalf("body is not valid JSON: %v", err)
+		}
+		if m.Issuer != "https://gemot.dev" {
+			t.Errorf("issuer = %q, want https://gemot.dev", m.Issuer)
+		}
+		if m.TokenEndpoint != "https://gemot.dev/oauth/token" {
+			t.Errorf("token_endpoint = %q, want https://gemot.dev/oauth/token", m.TokenEndpoint)
+		}
+		if len(m.GrantTypesSupported) != 1 || m.GrantTypesSupported[0] != "client_credentials" {
+			t.Errorf("grant_types_supported = %v, want exactly [client_credentials] when minter is nil", m.GrantTypesSupported)
+		}
+		if len(m.AuthMethodsSupported) != 1 || m.AuthMethodsSupported[0] != "client_secret_post" {
+			t.Errorf("token_endpoint_auth_methods_supported = %v, want exactly [client_secret_post] (must match what oauthClientCredentialsGrant actually implements)", m.AuthMethodsSupported)
+		}
+		if m.AuthorizationEndpoint != "" {
+			t.Errorf("authorization_endpoint = %q, want empty when minter is nil", m.AuthorizationEndpoint)
+		}
+	})
+
+	t.Run("minter enabled: advertises authorization_code + PKCE too", func(t *testing.T) {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("generating test keypair: %v", err)
+		}
+		m := principal.NewMinter("gemot-oauth", priv)
+		h := oauthAuthServerMetadataHandler("https://gemot.dev", m)
+		rec := httptest.NewRecorder()
+		h(rec, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil))
+		var meta meta
+		if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+			t.Fatalf("body is not valid JSON: %v", err)
+		}
+		if meta.AuthorizationEndpoint != "https://gemot.dev/oauth/authorize" {
+			t.Errorf("authorization_endpoint = %q, want https://gemot.dev/oauth/authorize", meta.AuthorizationEndpoint)
+		}
+		foundGrant := false
+		for _, g := range meta.GrantTypesSupported {
+			if g == "authorization_code" {
+				foundGrant = true
+			}
+		}
+		if !foundGrant {
+			t.Errorf("grant_types_supported = %v, want authorization_code included", meta.GrantTypesSupported)
+		}
+		foundResp := false
+		for _, r := range meta.ResponseTypesSupported {
+			if r == "code" {
+				foundResp = true
+			}
+		}
+		if !foundResp {
+			t.Errorf("response_types_supported = %v, want code included", meta.ResponseTypesSupported)
+		}
+		if len(meta.CodeChallengeMethodsSupported) != 1 || meta.CodeChallengeMethodsSupported[0] != "S256" {
+			t.Errorf("code_challenge_methods_supported = %v, want exactly [S256]", meta.CodeChallengeMethodsSupported)
+		}
+	})
 }
 
-// TestOAuthTokenHandler covers the client_credentials token endpoint without
-// a database: with creditStore == nil (demo mode), a well-formed request must
-// fail closed with an RFC 6749 §5.2 error body, never a 500 or a minted
-// fake token.
+// TestOAuthTokenHandler covers the token endpoint without a database: with
+// creditStore == nil (demo mode), a well-formed client_credentials request
+// must fail closed with an RFC 6749 §5.2 error body, never a 500 or a minted
+// fake token; with minter == nil, authorization_code must be rejected the
+// same way an unrecognized grant type would be, matching what
+// oauthAuthServerMetadataHandler advertises for the disabled case.
 func TestOAuthTokenHandler(t *testing.T) {
 	limiter := payments.NewRateLimiter(context.Background(), 30, time.Minute)
-	h := oauthTokenHandler(nil, limiter)
+	h := oauthTokenHandler(nil, nil, nil, limiter)
 
-	t.Run("wrong grant_type is rejected per RFC 6749", func(t *testing.T) {
+	t.Run("authorization_code is rejected when minter is disabled", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader("grant_type=authorization_code"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -181,6 +236,16 @@ func TestOAuthTokenHandler(t *testing.T) {
 		}
 		if body.Error != "unsupported_grant_type" {
 			t.Errorf("error = %q, want unsupported_grant_type (RFC 6749 §5.2)", body.Error)
+		}
+	})
+
+	t.Run("unrecognized grant_type is rejected", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader("grant_type=bogus"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		h(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
 		}
 	})
 
@@ -204,6 +269,31 @@ func TestOAuthTokenHandler(t *testing.T) {
 		}
 		if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
 			t.Errorf("content-type = %q, want application/json", ct)
+		}
+	})
+
+	t.Run("authorization_code missing params rejected even when enabled", func(t *testing.T) {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("generating test keypair: %v", err)
+		}
+		m := principal.NewMinter("gemot-oauth", priv)
+		hEnabled := oauthTokenHandler(nil, nil, m, limiter)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader("grant_type=authorization_code"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		hEnabled(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+		var body struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("body is not valid JSON: %v", err)
+		}
+		if body.Error != "invalid_request" {
+			t.Errorf("error = %q, want invalid_request", body.Error)
 		}
 	})
 }

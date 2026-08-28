@@ -104,7 +104,6 @@ type AnalysisStore interface {
 	RecoverStuckAnalyzing(ctx context.Context, maxAge time.Duration) (int, error)
 }
 
-// AccessStore manages ACLs, join codes, invitations, and share tokens.
 type AccessStore interface {
 	CreateJoinCode(ctx context.Context, jc *JoinCode) error
 	ClaimJoinCode(ctx context.Context, code, agentID string) (*JoinCode, error)
@@ -116,6 +115,8 @@ type AccessStore interface {
 	UpdateInvitationStatus(ctx context.Context, id, status string) error
 	CreateShareToken(ctx context.Context, token, groupID string, expiresAt time.Time) error
 	LookupShareToken(ctx context.Context, token string) (groupID string, err error)
+	CreateOAuthAuthorizationCode(ctx context.Context, oc *OAuthAuthorizationCode) error
+	ConsumeOAuthAuthorizationCode(ctx context.Context, code, clientID string) (*OAuthAuthorizationCode, error)
 }
 
 // AgentKeyStore manages per-agent public keys used for signed positions and votes.
@@ -3192,4 +3193,19 @@ func (s *Service) GetAgentVotes(ctx context.Context, deliberationID, agentID str
 		}
 	}
 	return out, nil
+}
+
+// ConsumeOAuthAuthorizationCode atomically redeems code for clientID exactly
+// once — see AccessStore.ConsumeOAuthAuthorizationCode for the one-time-use
+// and client-binding guarantees.
+func (s *Service) ConsumeOAuthAuthorizationCode(ctx context.Context, code, clientID string) (*OAuthAuthorizationCode, error) {
+	return s.store.ConsumeOAuthAuthorizationCode(ctx, code, clientID)
+}
+
+// CreateOAuthAuthorizationCode persists a short-lived, single-use
+// authorization code minted by /oauth/authorize. Thin pass-through so
+// internal/mcp keeps going through Service for backend access, same as
+// every other store-backed operation.
+func (s *Service) CreateOAuthAuthorizationCode(ctx context.Context, oc *OAuthAuthorizationCode) error {
+	return s.store.CreateOAuthAuthorizationCode(ctx, oc)
 }

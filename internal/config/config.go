@@ -91,6 +91,17 @@ type Config struct {
 	// before a refresh is attempted. 0 uses the built-in default (300s). It also
 	// rate-limits fetch attempts, bounding outbound requests under load.
 	JWKSCacheTTLSeconds int
+
+	// OAuthConsentEnabled turns on the hosted OAuth2 authorization_code + PKCE
+	// consent flow (/oauth/authorize, /oauth/token grant_type=authorization_code):
+	// a human proves control of their own gmt_ API key and approves a specific
+	// agent, and gemot mints a principal.Credential for it — gemot's first
+	// server-side credential-signing capability. Off by default, matching the
+	// convention for every other capability with real blast radius
+	// (GEMOT_ENVELOPE_MODE, GEMOT_REQUIRE_AUTH). When enabled, gemot registers
+	// itself as a principal.RemoteIssuer ("gemot-oauth") unconditionally — see
+	// main.go — so minting and verifying what was minted can never drift apart.
+	OAuthConsentEnabled bool
 }
 
 // Load reads configuration from environment variables (and optional .env file).
@@ -124,6 +135,7 @@ func Load() *Config {
 		TrustedIssuers:              os.Getenv("GEMOT_TRUSTED_ISSUERS"),
 		JWKSAllowPrivate:            envBool("GEMOT_JWKS_ALLOW_PRIVATE", false),
 		JWKSCacheTTLSeconds:         envInt("GEMOT_JWKS_CACHE_TTL_SECONDS", 0),
+		OAuthConsentEnabled:         envBool("GEMOT_OAUTH_CONSENT", false),
 	}
 
 	// Validate model is in known set

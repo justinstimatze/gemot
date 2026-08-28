@@ -1,10 +1,15 @@
 # Composing gemot with an external identity or delegation layer
 
-gemot is a **deliberation venue**, not an identity provider. It aggregates
-positions and votes from agents, attributes each action to a stable identity,
-and (optionally) verifies a cryptographic proof that the action was authored by
-the key bound to that identity. It deliberately stops there: it does not issue
-credentials, run an OAuth authorization server, or federate identity providers.
+gemot is a **deliberation venue**, not a general-purpose identity provider. It
+aggregates positions and votes from agents, attributes each action to a stable
+identity, and (optionally) verifies a cryptographic proof that the action was
+authored by the key bound to that identity. It deliberately stops there: it
+does not run a general OAuth authorization server or federate identity
+providers. The one narrow exception is an optional, self-contained hosted
+consent flow (`GEMOT_OAUTH_CONSENT`, see "Discovery" below) where gemot mints
+its *own* delegation credentials after a human proves control of their
+existing API key — not a general user-account system, and not federation with
+anyone else's identity provider.
 
 That boundary is a feature. It means gemot can sit *downstream* of whatever
 identity, delegation, or authorization layer you already run, and consume the
@@ -92,9 +97,14 @@ division of responsibility.
 
 **The composer (you) is responsible for:**
 
-1. **Establishing who the principal is.** gemot does not authenticate humans or
-   issue their credentials. Your layer decides that agent *A* legitimately acts
-   for principal *P* and expresses it as an act-claim (see the schema below).
+1. **Establishing who the principal is.** gemot does not run a general
+   user-account or identity system. Your layer decides that agent *A*
+   legitimately acts for principal *P* and expresses it as an act-claim (see
+   the schema below) — with one narrow exception: the optional hosted consent
+   flow, where "the principal" is defined as "whoever controls this specific
+   `gmt_` billing key," the same authentication fact the `client_credentials`
+   facade already relies on, now used to mint a credential instead of handing
+   back the key itself (see "Discovery" below).
 2. **Vouching for the actor's key.** gemot verifies a signature against a key it
    knows. Binding that key to a principal — and attesting the delegation is
    authorized and in-scope — is the composer's job.
@@ -228,11 +238,25 @@ gemot advertises itself at two well-known locations:
 - `/.well-known/oauth-protected-resource` — RFC 9728 protected-resource metadata.
 
 Note the deliberate honesty in the second one: gemot is a protected resource but
-**not** an OAuth deployment, so the metadata **omits `authorization_servers`**.
-It describes the real auth (bearer + MPP), points at documentation, and lists
-the action scopes — without advertising an OAuth handshake gemot doesn't
-implement. A spec-compliant client reading it will not be led into a broken
-DCR/authorization-code flow.
+**not** a general OAuth deployment, so the metadata **omits
+`authorization_servers`** (that field is for discovering an *external*
+authorization server — gemot still isn't one). It describes the real auth
+(bearer + MPP), points at documentation, and lists the action scopes — without
+advertising an external-AS handshake gemot doesn't implement.
+
+The one narrow exception is `/oauth/authorize` + `/oauth/token`
+(`grant_type=authorization_code`, PKCE, gated by `GEMOT_OAUTH_CONSENT`): a
+human visits a gemot-hosted page, proves control of their own `gmt_` API key,
+and approves a specific agent (shown by its literal `client_id`, a better
+anti-phishing surface than an agent asking a human to sign an arbitrary
+credential blob). Approval mints a signed `Credential` — gemot acting as its
+own authorization server for exactly this one flow, never as a general
+identity provider, and never delegating to (or federating with) anyone else's
+authorization server. `/.well-known/oauth-authorization-server`
+(`oauthAuthServerMetadataHandler`) only advertises `authorization_code` when
+this is actually enabled — a spec-compliant client reading either
+`/.well-known/oauth-authorization-server` or `oauth-protected-resource` will
+not be led into a flow the deployment doesn't actually serve.
 
 ---
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -213,10 +215,49 @@ func cmdServe(httpMode bool, addr string) {
 	// honors credentials minted by trusted external issuers. A malformed value
 	// or an unsafe issuer set aborts startup — federation must never fail open
 	// into "silently off".
+	// Hosted OAuth2 authorization_code + PKCE consent flow (GEMOT_OAUTH_CONSENT).
+	// Gemot mints its own signed credentials as a RemoteIssuer named
+	// "gemot-oauth" rather than a new verifier type, reusing the same
+	// RoutingVerifier/IssuerVerifier machinery as GEMOT_TRUSTED_ISSUERS below.
+	var minter *principal.Minter
+	var selfIssuer *principal.RemoteIssuer
+	if cfg.OAuthConsentEnabled {
+		var issuerPub ed25519.PublicKey
+		var issuerPriv ed25519.PrivateKey
+		if demoMode {
+			pub, priv, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating OAuth issuer keypair: %v\n", err)
+				os.Exit(1)
+			}
+			issuerPub, issuerPriv = pub, priv
+		} else {
+			pg := backend.(*store.DB)
+			pub, priv, err := store.NewPostgresOAuthIssuerKeyStore(pg).LoadOrGenerate(context.Background(), "gemot-oauth")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error loading OAuth issuer keypair: %v\n", err)
+				os.Exit(1)
+			}
+			issuerPub, issuerPriv = ed25519.PublicKey(pub), ed25519.PrivateKey(priv)
+		}
+		minter = principal.NewMinter("gemot-oauth", issuerPriv)
+		selfIssuer = &principal.RemoteIssuer{Name: "gemot-oauth", Namespaces: []string{"oauthkey:"}, PublicKey: issuerPub}
+	}
+
+	// External delegation issuers (GEMOT_TRUSTED_ISSUERS) plus, when OAuth
+	// consent minting is enabled above, gemot's own self-issuer. Trust in a
+	// self-issuer is wired unconditionally alongside minting, never
+	// operator-configurable — a server that can mint but isn't configured to
+	// trust what it mints would sign credentials nothing can verify. A
+	// malformed GEMOT_TRUSTED_ISSUERS value or an unsafe issuer set aborts
+	// startup — federation must never fail open into "silently off".
 	if issuers, err := principal.ParseIssuers(cfg.TrustedIssuers); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing GEMOT_TRUSTED_ISSUERS: %v\n", err)
 		os.Exit(1)
-	} else if len(issuers) > 0 {
+	} else if selfIssuer != nil || len(issuers) > 0 {
+		if selfIssuer != nil {
+			issuers = append([]principal.RemoteIssuer{*selfIssuer}, issuers...)
+		}
 		opts := []principal.Option{
 			principal.WithJWKSAllowPrivate(cfg.JWKSAllowPrivate),
 		}
@@ -225,7 +266,7 @@ func cmdServe(httpMode bool, addr string) {
 		}
 		rv, err := principal.NewRoutingVerifier(svc.PrincipalVerifier(), issuers, opts...)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error configuring GEMOT_TRUSTED_ISSUERS: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error configuring delegation issuer trust: %v\n", err)
 			os.Exit(1)
 		}
 		svc.SetPrincipalVerifier(rv)
@@ -297,7 +338,7 @@ func cmdServe(httpMode bool, addr string) {
 	}()
 
 	if httpMode {
-		if err := mcp.RunHTTP(ctx, svc, backend, rawDB, addr); err != nil {
+		if err := mcp.RunHTTP(ctx, svc, backend, rawDB, addr, minter); err != nil {
 			fmt.Fprintf(os.Stderr, "HTTP server error: %v\n", err)
 			os.Exit(1)
 		}

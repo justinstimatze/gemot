@@ -553,12 +553,44 @@ CREATE TABLE IF NOT EXISTS atxp_client_credentials (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- OAuth2 authorization_code + PKCE consent flow (v11). gemot's own signing
+-- key for the "gemot-oauth" principal.RemoteIssuer (see internal/principal/
+-- mint.go) and the short-lived, single-use authorization codes minted by
+-- /oauth/authorize. Treat oauth_issuer_keys like any other secret store —
+-- access to private_key is equivalent to gemot's authority to mint a
+-- delegation credential for anyone who ever proves control of a gmt_ key.
+CREATE TABLE IF NOT EXISTS oauth_issuer_keys (
+    issuer_name TEXT PRIMARY KEY,
+    private_key BYTEA NOT NULL,
+    public_key BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- No FK to deliberations: a code isn't scoped to one. "consumed_at IS NULL
+-- AND expires_at > NOW()" is the atomic one-time-claim guard (see
+-- ConsumeOAuthAuthorizationCode) — the same shape as join_codes' use_count
+-- guard, just single-use instead of multi-use. Deliberately NOT named
+-- "delegations" — that table already exists for an unrelated vote-delegation
+-- feature above.
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+    code                  TEXT PRIMARY KEY,
+    agent_id              TEXT NOT NULL,
+    principal             TEXT NOT NULL,
+    scope                 TEXT NOT NULL DEFAULT '',
+    code_challenge        TEXT NOT NULL,
+    code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+    expires_at            TIMESTAMPTZ NOT NULL,
+    consumed_at           TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_authorization_codes_expires ON oauth_authorization_codes(expires_at);
+
 -- Schema versioning
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
-INSERT INTO schema_version (version) VALUES (10) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (11) ON CONFLICT DO NOTHING;
 
 -- x402 buy_credits idempotency: one credit per EIP-3009 authorization nonce.
 -- The nonce is consumed on-chain at settlement, so it is the canonical replay

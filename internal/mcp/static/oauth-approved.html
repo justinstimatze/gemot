@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gemot — Approved</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'Inter',system-ui,sans-serif;background:#fafaf8;color:#0f172a;line-height:1.6;}
+.container{max-width:520px;margin:0 auto;padding:3rem 1.5rem;}
+h1{font-family:'IM Fell English SC',serif;font-size:2rem;margin-bottom:0.25rem;color:#059669;}
+.subtitle{color:#64748b;font-size:0.9rem;margin-bottom:2rem;}
+code{font-family:'SF Mono',Monaco,monospace;font-size:0.85em;background:#f1f5f9;padding:0.15rem 0.4rem;border-radius:4px;}
+.code-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:12px;padding:1.5rem;margin:1.5rem 0;text-align:center;}
+.code-box .code{font-family:'SF Mono',Monaco,monospace;font-size:1.15rem;font-weight:700;color:#4f46e5;letter-spacing:0.02em;word-break:break-all;}
+.copy-btn{background:#4f46e5;color:#fff;border:none;padding:0.4rem 0.8rem;border-radius:6px;font-size:0.8rem;font-weight:600;cursor:pointer;margin-top:0.75rem;}
+.meta{color:#94a3b8;font-size:0.8rem;margin-top:0.5rem;}
+.footer{margin-top:2rem;color:#94a3b8;font-size:0.78rem;}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Approved</h1>
+<p class="subtitle">You authorized <strong>{{.ClientID}}</strong> to act on your behalf.</p>
+
+<div class="code-box">
+  <div id="auth-code" class="code">{{.Code}}</div>
+  <button class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('auth-code').textContent).then(()=>this.textContent='Copied!')">Copy code for your agent</button>
+  <div class="meta">Expires in {{.CodeTTLDescription}} — give it to the agent now.</div>
+</div>
+
+<p class="footer">The agent exchanges this code for its delegation credential automatically — you don't need to do anything else.</p>
+</div>
+</body>
+</html>

@@ -1,11 +1,18 @@
 package mcp
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
+	"github.com/justinstimatze/gemot/internal/principal"
 )
 
 const notFoundHTML = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Gemot — 404 Not Found</title>
@@ -92,36 +99,47 @@ func staticFileHandler(file, contentType string) http.HandlerFunc {
 }
 
 // oauthAuthServerMetadataHandler publishes RFC 8414 authorization server
-// metadata advertising ONLY the client_credentials grant — gemot has no
-// user-account/consent system to back an authorization_code flow, so it
-// doesn't advertise one (same honesty-over-checkbox stance as
-// ProtectedResourceHandler's deliberate omission of authorization_servers).
-// The client_secret in the token exchange is an existing gmt_ API key: this
-// is a standards-compliant PRESENTATION of the existing bearer-key model,
-// not a new credential-issuance path. See postOAuthToken.
-func oauthAuthServerMetadataHandler(baseURL string) http.HandlerFunc {
+// metadata. client_credentials (a standards-compliant PRESENTATION of the
+// existing gmt_ bearer-key model, not a new credential-issuance path — see
+// oauthClientCredentialsGrant) is always advertised.
+//
+// authorization_code + PKCE is advertised only when minter is non-nil (the
+// GEMOT_OAUTH_CONSENT-gated hosted consent flow is enabled) — this is NOT a
+// general user-account system: it's a narrow flow where a human proves
+// control of their own gmt_ API key and approves a specific agent. minter
+// being the single gate here means metadata can never advertise a grant
+// type the server doesn't actually serve, and vice versa — see main.go for
+// why minting and trusting-what-was-minted are wired together the same way.
+func oauthAuthServerMetadataHandler(baseURL string, minter *principal.Minter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		grantTypes := []string{"client_credentials"}
+		responseTypes := []string{}
+		meta := map[string]any{
 			"issuer":                                baseURL,
 			"token_endpoint":                        baseURL + "/oauth/token",
-			"grant_types_supported":                 []string{"client_credentials"},
 			"token_endpoint_auth_methods_supported": []string{"client_secret_post"},
 			"scopes_supported":                      []string{"deliberate"},
-			"response_types_supported":              []string{},
 			"service_documentation":                 baseURL + "/docs",
-		})
+		}
+		if minter != nil {
+			grantTypes = append(grantTypes, "authorization_code")
+			responseTypes = append(responseTypes, "code")
+			meta["authorization_endpoint"] = baseURL + "/oauth/authorize"
+			meta["code_challenge_methods_supported"] = []string{"S256"}
+		}
+		meta["grant_types_supported"] = grantTypes
+		meta["response_types_supported"] = responseTypes
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(meta)
 	}
 }
 
-// oauthTokenHandler implements RFC 6749 §4.4 (client_credentials grant)
-// as a thin facade over gemot's existing API keys: client_secret must be an
-// existing, active gmt_ key (checked the same way /export and /balance
-// check Bearer tokens), and the returned access_token is that SAME key. No
-// new credential is minted — gemot's only key-minting path stays Stripe
-// checkout (anti-abuse: no agent-facing key mint), matching what
-// oauthAuthServerMetadataHandler advertises.
-func oauthTokenHandler(creditStore *payments.CreditStore, limiter *payments.RateLimiter) http.HandlerFunc {
+// oauthTokenHandler dispatches the RFC 6749 token endpoint by grant_type:
+// client_credentials (always available, see oauthClientCredentialsGrant) or
+// authorization_code (only when minter is configured, see
+// oauthAuthorizationCodeGrant). Shared rate limiting and form parsing happen
+// once here regardless of which grant is requested.
+func oauthTokenHandler(svc *deliberation.Service, creditStore *payments.CreditStore, minter *principal.Minter, limiter *payments.RateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := ClientIP(r)
 		allowed := limiter.Allow("oauth:" + ip)
@@ -134,32 +152,14 @@ func oauthTokenHandler(creditStore *payments.CreditStore, limiter *payments.Rate
 			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "could not parse application/x-www-form-urlencoded body")
 			return
 		}
-		if r.FormValue("grant_type") != "client_credentials" {
-			writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "only grant_type=client_credentials is supported")
-			return
+		switch r.FormValue("grant_type") {
+		case "client_credentials":
+			oauthClientCredentialsGrant(w, r, creditStore)
+		case "authorization_code":
+			oauthAuthorizationCodeGrant(w, r, svc, minter)
+		default:
+			writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "supported grant types: client_credentials, authorization_code")
 		}
-		secret := r.FormValue("client_secret")
-		if secret == "" {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_request", "client_secret is required (your existing gmt_ API key)")
-			return
-		}
-		if creditStore == nil {
-			writeOAuthError(w, http.StatusBadRequest, "invalid_client", "OAuth token issuance is unavailable in demo mode")
-			return
-		}
-		active, err := creditStore.KeyActive(secret)
-		if err != nil || !active {
-			writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client_secret is not a valid, active API key")
-			return
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Pragma", "no-cache")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"access_token": secret,
-			"token_type":   "Bearer",
-			"scope":        "deliberate",
-		})
 	}
 }
 
@@ -190,4 +190,108 @@ func methodNotAllowedJSON(allowed ...string) http.HandlerFunc {
 		w.Header().Set("Allow", allow)
 		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", "use "+allow)
 	}
+}
+
+// oauthAuthorizationCodeGrant implements RFC 6749 §4.1.3 for the hosted
+// consent flow: exchanges a code minted by /oauth/authorize (after PKCE and
+// client_id verification) for a freshly signed principal.Credential.
+//
+// minter == nil (feature disabled) rejects with unsupported_grant_type,
+// matching what oauthAuthServerMetadataHandler advertises for the same
+// condition — a deployment that doesn't advertise this grant never serves
+// it either.
+func oauthAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request, svc *deliberation.Service, minter *principal.Minter) {
+	if minter == nil {
+		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "authorization_code is not enabled on this deployment")
+		return
+	}
+	code := r.FormValue("code")
+	verifier := r.FormValue("code_verifier")
+	clientID := r.FormValue("client_id")
+	if code == "" || verifier == "" || clientID == "" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "code, code_verifier, and client_id are required")
+		return
+	}
+
+	// Atomically consumes the code exactly once, and only for the matching
+	// client_id (RFC 6749 client-confusion guard, folded into the same
+	// atomic UPDATE — see AccessStore.ConsumeOAuthAuthorizationCode).
+	// "unknown", "expired", "already used", and "wrong client" all collapse
+	// into this one invalid_grant — distinguishing them would be an oracle.
+	oc, err := svc.ConsumeOAuthAuthorizationCode(r.Context(), code, clientID)
+	if err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "invalid, expired, or already-used authorization code")
+		return
+	}
+
+	// PKCE S256: base64url(sha256(verifier)) must match the challenge stored
+	// at /oauth/authorize time. Constant-time compare — same pattern http.go
+	// already uses for bearer-token comparisons.
+	sum := sha256.Sum256([]byte(verifier))
+	computed := base64.RawURLEncoding.EncodeToString(sum[:])
+	if subtle.ConstantTimeCompare([]byte(computed), []byte(oc.CodeChallenge)) != 1 {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "code_verifier does not match code_challenge")
+		return
+	}
+
+	// Re-resolve the agent's CURRENT key rather than trusting a snapshot from
+	// authorize time — tolerates key rotation in the narrow window between
+	// the two calls, and never accepts a client-submitted pubkey here.
+	agentKey, _, err := svc.GetActiveAgentKey(r.Context(), clientID)
+	if err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "client_id no longer has a registered key")
+		return
+	}
+
+	cred, err := minter.Mint(oc.Principal, clientID, agentKey, oc.Scope, oauthCredentialTTL, time.Now())
+	if err != nil {
+		// Not a client mistake — RFC 6749 §5.2 has no "server_error" code for
+		// the token endpoint (that's an authorization-endpoint-only code), so
+		// this is a plain internal error, not an OAuth-shaped one.
+		slog.Error("oauth authorization_code: mint failed", "client_id", clientID, "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal_error", "failed to mint delegation credential", "")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"token_type":           "delegation_credential",
+		"principal_credential": cred,
+		"principal":            cred.Principal,
+		"expires_in":           int(oauthCredentialTTL.Seconds()),
+	})
+}
+
+// oauthClientCredentialsGrant implements RFC 6749 §4.4 as a thin facade
+// over gemot's existing API keys: client_secret must be an existing, active
+// gmt_ key (checked the same way /export and /balance check Bearer tokens),
+// and the returned access_token is that SAME key. No new credential is
+// minted — gemot's only key-minting path stays Stripe checkout (anti-abuse:
+// no agent-facing key mint), matching what oauthAuthServerMetadataHandler
+// advertises.
+func oauthClientCredentialsGrant(w http.ResponseWriter, r *http.Request, creditStore *payments.CreditStore) {
+	secret := r.FormValue("client_secret")
+	if secret == "" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", "client_secret is required (your existing gmt_ API key)")
+		return
+	}
+	if creditStore == nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_client", "OAuth token issuance is unavailable in demo mode")
+		return
+	}
+	active, err := creditStore.KeyActive(secret)
+	if err != nil || !active {
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client_secret is not a valid, active API key")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"access_token": secret,
+		"token_type":   "Bearer",
+		"scope":        "deliberate",
+	})
 }

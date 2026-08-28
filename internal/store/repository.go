@@ -1234,3 +1234,32 @@ func (s *DB) GetCommitmentAccesses(ctx context.Context, commitmentID string) ([]
 	}
 	return result, rows.Err()
 }
+
+// ConsumeOAuthAuthorizationCode atomically claims code for one-time use:
+// the UPDATE only matches a row that is unconsumed and unexpired, so a
+// concurrent or replayed redemption of the same code affects zero rows.
+// "unknown code", "expired", and "already consumed" are deliberately
+// collapsed into one error here — distinguishing them to the caller would
+// be an oracle a token-endpoint error response must not offer.
+func (s *DB) ConsumeOAuthAuthorizationCode(ctx context.Context, code, clientID string) (*deliberation.OAuthAuthorizationCode, error) {
+	oc := &deliberation.OAuthAuthorizationCode{}
+	err := s.db.QueryRowContext(ctx,
+		`UPDATE oauth_authorization_codes
+		 SET consumed_at = NOW()
+		 WHERE code = $1 AND agent_id = $2 AND consumed_at IS NULL AND expires_at > NOW()
+		 RETURNING code, agent_id, principal, scope, code_challenge, code_challenge_method, expires_at, created_at`,
+		code, clientID,
+	).Scan(&oc.Code, &oc.AgentID, &oc.Principal, &oc.Scope, &oc.CodeChallenge, &oc.CodeChallengeMethod, &oc.ExpiresAt, &oc.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("invalid, expired, or already-used authorization code")
+	}
+	return oc, nil
+}
+
+func (s *DB) CreateOAuthAuthorizationCode(ctx context.Context, oc *deliberation.OAuthAuthorizationCode) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO oauth_authorization_codes (code, agent_id, principal, scope, code_challenge, code_challenge_method, expires_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		oc.Code, oc.AgentID, oc.Principal, oc.Scope, oc.CodeChallenge, oc.CodeChallengeMethod, oc.ExpiresAt, oc.CreatedAt,
+	)
+	return err
+}

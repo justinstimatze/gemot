@@ -21,3 +21,5 @@ type Vote = types.Vote
 type CommitmentAccess = types.CommitmentAccess
 
 type CommitmentSignals = types.CommitmentSignals
+
+type OAuthAuthorizationCode = types.OAuthAuthorizationCode

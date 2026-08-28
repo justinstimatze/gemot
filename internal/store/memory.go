@@ -100,10 +100,11 @@ type MemoryStore struct {
 	analyses         map[string]map[int]*deliberation.AnalysisResult // delibID -> round -> result
 
 	// Access control
-	joinCodes   map[string]*deliberation.JoinCode // code -> jc
-	acl         map[string]map[string]bool        // delibID -> keyID -> true
-	invitations map[string]*deliberation.Invitation
-	shareTokens map[string]shareToken // token -> {groupID, expiresAt}
+	joinCodes      map[string]*deliberation.JoinCode // code -> jc
+	acl            map[string]map[string]bool        // delibID -> keyID -> true
+	invitations    map[string]*deliberation.Invitation
+	shareTokens    map[string]shareToken                           // token -> {groupID, expiresAt}
+	oauthAuthCodes map[string]*deliberation.OAuthAuthorizationCode // code -> oc
 
 	// Moderation
 	disputes         map[string]*deliberation.Dispute
@@ -192,6 +193,7 @@ func NewMemoryStore() *MemoryStore {
 		acl:              map[string]map[string]bool{},
 		invitations:      map[string]*deliberation.Invitation{},
 		shareTokens:      map[string]shareToken{},
+		oauthAuthCodes:   map[string]*deliberation.OAuthAuthorizationCode{},
 		disputes:         map[string]*deliberation.Dispute{},
 		disputeProcessed: map[string]time.Time{},
 		contextAccess:    map[string]bool{},
@@ -1460,4 +1462,32 @@ func (m *MemoryStore) GetCommitmentAccesses(_ context.Context, commitmentID stri
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
+}
+
+// ConsumeOAuthAuthorizationCode mirrors the Postgres atomic-UPDATE
+// semantics under the store mutex: unknown code, wrong agent_id, already
+// consumed, and expired all collapse into the same generic error, since
+// distinguishing them to the caller would be an oracle a token-endpoint
+// error response must not offer.
+func (m *MemoryStore) ConsumeOAuthAuthorizationCode(_ context.Context, code, clientID string) (*deliberation.OAuthAuthorizationCode, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	oc, ok := m.oauthAuthCodes[code]
+	if !ok || oc.AgentID != clientID || !oc.ConsumedAt.IsZero() || time.Now().UTC().After(oc.ExpiresAt) {
+		return nil, fmt.Errorf("invalid, expired, or already-used authorization code")
+	}
+	oc.ConsumedAt = time.Now().UTC()
+	clone := *oc
+	return &clone, nil
+}
+
+func (m *MemoryStore) CreateOAuthAuthorizationCode(_ context.Context, oc *deliberation.OAuthAuthorizationCode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if oc.CreatedAt.IsZero() {
+		oc.CreatedAt = time.Now().UTC()
+	}
+	clone := *oc
+	m.oauthAuthCodes[oc.Code] = &clone
+	return nil
 }

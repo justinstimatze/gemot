@@ -20,6 +20,7 @@ import (
 	"github.com/justinstimatze/gemot/internal/chitgate"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 	"github.com/justinstimatze/gemot/internal/payments"
+	"github.com/justinstimatze/gemot/internal/principal"
 	"github.com/justinstimatze/gemot/internal/store"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -43,7 +44,7 @@ type tryCodeData struct {
 // for components that genuinely need raw SQL access (credit store, Postgres
 // nonce cache, /metrics counters); pass nil in demo mode to skip those
 // components. backend itself is always non-nil.
-func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backend, db *sql.DB, addr string) error {
+func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backend, db *sql.DB, addr string, minter *principal.Minter) error {
 	// Fail-fast template + static-asset checks. If an embed is missing
 	// or a template has a syntax error, surface here at startup rather
 	// than on the first /try/<code> request in production.
@@ -54,6 +55,14 @@ func RunHTTP(ctx context.Context, svc *deliberation.Service, backend store.Backe
 	tryFormBody, err := staticFS.ReadFile("static/try-form.html")
 	if err != nil {
 		return fmt.Errorf("reading try-form.html: %w", err)
+	}
+	oauthAuthorizeTmpl, err := template.ParseFS(staticFS, "static/oauth-authorize.html")
+	if err != nil {
+		return fmt.Errorf("parsing oauth-authorize.html template: %w", err)
+	}
+	oauthApprovedTmpl, err := template.ParseFS(staticFS, "static/oauth-approved.html")
+	if err != nil {
+		return fmt.Errorf("parsing oauth-approved.html template: %w", err)
 	}
 
 	apiSecret := os.Getenv("GEMOT_API_SECRET")
@@ -897,13 +906,24 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 	mux.HandleFunc("/docs.md", staticFileHandler("static/docs.md", "text/markdown; charset=utf-8"))
 	mux.HandleFunc("/.well-known/mcp.json", staticFileHandler("static/mcp-manifest.json", "application/json; charset=utf-8"))
 
-	// OAuth 2.0 client_credentials facade over existing API keys (RFC 8414 +
-	// RFC 6749 §4.4). See oauthAuthServerMetadataHandler and oauthTokenHandler
-	// in wellknown.go for what this does and does not claim to support.
-	mux.HandleFunc("/.well-known/oauth-authorization-server", oauthAuthServerMetadataHandler(baseURL))
+	// OAuth 2.0 facade: client_credentials is always on (RFC 8414 + RFC 6749
+	// §4.4) as a thin presentation of existing API keys. authorization_code +
+	// PKCE (RFC 6749 §4.1) is a narrow, opt-in hosted consent flow, live only
+	// when minter is non-nil (GEMOT_OAUTH_CONSENT) — see
+	// oauthAuthServerMetadataHandler and oauthTokenHandler in wellknown.go for
+	// what each does and does not claim to support.
+	mux.HandleFunc("/.well-known/oauth-authorization-server", oauthAuthServerMetadataHandler(baseURL, minter))
 	oauthLimiter := payments.NewRateLimiter(ctx, 30, time.Minute)
-	mux.HandleFunc("POST /oauth/token", oauthTokenHandler(creditStore, oauthLimiter))
+	mux.HandleFunc("POST /oauth/token", oauthTokenHandler(svc, creditStore, minter, oauthLimiter))
 	mux.Handle("/oauth/token", methodNotAllowedJSON("POST"))
+
+	if minter != nil {
+		oauthAuthorizeGetLimiter := payments.NewRateLimiter(ctx, 20, time.Minute)
+		oauthAuthorizePostLimiter := payments.NewRateLimiter(ctx, 10, time.Minute)
+		mux.HandleFunc("GET /oauth/authorize", oauthAuthorizeGetHandler(svc, oauthAuthorizeTmpl, oauthAuthorizeGetLimiter))
+		mux.HandleFunc("POST /oauth/authorize", oauthAuthorizePostHandler(svc, creditStore, oauthApprovedTmpl, oauthAuthorizeTmpl, oauthAuthorizePostLimiter))
+		mux.Handle("/oauth/authorize", methodNotAllowedJSON("GET", "POST"))
+	}
 
 	// Landing page
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

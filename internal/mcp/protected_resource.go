@@ -12,16 +12,21 @@ import (
 // ProtectedResourceMetadata returns RFC 9728 protected-resource metadata for
 // this server.
 //
-// Deliberate honesty: gemot is a protected resource but NOT an OAuth
+// Deliberate honesty: gemot is a protected resource but NOT a general OAuth
 // deployment. It authenticates callers with opaque bearer API keys and meters
-// paid actions with per-call MPP challenges — there is no OAuth authorization
-// server to delegate to. RFC 9728 makes `authorization_servers` optional, so we
-// OMIT it rather than advertise a handshake gemot doesn't implement. A
-// spec-compliant client reading this document therefore won't be led into a
-// broken DCR / authorization-code flow; it learns how gemot's real auth works
-// and where the docs are.
+// paid actions with per-call MPP challenges. RFC 9728's `authorization_servers`
+// is about discovering an EXTERNAL authorization server to delegate to — gemot
+// still isn't that, so it is OMITTED rather than advertised as a handshake
+// gemot doesn't implement that way. A spec-compliant client reading this
+// document therefore won't be led into a broken DCR / external-AS flow; it
+// learns how gemot's real auth works and where the docs are.
 //
-// See COMPOSING.md for the full composition contract.
+// The one narrow exception is the optional, self-contained hosted consent
+// flow at /oauth/authorize + /oauth/token (grant_type=authorization_code,
+// GEMOT_OAUTH_CONSENT) — gemot acting as its OWN authorization server for a
+// human to approve a specific agent, not a general identity system. See
+// oauthAuthServerMetadataHandler and COMPOSING.md for what that does and does
+// not claim to support.
 func ProtectedResourceMetadata(baseURL string) map[string]any {
 	baseURL = strings.TrimRight(baseURL, "/")
 	return map[string]any{
@@ -53,7 +58,7 @@ func ProtectedResourceMetadata(baseURL string) map[string]any {
 			"per_action_payment": "Paid actions issue Machine Payments Protocol (MPP) challenges bound to (tool, action, model, deliberation_id). See " +
 				baseURL + "/pricing and mpp.dev.",
 			"action_signing":       "Optional per-action ed25519 signatures (positions/votes) plus an envelope proof-of-possession layer (nonce + timestamp), gated by GEMOT_ENVELOPE_MODE. See COMPOSING.md.",
-			"principal_delegation": "on_behalf_of claims may be backed by a signed, cnf-bound delegation Credential (RFC 7800). Credentials are self-signed by the principal, or — where the deployment trusts an external issuer — signed by that issuer. See COMPOSING.md and docs/remote-trust-root.md.",
+			"principal_delegation": "on_behalf_of claims may be backed by a signed, cnf-bound delegation Credential (RFC 7800). Credentials are self-signed by the principal, signed by that issuer where the deployment trusts an external issuer, or — where GEMOT_OAUTH_CONSENT is enabled — minted by gemot itself after a human approves an agent via the hosted /oauth/authorize consent page. See COMPOSING.md and docs/remote-trust-root.md.",
 			"composition_doc":      baseURL + "/docs (COMPOSING.md)",
 		},
 	}
