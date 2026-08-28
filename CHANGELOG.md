@@ -4,6 +4,18 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### Whole-repo review fixes: SSE shutdown panic, admin-token URL leak, sandbox quota gaps — 2026-08-28
+
+A full-repository `/code-review` pass (broader than the OAuth-flow diff review above) surfaced 10 findings; 5 are fixed here, 5 deliberately deferred for one-at-a-time review later:
+
+- **EventBus double-close panic on shutdown**: `Shutdown()` and a subscriber's own deferred unsubscribe (the shape every SSE handler uses) could both try to close the same channel — a graceful deploy racing a live `/events` connection panicked with "close of closed channel." Both paths now share one close-if-still-present check; the SSE read loop also no longer busy-spins on a closed channel.
+- **Admin token hygiene**: bearer-token verification was reimplemented 4 times (`/metrics`, `/export`, `/events`, A2A); now shares two helpers. `/events` uniquely accepted the admin secret via `?token=` (leaks into access logs/Referer) — it now only accepts the admin secret via the `Authorization` header; a plain API key still works via `?token=` for browser `EventSource` clients that can't set headers.
+- **Sandbox quota never refunded on failure**: a free daily call was permanently spent even when the paid action failed downstream, unlike a paying caller whose credits ARE refunded on the same path. Now refunded symmetrically.
+- **`reframe` bypassed all payment/sandbox gating**: the one analyze action that let an unauthenticated caller trigger a real LLM call for free. Now gated identically to every other paid action.
+- **`propose_compromise` options reached the LLM prompt unsanitized**: free-text options (never sanitized like position content) now go through `sanitize.Position` before the prompt is built.
+
+Deferred (memory'd for one-by-one consideration, not fixed this pass): an unescaped `|` delimiter in the tamper-evident log, a purge job that silently no-ops on an FK violation, ACL-granted deliberations invisible in list queries, an MPP scope bound to a hardcoded model string instead of `GEMOT_MODEL`, and `MemoryStore`'s delegation table not upserting like Postgres does.
+
 ### Hosted OAuth2 authorization_code + PKCE consent flow — 2026-08-28
 
 Adds a hosted way for a human to approve a specific agent without hand-rolling a client-side signing tool: visit `/oauth/authorize`, present an existing `gmt_` API key, approve — the agent then exchanges the resulting code at `/oauth/token` (`grant_type=authorization_code`, PKCE S256) for a signed `principal.Credential`, gemot's existing delegation format. Gated by `GEMOT_OAUTH_CONSENT` (default off).
