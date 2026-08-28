@@ -120,3 +120,57 @@ type fakeReframer struct{}
 func (fakeReframer) Reframe(_ context.Context, position, _, _ string) (string, error) {
 	return "reframed: " + position, nil
 }
+
+// TestHandleAnalyzeToolReframeValidatesBeforeChargingSandboxQuota is the
+// regression test for the code-review finding that reframe's newly-added
+// payment gate ran BEFORE validating deliberation_id/position_id, unlike
+// propose_compromise/follow_up which explicitly validate first ("never
+// consume a credential for a service we can't render"). Exhausts the
+// sandbox quota with one legitimate call, then confirms a call with a
+// missing deliberation_id fails on validation -- not on the (already
+// exhausted) sandbox gate, which would fire first if the ordering
+// regressed.
+func TestHandleAnalyzeToolReframeValidatesBeforeChargingSandboxQuota(t *testing.T) {
+	backend := store.NewMemoryStore()
+	svc := deliberation.NewService(backend, nil)
+	svc.SetReframer(fakeReframer{})
+	s := &server{svc: svc, sandboxQuota: payments.NewSandboxQuota(1, time.Hour)}
+	ctx := context.WithValue(context.Background(), payments.ContextKeyClientIP{}, "203.0.113.20")
+
+	d, err := svc.CreateDeliberation(ctx, "reframe order test", "")
+	if err != nil {
+		t.Fatalf("CreateDeliberation: %v", err)
+	}
+	pos, err := svc.SubmitPosition(ctx, d.ID, "alice", "the original position")
+	if err != nil {
+		t.Fatalf("SubmitPosition: %v", err)
+	}
+
+	// Burn the single sandbox slot with a legitimate, valid call.
+	res, _, err := s.handleAnalyzeTool(ctx, nil, analyzeToolParams{
+		Action: "reframe", DeliberationID: d.ID, PositionID: pos.ID,
+	})
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("setup call should succeed: err=%v res=%+v", err, res)
+	}
+
+	// Quota is now exhausted. A call missing deliberation_id/position_id
+	// must fail on validation, not on the sandbox gate.
+	res, _, err = s.handleAnalyzeTool(ctx, nil, analyzeToolParams{Action: "reframe"})
+	if err != nil {
+		t.Fatalf("unexpected transport-level error: %v", err)
+	}
+	if res == nil || !res.IsError || len(res.Content) == 0 {
+		t.Fatalf("expected a tool-level error result, got %+v", res)
+	}
+	tc, ok := res.Content[0].(*sdkmcp.TextContent)
+	if !ok {
+		t.Fatalf("content[0] is %T, want *TextContent", res.Content[0])
+	}
+	if strings.Contains(tc.Text, "sandbox daily quota exceeded") {
+		t.Fatalf("validation should run BEFORE the sandbox gate, got: %s", tc.Text)
+	}
+	if !strings.Contains(tc.Text, "deliberation_id and position_id are required") {
+		t.Fatalf("expected the precondition error, got: %s", tc.Text)
+	}
+}

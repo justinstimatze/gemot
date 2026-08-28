@@ -82,8 +82,8 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 				// Check bearer token
 				if bearerSecret != "" {
 					auth := r.Header.Get("Authorization")
-					token := strings.TrimPrefix(auth, "Bearer ")
-					if strings.HasPrefix(auth, "Bearer ") && subtle.ConstantTimeCompare([]byte(token), []byte(bearerSecret)) == 1 {
+					token := BearerToken(auth)
+					if strings.HasPrefix(auth, "Bearer ") && IsAdminToken(token, bearerSecret) {
 						ctx := context.WithValue(r.Context(), ContextKeyIsAdmin{}, true)
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
@@ -131,8 +131,16 @@ func Middleware(ctx context.Context, cfg Config, bearerSecret string, creditStor
 			// Check for bearer token first (API key + credits path)
 			auth := r.Header.Get("Authorization")
 			if strings.HasPrefix(auth, "Bearer ") {
-				token := strings.TrimPrefix(auth, "Bearer ")
-				// Admin secret — unlimited access
+				token := BearerToken(auth)
+				// Admin secret — unlimited access. Deliberately NOT
+				// IsAdminToken here: this branch runs when MPP payments are
+				// actually enabled (cfg.Enabled), where an empty
+				// bearerSecret must mean "no admin bypass exists," not
+				// IsAdminToken's dev-mode "empty secret grants admin to
+				// everyone" convention — that wildcard is only safe in the
+				// !cfg.Enabled (demo-mode) branch above, which is guarded
+				// by its own explicit bearerSecret == "" fallback further
+				// down.
 				if bearerSecret != "" && subtle.ConstantTimeCompare([]byte(token), []byte(bearerSecret)) == 1 {
 					ctx := context.WithValue(r.Context(), ContextKeyIsAdmin{}, true)
 					next.ServeHTTP(w, r.WithContext(ctx))

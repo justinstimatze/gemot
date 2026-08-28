@@ -161,7 +161,7 @@ func A2AAuthMiddleware(
 			token := strings.TrimPrefix(authHdr, "Bearer ")
 
 			// Admin secret — unlimited access.
-			if isAdminToken(token, apiSecret) {
+			if payments.IsAdminToken(token, apiSecret) {
 				ctx = context.WithValue(ctx, payments.ContextKeyIsAdmin{}, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return

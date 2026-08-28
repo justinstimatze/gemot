@@ -61,7 +61,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 			// browser history, and any Referer header a client sends onward
 			// -- an acceptable exposure for a scoped, revocable API key, not
 			// for the one credential that grants admin access to everything.
-			headerToken := bearerToken(r.Header.Get("Authorization"))
+			headerToken := payments.BearerToken(r.Header.Get("Authorization"))
 			queryToken := r.URL.Query().Get("token")
 			token := headerToken
 			if token == "" {
@@ -74,7 +74,7 @@ func EventsHandler(svc *deliberation.Service, creditStore *payments.CreditStore,
 				jsonError(w, http.StatusUnauthorized, "missing_credential", "authorization required (Bearer header, ?token=, or ?join_code=)", "")
 				return
 			} else {
-				isAdmin = headerToken != "" && isAdminToken(headerToken, apiSecret)
+				isAdmin = headerToken != "" && payments.IsAdminToken(headerToken, apiSecret)
 				if !isAdmin {
 					if creditStore == nil || !strings.HasPrefix(token, "gmt_") {
 						jsonError(w, http.StatusUnauthorized, "invalid_api_key", "invalid API key", "")

@@ -532,7 +532,7 @@ No API key needed — the join code is your credential.
 		mux.Handle("/metrics", methodNotAllowedJSON("GET"))
 		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			if !isAdminToken(bearerToken(r.Header.Get("Authorization")), apiSecret) {
+			if !payments.IsAdminToken(payments.BearerToken(r.Header.Get("Authorization")), apiSecret) {
 				jsonError(w, http.StatusUnauthorized, "admin_required", "admin access required", "provide the admin secret as a Bearer token")
 				return
 			}
@@ -653,10 +653,10 @@ Credits never expire. Unused credits are refundable within 30 days.</p>
 			return
 		}
 		// Extract token for access control (used later even without auth)
-		token := bearerToken(r.Header.Get("Authorization"))
+		token := payments.BearerToken(r.Header.Get("Authorization"))
 		// Auth check: skip in dev mode (no apiSecret), require valid token otherwise
 		if apiSecret != "" {
-			validAdmin := isAdminToken(token, apiSecret)
+			validAdmin := payments.IsAdminToken(token, apiSecret)
 			validKey := false
 			if !validAdmin && creditStore != nil && token != "" {
 				validKey, _ = creditStore.KeyActive(token)

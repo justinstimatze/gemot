@@ -597,6 +597,12 @@ func (s *Service) ProposeCompromise(ctx context.Context, deliberationID string) 
 	if err != nil {
 		return "", fmt.Errorf("no analysis results — run analyze first: %w", err)
 	}
+	if result == nil {
+		// MemoryStore's "no analysis yet" contract is (nil, nil), unlike
+		// Postgres's (nil, err) — both must be checked, matching
+		// ProposeCompromiseWithChoiceAndVotes and ReframePosition.
+		return "", fmt.Errorf("no analysis results — run analyze first")
+	}
 
 	// Unstructured analyzers (ChatAnalyzer) produce no cruxes but preserve the
 	// raw positions as ExtractedClaims; a compromise can still be synthesized
@@ -641,8 +647,19 @@ func (s *Service) ProposeCompromiseWithChoiceAndVotes(ctx context.Context, delib
 	// sanitize.Position. optionVotes is rekeyed through the same
 	// sanitization (summed on collision) so vote counts stay aligned with
 	// the sanitized text GenerateCompromiseWithChoice actually displays.
+	// sanitizedToOriginal recovers the original option text from whatever
+	// the generator selects (it can only choose from sanitizedOptions, so
+	// its answer needs mapping back) -- callers, notably the calibration
+	// runner, compare the selection against RAW, unsanitized ground truth
+	// (a sanitized answer would never exact-match). If two distinct
+	// options happen to sanitize to the same text (e.g. two different
+	// phone numbers both redacting to "[PHONE]"), they are genuinely
+	// indistinguishable to the generator once sanitized; the later option
+	// wins the reverse mapping, and their votes are summed since the
+	// generator only ever saw one combined choice.
 	sanitizedOptions := make([]string, len(options))
 	sanitizedVotes := make(map[string]int, len(optionVotes))
+	sanitizedToOriginal := make(map[string]string, len(options))
 	for i, opt := range options {
 		sanitized := sanitize.Position(opt)
 		for _, w := range sanitized.Warnings {
@@ -650,9 +667,18 @@ func (s *Service) ProposeCompromiseWithChoiceAndVotes(ctx context.Context, delib
 		}
 		sanitizedOptions[i] = sanitized.Text
 		sanitizedVotes[sanitized.Text] += optionVotes[opt]
+		sanitizedToOriginal[sanitized.Text] = opt
 	}
 
-	return choicer.GenerateCompromiseWithChoice(ctx, d.Topic, result, sanitizedOptions, sanitizedVotes)
+	statement, selected, err := choicer.GenerateCompromiseWithChoice(ctx, d.Topic, result, sanitizedOptions, sanitizedVotes)
+	if err != nil {
+		return "", "", err
+	}
+	originalSelected, ok := sanitizedToOriginal[selected]
+	if !ok {
+		originalSelected = selected
+	}
+	return statement, originalSelected, nil
 }
 
 // DeliberationOption configures optional fields on a deliberation.
@@ -1689,7 +1715,10 @@ func (s *Service) Analyze(ctx context.Context, deliberationID string) (*Analysis
 
 func (s *Service) GetContext(ctx context.Context, deliberationID, agentID string) (*AgentContext, error) {
 	result, err := s.store.GetLatestAnalysisResult(ctx, deliberationID)
-	if err != nil {
+	if err != nil || result == nil {
+		// result == nil, err == nil is MemoryStore's "no analysis yet"
+		// contract (unlike Postgres's (nil, err)) — treated identically to
+		// a real error here, matching every other caller of this method.
 		// Check if analysis is in progress
 		if d, dErr := s.store.GetDeliberation(ctx, deliberationID); dErr == nil && d.Status == "analyzing" {
 			return nil, fmt.Errorf("analysis is in progress (%s) — try again in a moment", d.SubStatus)

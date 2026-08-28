@@ -907,6 +907,21 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		return result, nil, nil
 
 	case "reframe":
+		// Validate preconditions BEFORE any payment consumption (credits,
+		// MPP credential, or sandbox quota) — same reasoning and ordering
+		// as the "run"/"propose_compromise" cases above: never consume a
+		// credential for a service we can't render. CoreReframe repeats
+		// these checks internally; that's cheap, idempotent, and matches
+		// how the OAuth consent flow re-validates between GET and POST.
+		if args.DeliberationID == "" || args.PositionID == "" {
+			return errResult(fmt.Errorf("deliberation_id and position_id are required"))
+		}
+		if err := s.svc.CheckAccess(ctx, args.DeliberationID, keyID); err != nil {
+			return errResult(err)
+		}
+		if args.Model != "" && !llm.AllowedModels[args.Model] {
+			return errResult(fmt.Errorf("unsupported model %q", args.Model))
+		}
 		// Same MPP/sandbox gate every other paid analyze action gets — this
 		// one used to skip straight to CoreReframe, letting an
 		// unauthenticated caller (no apiKey, no MPP credential) trigger a
@@ -932,6 +947,10 @@ func (s *server) handleAnalyzeTool(ctx context.Context, req *sdkmcp.CallToolRequ
 		if err != nil {
 			s.refundSandboxQuota(ctx, mppReceipt, apiKey)
 			return errResult(err)
+		}
+		s.audit(ctx, "analyze:reframe", args.DeliberationID, "")
+		if mppReceipt != nil {
+			slog.Info("MPP-paid reframe", "deliberation_id", args.DeliberationID, "payment_ref", mppReceipt.Reference)
 		}
 		res, _, resErr := jsonResult(result)
 		if mppReceipt != nil && res != nil {
