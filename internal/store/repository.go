@@ -101,7 +101,11 @@ func (s *DB) ListDeliberations(ctx context.Context, limit, offset int, keyID str
 	query := `SELECT ` + deliberationColumns + ` FROM deliberations WHERE status != 'deleted'`
 	var args []any
 	if keyID != "" {
-		query += ` AND (visibility != 'private' OR creator_key = $3)`
+		// A private deliberation still shows up here if the caller was
+		// granted ACL access (not just as creator) -- matches CheckAccess's
+		// own private-visibility branch exactly, so "can see it" and "shows
+		// up in lists" never disagree.
+		query += ` AND (visibility != 'private' OR creator_key = $3 OR EXISTS (SELECT 1 FROM deliberation_acl WHERE deliberation_id = deliberations.id AND key_id = $3))`
 		args = []any{limit, offset, keyID}
 	} else {
 		args = []any{limit, offset}
@@ -121,7 +125,9 @@ func (s *DB) ListByGroup(ctx context.Context, groupID string, limit, offset int,
 	query := `SELECT ` + deliberationColumns + ` FROM deliberations WHERE group_id = $1 AND status != 'deleted'`
 	var args []any
 	if keyID != "" {
-		query += ` AND (visibility != 'private' OR creator_key = $4)`
+		// See ListDeliberations: ACL-granted access must show up here too,
+		// not just creator ownership.
+		query += ` AND (visibility != 'private' OR creator_key = $4 OR EXISTS (SELECT 1 FROM deliberation_acl WHERE deliberation_id = deliberations.id AND key_id = $4))`
 		args = []any{groupID, limit, offset, keyID}
 	} else {
 		args = []any{groupID, limit, offset}
@@ -142,7 +148,9 @@ func (s *DB) ListByAgent(ctx context.Context, agentID string, limit, offset int,
 	query := `SELECT DISTINCT ` + cols + ` FROM deliberations d JOIN positions p ON d.id = p.deliberation_id WHERE p.agent_id = $1 AND d.status != 'deleted'`
 	var args []any
 	if keyID != "" {
-		query += ` AND (d.visibility != 'private' OR d.creator_key = $4)`
+		// See ListDeliberations: ACL-granted access must show up here too,
+		// not just creator ownership.
+		query += ` AND (d.visibility != 'private' OR d.creator_key = $4 OR EXISTS (SELECT 1 FROM deliberation_acl WHERE deliberation_id = d.id AND key_id = $4))`
 		args = []any{agentID, limit, offset, keyID}
 	} else {
 		args = []any{agentID, limit, offset}

@@ -15,7 +15,13 @@ A full-repository `/code-review` pass (broader than the OAuth-flow diff review a
 - **`propose_compromise` options reached the LLM prompt unsanitized**: free-text options (never sanitized like position content) now go through `sanitize.Position` before the prompt is built. A follow-up review pass caught that this broke exact-match scoring against raw ground truth (e.g. the calibration runner) and could merge two different options that sanitize to identical text — the selected option is now mapped back to its original, unsanitized text before returning.
 - **Two more `(nil, nil)`-vs-`(nil, err)` nil-dereference panics**: `ProposeCompromise` and `GetContext` had the identical `MemoryStore`-vs-Postgres contract mismatch already fixed for `ReframePosition`/`ProposeCompromiseWithChoiceAndVotes` earlier in this pass.
 
-Deferred (memory'd for one-by-one consideration, not fixed this pass): ACL-granted deliberations invisible in list queries, an MPP scope bound to a hardcoded model string instead of `GEMOT_MODEL`, and `MemoryStore`'s delegation table not upserting like Postgres does.
+Deferred (memory'd for one-by-one consideration, not fixed this pass): an MPP scope bound to a hardcoded model string instead of `GEMOT_MODEL`, and `MemoryStore`'s delegation table not upserting like Postgres does.
+
+### ACL-granted private deliberations were invisible in list queries — 2026-08-28
+
+The eighth deferred finding: `ListDeliberations`, `ListByGroup`, and `ListByAgent` filtered private deliberations by `visibility != 'private' OR creator_key = $N` only — never consulting the `deliberation_acl` table `CheckAccess` independently checks. An agent granted access via the ACL (not as the creator) could successfully `get`/`CheckAccess` a private deliberation directly, but it never appeared in any list result — a real, live disagreement between "can see it" and "shows up in lists." `MemoryStore` (the demo-mode backend) already implemented this correctly, so this was Postgres-only drift, not a design ambiguity.
+
+Fixed by adding an `EXISTS` check against `deliberation_acl` to all three queries' private-visibility filter, matching `CheckAccess`'s own branch exactly.
 
 ### Purge silently failed for deliberations with jobs or commitment access rows — 2026-08-28
 
