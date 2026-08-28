@@ -15,7 +15,13 @@ A full-repository `/code-review` pass (broader than the OAuth-flow diff review a
 - **`propose_compromise` options reached the LLM prompt unsanitized**: free-text options (never sanitized like position content) now go through `sanitize.Position` before the prompt is built. A follow-up review pass caught that this broke exact-match scoring against raw ground truth (e.g. the calibration runner) and could merge two different options that sanitize to identical text — the selected option is now mapped back to its original, unsanitized text before returning.
 - **Two more `(nil, nil)`-vs-`(nil, err)` nil-dereference panics**: `ProposeCompromise` and `GetContext` had the identical `MemoryStore`-vs-Postgres contract mismatch already fixed for `ReframePosition`/`ProposeCompromiseWithChoiceAndVotes` earlier in this pass.
 
-Deferred (memory'd for one-by-one consideration, not fixed this pass): `MemoryStore`'s delegation table not upserting like Postgres does.
+All 5 deferred findings were subsequently picked up and fixed individually — see the dated entries below.
+
+### MemoryStore delegations now upsert like Postgres does — 2026-08-28
+
+The tenth and final deferred finding: `MemoryStore.CreateDelegation` always inserted a fresh row instead of upserting by `(deliberation_id, from_agent)` like the Postgres adapter's `ON CONFLICT` does. In demo mode, an agent re-delegating without an explicit revoke left both the old and new delegation `Active`, so `GetDelegations` returned a stale delegation indefinitely — and could wrongly reject a legitimate re-delegation via the delegation-cap check counting a phantom extra row.
+
+Fixed by deleting any existing delegation for the same `(deliberation_id, from_agent)` pair before inserting the new one, matching Postgres's replace-on-conflict semantics exactly.
 
 ### MPP scope binding now follows GEMOT_MODEL, not a hardcoded literal — 2026-08-28
 

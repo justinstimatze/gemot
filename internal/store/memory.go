@@ -643,6 +643,17 @@ func (m *MemoryStore) DeleteVotesByAgent(_ context.Context, deliberationID, agen
 func (m *MemoryStore) CreateDelegation(_ context.Context, d *deliberation.Delegation) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Upsert by (deliberation_id, from_agent), matching the Postgres
+	// adapter's ON CONFLICT (deliberation_id, from_agent) DO UPDATE:
+	// re-delegating without an explicit revoke must replace the prior
+	// delegation, not leave both as separate Active rows — which would
+	// make GetDelegations return a stale delegation forever, and could
+	// wrongly reject a legitimate re-delegation via a phantom cap breach.
+	for id, existing := range m.delegations {
+		if existing.DeliberationID == d.DeliberationID && existing.FromAgent == d.FromAgent {
+			delete(m.delegations, id)
+		}
+	}
 	if d.ID == "" {
 		d.ID = newUUID()
 	}
