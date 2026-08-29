@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/justinstimatze/gemot/internal/deliberation"
 )
 

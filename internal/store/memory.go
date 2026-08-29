@@ -650,7 +650,7 @@ func (m *MemoryStore) CreateDelegation(_ context.Context, d *deliberation.Delega
 	// make GetDelegations return a stale delegation forever, and could
 	// wrongly reject a legitimate re-delegation via a phantom cap breach.
 	for id, existing := range m.delegations {
-		if existing.DeliberationID == d.DeliberationID && existing.FromAgent == d.FromAgent {
+		if delegationMatchesFromAgent(existing, d.DeliberationID, d.FromAgent) {
 			delete(m.delegations, id)
 		}
 	}
@@ -670,7 +670,7 @@ func (m *MemoryStore) RevokeDelegation(_ context.Context, deliberationID, fromAg
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, d := range m.delegations {
-		if d.DeliberationID == deliberationID && d.FromAgent == fromAgent {
+		if delegationMatchesFromAgent(d, deliberationID, fromAgent) {
 			d.Active = false
 		}
 	}
@@ -694,7 +694,7 @@ func (m *MemoryStore) DeleteDelegationsByAgent(_ context.Context, deliberationID
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for id, d := range m.delegations {
-		if d.DeliberationID == deliberationID && d.FromAgent == agentID {
+		if delegationMatchesFromAgent(d, deliberationID, agentID) {
 			delete(m.delegations, id)
 		}
 	}
@@ -1502,4 +1502,15 @@ func (m *MemoryStore) CreateOAuthAuthorizationCode(_ context.Context, oc *delibe
 	clone := *oc
 	m.oauthAuthCodes[oc.Code] = &clone
 	return nil
+}
+
+// delegationMatchesFromAgent reports whether d is the delegation FROM
+// fromAgent in deliberationID -- the (deliberation_id, from_agent) pair
+// Postgres's ON CONFLICT constraint treats as a delegation's unique key.
+// Shared by CreateDelegation's upsert, RevokeDelegation, and
+// DeleteDelegationsByAgent so all three agree on what "the same
+// delegation" means; a future change to delegation uniqueness only needs
+// to land here.
+func delegationMatchesFromAgent(d *deliberation.Delegation, deliberationID, fromAgent string) bool {
+	return d.DeliberationID == deliberationID && d.FromAgent == fromAgent
 }
