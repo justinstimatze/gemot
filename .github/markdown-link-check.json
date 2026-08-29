@@ -8,7 +8,7 @@
   "replacementPatterns": [
     {
       "pattern": "^/",
-      "replacement": "{{BASEURL}}/"
+      "replacement": "https://gemot.dev/"
     }
   ],
   "httpHeaders": [
