@@ -1,0 +1,21 @@
+# Confirmed false positives (2026-08-31 scan, run 33378331484). Fingerprint
+# format: <commit>:<file>:<ruleID>:<startLine>. Each is either literal
+# placeholder text in docs ("YOUR_API_KEY"/"KEY"), or a `token` Go variable
+# in test code holding a JWT minted fresh per test run — never a static
+# committed secret. Source lines checked directly against these findings
+# before silencing; a new leak with a different fingerprint still fires.
+
+# docs.md:159 — curl example, "Authorization: Bearer YOUR_API_KEY"
+e8e63ab4eb19d819f1e62e332925d6047b458962:internal/mcp/static/docs.md:curl-auth-header:159
+
+# a2a_signature_policy_test.go — `token` var passed into a2aCall(), not a literal secret
+81b45201a504a605c0685fc05f0b0f01cfe5c32a:tests/a2a_signature_policy_test.go:generic-api-key:25
+81b45201a504a605c0685fc05f0b0f01cfe5c32a:tests/a2a_signature_policy_test.go:generic-api-key:79
+81b45201a504a605c0685fc05f0b0f01cfe5c32a:tests/a2a_signature_policy_test.go:generic-api-key:113
+
+# a2a_principal_test.go — same pattern, `token` var
+26849017e6882f13e189ff84ee321f2b9fe2aaaa:tests/a2a_principal_test.go:generic-api-key:100
+
+# docs.html — mirrors docs.md's placeholder examples
+f15381b2320b4e1cbd688b373ff1e9d5b672f6dc:internal/mcp/static/docs.html:generic-api-key:239
+f15381b2320b4e1cbd688b373ff1e9d5b672f6dc:internal/mcp/static/docs.html:curl-auth-header:230
