@@ -51,6 +51,8 @@ func TestHardDeleteDeliberationRemovesCommitmentAccessAndJobs(t *testing.T) {
 
 	var count int
 	for _, table := range []string{"deliberations", "commitments", "commitment_access", "jobs"} {
+		// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query
+		// table is drawn from the fixed literal above, not external input; id is bound via $1 below.
 		query := "SELECT COUNT(*) FROM " + table + " WHERE "
 		if table == "commitment_access" {
 			query += "commitment_id = $1"
