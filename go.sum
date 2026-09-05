@@ -1,6 +1,6 @@
 github.com/ajstarks/svgo v0.0.0-20200320125537-f189e35d30ca/go.mod h1:K08gAheRH3/J6wwsYMMT4xOr94bZjxIelGM0+d/wbFw=
-github.com/anthropics/anthropic-sdk-go v1.66.0 h1:/CKwgscn0Pe1q4U8aFInSOt/v06JeMc9Aq4vIlctCFw=
-github.com/anthropics/anthropic-sdk-go v1.66.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
+github.com/anthropics/anthropic-sdk-go v1.69.0 h1:TC08TDog21aHW/pAj4wO0Xi7nMXt0n5Rybb8etkhL0M=
+github.com/anthropics/anthropic-sdk-go v1.69.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
 github.com/bahlo/generic-list-go v0.2.0/go.mod h1:2KvAjgMlE5NNynlg/5iLrrCCZ2+5xWbdbCW3pNTGyYg=
 github.com/bits-and-blooms/bitset v1.24.6 h1:qcrftZUVBIwfs+m+nhoCBAPT+ZPZZjti8SbHbDQQkZ4=
