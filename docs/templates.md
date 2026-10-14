@@ -60,6 +60,22 @@ Structured review by a small panel. Reviewers submit independent assessments, th
 - **Max participants**: 10
 - **Consensus threshold**: 75%
 
+### debate
+
+Adversarial debate scaffold: advocates argue opposing sides of a binary question before an impartial jury, with a moderator-role invitee acting as referee. Modeled on Antikythera Agentworld's referee/debate/jury structure (Bratton & Poliks, 2026) — see [Agentworld's referee/debate/jury scaffold](research-lineage.md#agentworlds-refereedebatejury-scaffold).
+
+- **Type**: reasoning
+- **Max participants**: 14
+- **Consensus threshold**: 51%
+
+Built entirely from existing primitives, not a new role system:
+
+- **Advocates**: `participate action:submit_position` with `group: "for"` or `group: "against"` marks a position as advocacy for that side.
+- **Referee**: `coordinate action:invite` with `role: "moderator"` — judged on fairness calls, not on the merits.
+- **Jury**: every other (ungrouped) participant. Their votes are the verdict; advocates' own votes on their own side don't count toward it.
+
+The analysis hint tells the LLM to grade advocate positions on argument quality rather than sincerity, and flags where the advocate/analyst line blurs — see the caveat on role-assigned debate in [research-lineage.md](research-lineage.md#multi-agent-debate-202526).
+
 ## Usage
 
 ```json
@@ -102,6 +118,7 @@ Each template includes an analysis hint that shapes how the LLM interprets posit
 - **consensus**: "Any reservation is effectively a veto. Surface the minimum viable agreement."
 - **negotiation**: "A preference (conviction) can never override a hard constraint (reservation). Full participation is the primary criterion."
 - **parliament**: "Identify majority/minority coalitions. Flag positions that serve as anchors vs. genuine proposals."
+- **debate**: "Judge advocate positions on argument quality, not sincerity. The jury's vote is the verdict, not the advocates'."
 
 ## Discovering templates
 
@@ -120,3 +137,4 @@ Each template reflects a different game-theoretic model:
 | consensus | Coalitional game | Core stability; empty core = no stable consensus |
 | negotiation | Mechanism design | ZOPA = individually rational outcomes |
 | review | Multi-round signaling | Commitments prevent cheap talk |
+| debate | Adversarial persuasion game with a separate decider | Judge/advocate separation limits (but doesn't eliminate) role-assigned bias |
