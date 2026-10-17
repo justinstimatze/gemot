@@ -3,7 +3,7 @@ module github.com/justinstimatze/gemot
 go 1.26.8
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.78.0
+	github.com/anthropics/anthropic-sdk-go v1.80.0
 	github.com/consensys/gnark-crypto v0.22.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
