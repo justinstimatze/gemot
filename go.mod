@@ -6,7 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/consensys/gnark-crypto v0.22.0
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/justinstimatze/chit v0.1.2
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/notnil/chess v1.10.0
