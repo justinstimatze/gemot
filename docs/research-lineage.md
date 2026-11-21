@@ -139,6 +139,22 @@ The 2024–2026 literature on multi-agent LLM debate moved from "does it help" t
 
 The pattern: gemot's original design anticipated most of the 2025/26 failure modes and built primitives to defend against them. The calibration runner has been a stripped-down simulation that orchestrates the deliberation service's outer surface (`CreateDeliberation → SubmitPosition → Vote → Analyze → ProposeCompromise`) but bypasses the inner anti-conformity / bridging / reputation primitives. Restoration of those primitives in the calibration runner — not invention of new ones — is the recommended next step.
 
+### Agentworld's referee/debate/jury scaffold
+
+Antikythera's Agentworld research unit (Benjamin Bratton, with Marek Poliks of Disintegrator) frames the coming problem as trillions of agents needing structural mechanisms to reconcile — the same premise Moltbook validated empirically at 2.5M agents and gemot exists to answer. A double-lecture by Bratton and Poliks sketched a "scaffold" for adjudicating a binary claim: two advocates run an adversarial debate ("yes" vs. "no"), overseen by an impartial referee, whose output is judged by a separate impartial jury that renders its own yes/no verdict — deliberately keeping the jury out of the advocacy so its verdict isn't just the debate restated. ([Agentworld](https://agentworld.antikythera.org), [What is Agentworld?](https://antikythera.substack.com/p/what-is-agentworld))
+
+The `debate` governance template (`internal/deliberation/templates.go`) implements this scaffold, but deliberately *without* adding a new role-based agent type to the schema — see the caution directly above this section: "Role-based agents (proponent/skeptic/judge) ... encode[] the conclusion in the role assignment." Instead it composes three primitives gemot already has:
+
+| Scaffold role | Gemot primitive |
+|---|---|
+| Advocate ("yes"/"no") | `participate action:submit_position` tagged with the existing `group` field (`"for"` / `"against"`) |
+| Impartial referee | The existing `moderator` invite role (`coordinate action:invite`) |
+| Impartial jury | Every other, ungrouped participant — their vote is the verdict |
+
+This sidesteps the literature's objection by keeping the role assignment *optional and visible in the data* (a position's `group` and an invitee's `role` are ordinary fields an auditor can inspect) rather than baked into a fixed proponent/skeptic/judge pipeline, and by having the analysis pipeline explicitly discount advocate positions as persuasion rather than sincere belief when scoring the crux. It does not resolve the underlying tension — a jury can still be swayed by a skilled advocate regardless of the label on their position — which is why the template's `AnalysisHint` asks the analysis to flag exactly that failure mode rather than assume the scaffold has solved it.
+
+Antikythera Journal's Agentworld special issue also carries Poliks's [*Superdark Factory*](https://superdark.antikythera.org) (also at [superdark.ai](https://superdark.ai)) — a fully automated firm that sets its own objectives with no human inside the loop. It's the inverse problem to gemot's: Superdark Factory asks what production looks like once no one is watching; gemot's audit log, jury verdicts, and verifiable delegation credentials are one candidate answer to what *accountability* looks like for a system built that way, even absent a human to hand the account to.
+
 ### What's genuinely new (post-restoration, if measurements still flatline)
 
 After GetContext-grounded revision is wired in, the remaining gaps relative to 2025/26 SOTA are:

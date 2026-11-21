@@ -94,6 +94,15 @@ var templates = map[string]Template{
 			"speaking_time_limit":    500,
 		},
 	},
+	"debate": {
+		Name:               "debate",
+		Description:        "Adversarial debate scaffold: advocates argue opposing sides of a binary question before an impartial jury, with a moderator-role participant acting as referee. Best for contested yes/no calls where structured advocacy — someone whose job is to make the strongest possible case on each side — surfaces sharper arguments than a single agent reasoning alone. Modeled on Antikythera Agentworld's referee/debate/jury scaffold (Bratton & Poliks, 2026).",
+		DefaultType:        "reasoning",
+		DefaultMaxPart:     14,
+		SuggestedThreshold: 0.51,
+		AnalysisHint:       "Adversarial debate scaffold: submit_position with group \"for\" or \"against\" marks an advocate arguing that side — judge those positions on argument quality and evidence, not as a sincere vote of belief, and don't count an advocate's own vote toward the verdict for their side. A participant invited with role \"moderator\" is the referee: weigh their calls on fairness, rule violations, and whether each side got a fair hearing, not on the substance of the question. Every other (ungrouped) participant is the jury; the verdict is the jury's vote, not the advocates'. Report which side's arguments survived rebuttal and flag anything an advocate said that reads as sincere analysis smuggled in as persuasion, or vice versa — role-assigned advocacy can bias a jury if the line blurs (see docs/research-lineage.md).",
+		DefaultRules:       map[string]any{"min_participants": 5},
+	},
 	"freeform": {
 		Name:               "freeform",
 		Description:        "Unstructured discussion. No procedure, coalitions, or ZOPA — agents just talk and converge. The control for measuring what gemot's structure adds.",

@@ -4,6 +4,10 @@ All notable changes to gemot are documented here.
 
 ## Unreleased
 
+### `debate` governance template: Antikythera Agentworld's referee/debate/jury scaffold — 2026-09-12
+
+Added a `debate` template (`internal/deliberation/templates.go`) implementing the adversarial-debate scaffold from Bratton & Poliks's Antikythera Agentworld talk (impartial referee + adversarial "yes"/"no" debate + impartial jury) — see [docs/research-lineage.md#agentworlds-refereedebatejury-scaffold](docs/research-lineage.md#agentworlds-refereedebatejury-scaffold). Built entirely from existing primitives rather than a new role system, per the project's own caution against hardcoded proponent/skeptic/judge roles: advocates use `submit_position` with `group: "for"`/`"against"`, the referee is an invitee with the existing `moderator` role, and the jury is every other participant, whose vote is the verdict. Documented in `docs/templates.md`, README acknowledgments, and the gemot.dev site, alongside a reference to Marek Poliks's *Superdark Factory* as the accountability problem gemot's audit trail addresses.
+
 ### Whole-repo review fixes: SSE shutdown panic, admin-token URL leak, sandbox quota gaps — 2026-08-28
 
 A full-repository `/code-review` pass (broader than the OAuth-flow diff review above) surfaced 10 findings; 5 are fixed here, 5 deliberately deferred for one-at-a-time review later:

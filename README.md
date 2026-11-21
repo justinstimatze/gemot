@@ -142,7 +142,7 @@ Paid `analyze` actions take an optional per-call **`model`** (`claude-sonnet-4-6
 | `report_abuse` | Report harmful content for manual review | Free |
 | `get_audit_log` | Audit trail: operations log + analysis decisions + signed tamper-evident action log | Free |
 | `replica_pubkey` | Server's BLS public key for offline proof verification | Free |
-| `list_templates` | List governance templates (assembly, jury, consensus, etc.) with descriptions | Free |
+| `list_templates` | List governance templates (assembly, jury, consensus, [debate](docs/templates.md#debate), etc.) with descriptions | Free |
 | `get_votes` | Get raw vote data for a deliberation | Free |
 
 ### `account`
@@ -319,3 +319,5 @@ Apache 2.0 — see [LICENSE](LICENSE)
 - [LiquidFeedback](https://liquidfeedback.com/) — delegated voting in production
 - [Bridging Systems](https://arxiv.org/abs/2301.09976) — cross-cluster agreement detection (Ovadya & Thorburn)
 - [CRSEC](https://arxiv.org/abs/2403.08251) — norm emergence in agent societies (IJCAI 2024)
+- [Antikythera Agentworld](https://agentworld.antikythera.org) (Bratton & Poliks, 2026) — the referee/adversarial-debate/impartial-jury "scaffold" behind the `debate` template; see [research-lineage.md](docs/research-lineage.md#agentworlds-refereedebatejury-scaffold)
+- [The Superdark Factory](https://superdark.antikythera.org) (Marek Poliks / Disintegrator, Antikythera Journal Agentworld issue) — the fully-automated, no-human-in-the-loop firm that motivates why gemot's audit trail and verifiable delegation matter
